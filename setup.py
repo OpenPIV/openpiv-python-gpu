@@ -20,6 +20,17 @@ except ImportError:
     print("Could not import Cython.Distutils. Install `cython` and rerun.")
     sys.exit(1)
     
+# Check for GPU support
+GPU_SUPPORT = False
+try:
+    import pycuda
+    import skcuda
+    print("GPU support found. Will build GPU extensions.")
+    GPU_SUPPORT = True
+except ImportError:
+    pass
+    
+    
 
 
 # from distutils.core import setup, Extension
@@ -37,9 +48,18 @@ module2 = Extension(    name         = "openpiv.lib",
                         sources      = ["openpiv/src/lib.pyx"],
                         include_dirs = [numpy.get_include()],
                     )
+                    
+if(GPU_SUPPORT == True):
+    module3 = Extension(    name         = "openpiv.gpu_process",
+                            sources      = ["openpiv/src/gpu_process.pyx"],
+                            include_dirs = [numpy.get_include()], 
+                       )                 
 
 # a list of the extension modules that we want to distribute
-ext_modules = [module1, module2]
+if(GPU_SUPPORT == True):
+    ext_modules = [module1, module2, module3]
+else:
+    ext_modules = [module1, module2]
 
 
 # Package data are those filed 'strictly' needed by the program
