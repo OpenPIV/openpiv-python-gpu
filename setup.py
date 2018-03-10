@@ -28,6 +28,7 @@ try:
     print("GPU support found. Will build GPU extensions.")
     GPU_SUPPORT = True
 except ImportError:
+    print("No GPU support found. Continuing install.")
     pass
     
     
