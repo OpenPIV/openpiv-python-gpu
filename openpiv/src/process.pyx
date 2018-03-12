@@ -781,10 +781,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for J in range(Ncol[K]):
                 
                 #compute xb, yb:
+                #TODO this maybe should be np.round instead. unless dxp can't be negative?
                 F[K,I,J,2] = np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
                 F[K,I,J,3] = np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
                 
                 #look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
+                #TODO should maybe set the velocity to nan and not zero so it can get interpolated later.
                 if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: #if corrupted on x-axis do:
                     F[K,I,J,2] = F[K,I,J,0]#xb=x
                     F[K,I,J,3] = F[K,I,J,1]#yb=y
@@ -801,6 +803,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     for M in range(W[K]):
                         window_a[L,M]=frame_a[F[K,I,J,0] - W[K]/2 + L, F[K,I,J,1] - W[K]/2 + M]
                         window_b[L,M]=frame_b[F[K,I,J,2] - W[K]/2 + L, F[K,I,J,3] - W[K]/2 + M]
+                        
                 #perform correlation of the two windows
                 corr = correlate_windows( window_b, window_a, nfftx=nfftx, nffty=nffty )
                 c = CorrelationFunction( corr )
@@ -815,12 +818,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     F[K,I,J,8]=i_peak - corr.shape[0]/2#dcx
                     F[K,I,J,9]=j_peak - corr.shape[1]/2#dcy
                 residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8]+F[K,I,J,9]*F[K,I,J,9])
+                
                 #get new displacement prediction
                 F[K,I,J,4]=F[K,I,J,6]+F[K,I,J,8]#dx=dpx+dcx
                 F[K,I,J,5]=F[K,I,J,7]+F[K,I,J,9]#dy=dpy+dcy
                 #get new velocity vectors
                 F[K,I,J,10]=F[K,I,J,5] / dt #u=dy/dt
                 F[K,I,J,11]=-F[K,I,J,4] / dt #v=-dx/dt
+                
         pbar.finish()#close progress bar
         print "..[DONE]"
         if K==0:
@@ -846,18 +851,23 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
            ' ', ETA(), ' ', FileTransferSpeed()]
                 pbar = ProgressBar(widgets=widgets, maxval=100)
                 pbar.start()
-                for I in range(Nrow[K]):#run through locations
+                
+                #run through locations
+                for I in range(Nrow[K]):
                     pbar.update(100*I/Nrow[K])                    
                     for J in range(Ncol[K]):
                         neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
-                        for L in range(3):#get the velocity of the neighbours in a 2*3*3 array
+                        
+                        #get the velocity of the neighbours in a 2*3*3 array
+                        for L in range(3):
                             for M in range(3):
                                 if neighbours_present[L,M]:
-                                    neighbours[0,L,M]=F[K,I+L-1,J+M-1,10]#u
-                                    neighbours[1,L,M]=F[K,I+L-1,J+M-1,11]#v
+                                    neighbours[0,L,M] = F[K,I+L-1,J+M-1,10]#u
+                                    neighbours[1,L,M] = F[K,I+L-1,J+M-1,11]#v
                                 else:
                                     neighbours[0,L,M]=0
                                     neighbours[1,L,M]=0
+                                    
                             if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
                             #if np.sum(neighbours_present):
                                 mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))#computing the mean velocity
