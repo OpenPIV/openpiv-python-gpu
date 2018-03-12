@@ -143,7 +143,7 @@ def rescale_intensity(image,  p_range = None):
     ----------
     image: 2d array
         image you want to adjust
-    p_range: tuple of int
+    p_range: tuple of ints
         pecentage range of brightness to enhance (low, high)
 
     Returns
