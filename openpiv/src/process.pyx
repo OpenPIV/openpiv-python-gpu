@@ -682,8 +682,11 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
     """
-
-    #initializations
+    
+    ####################################################
+    # INITIALIZATIONS
+    ####################################################
+    
     warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
         raise ValueError( "Please provide a nb_iter_max that is greater than the coarse_level" )
@@ -699,19 +702,22 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=1] W = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] Overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
     pic_size=frame_a.shape
+    
     #window sizes list initialization
     for K in range(coarse_factor+1):
-        W[K]=np.power(2,coarse_factor-K)*min_window_size
+        W[K] = np.power(2,coarse_factor-K)*min_window_size
     for K in range(coarse_factor+1,nb_iter_max):
-        W[K]=W[K-1]
+        W[K] = W[K-1]
+        
     #overlap init
     for K in range(nb_iter_max):
         Overlap[K]=int(np.floor(overlap_ratio*W[K]))
+        
     #Ncol and Nrow init
     for K in range(nb_iter_max):
-        Nrow[K]=((pic_size[0]-W[K])//
-        (W[K]-Overlap[K]))+1
+        Nrow[K]=((pic_size[0]-W[K])//(W[K]-Overlap[K]))+1
         Ncol[K]=((pic_size[1]-W[K])//(W[K]-Overlap[K]))+1
+        
     #writting the parameters to the screen
     if validation_iter==0:
         validation_method='None'
@@ -729,6 +735,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     #define two small arrays used for the validation process
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
+    
     #initialize x and y values
     for K in range(nb_iter_max):
         for I in range(Nrow[K]):
@@ -743,40 +750,52 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     F[K,I,J,1]=W[K]/2 #init y on first column
                 else:
                     F[K,I,J,1]=F[K,I,J-1,1] + W[K] - Overlap[K] #init y
+                    
     #end of the initializations
+    
+    
     ####################################################
-    #main loop
+    # MAIN LOOP
+    ####################################################
+    
     for K in range(nb_iter_max):
         print " "
         print "//////////////////////////////////////////////////////////////////"
         print " "
         print "ITERATION # ",K
-        window_a, window_b = define_windows(W[K])
         print " "
+        
+        # get empty windows
+        window_a, window_b = define_windows(W[K])
+        
         #a simple progress bar
         widgets = ['Computing the displacements : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
            ' ', ETA(), ' ', FileTransferSpeed()]
         pbar = ProgressBar(widgets=widgets, maxval=100)
         pbar.start()
         residual = 0
-        for I in range(Nrow[K]):#run through interpolations locations
+        
+        #run through interpolations locations
+        for I in range(Nrow[K]):
             pbar.update(100*I/Nrow[K])#progress update
             for J in range(Ncol[K]):
                 
                 #compute xb, yb:
-                F[K,I,J,2]=np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
-                F[K,I,J,3]=np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
+                F[K,I,J,2] = np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
+                F[K,I,J,3] = np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
+                
                 #look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
                 if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: #if corrupted on x-axis do:
-                    F[K,I,J,2]=F[K,I,J,0]#xb=x
-                    F[K,I,J,3]=F[K,I,J,1]#yb=y
-                    F[K,I,J,6]=0.0#dpx=0
-                    F[K,I,J,7]=0.0#dpy=0
+                    F[K,I,J,2] = F[K,I,J,0]#xb=x
+                    F[K,I,J,3] = F[K,I,J,1]#yb=y
+                    F[K,I,J,6] = 0.0#dpx=0
+                    F[K,I,J,7] = 0.0#dpy=0
                 elif F[K,I,J,3] + W[K]/2 > pic_size[1]-1 or F[K,I,J,3] - W[K]/2 < 0: #if corrupted on y-axis do the same
                     F[K,I,J,2]=F[K,I,J,0]#xb=x
                     F[K,I,J,3]=F[K,I,J,1]#yb=y
                     F[K,I,J,6]=0.0#dpx=0
                     F[K,I,J,7]=0.0#dpy=0
+                    
                 #fill windows a and b
                 for L in range(W[K]):
                     for M in range(W[K]):
