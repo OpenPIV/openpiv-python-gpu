@@ -39,6 +39,14 @@ Note that if dependicies of Numpy, Scipy and Cython are not present, on Ubuntu L
 
     sudo apt-get install cython python-numpy python-scipy
     pip2.7 install OpenPIV
+    
+## GPU Support
+
+If you have a CUDA enabled NVIDIA GPU in your system, you can run GPU accelerated PIV functions. 
+You will need to install PyCuda and scikit-cuda
+
+    pip install pycuda
+    pip install scikit-cuda
 
 ### To build from source
 
