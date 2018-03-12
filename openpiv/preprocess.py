@@ -82,3 +82,108 @@ def dynamic_masking(image,method='edges',filter_size=7,threshold=0.005):
 
         
     return imcopy #image
+  
+    
+def subtract_min(image):
+    """
+    Subtract the minimum pixel value from each pixel in the image.
+    Readjusting the contrast should be done after this.
+
+    Parameters
+    ----------
+    image: 2d array - int
+        PIV image
+
+    Returns
+    -------
+    image: 2d array - int
+        image with minimum value subtracted
+    """
+
+    # make sure image is correct data type
+    assert image.dtype == 'int32', 'Input image is not in correct format for openpiv. Change to int32.'
+    assert image.min() >= 0, 'Image has negative values.'
+
+    image -= image.min().astype(np.int32)
+
+    return(image)
+
+
+def subtract_background(image):
+    """
+    Subtract the mean intensity from each pixel in the image. 
+    After subtraction, set all negative values to zero.
+    Readjusting the contrast should be done after this.
+
+    Parameters
+    ----------
+    image: 2d array - int
+        PIV image
+
+    Returns
+    -------
+    image_sub: 2d array - int
+        image with background intensity subtracted
+    """
+
+    # make sure image is correct data type
+    assert image.dtype == 'int32', 'Input image is not in correct format for openpiv. Change to int32.'
+
+    image_sub = image - image.mean()
+    image_sub[image_sub < 0] = 0
+
+    return(image_sub.astype(np.int32))
+
+
+def rescale_intensity(image,  p_range = None):
+    """
+    Adjust constrast of an image
+
+    Parameters
+    ----------
+    image: 2d array
+        image you want to adjust
+    p_range: tuple of int
+        pecentage range of brightness to enhance (low, high)
+
+    Returns
+    -------
+    image_rescale: 2d array
+        contrast adjusted image 
+    """
+
+    # make sure image is correct data type
+    assert image.dtype == 'int32', 'Input image is not in correct format for openpiv. Change to int32.'
+
+    #adjust contrast
+    #by adjusting the numbers in np.percentile, you choose which range of brightness you enhance
+
+    if p_range is not None:
+        #rescale only part of the intensity range of the image
+        pLow, pHigh = np.percentile(image, p_range)
+        image_rescale = exposure.rescale_intensity(image, in_range = (pLow, pHigh))
+        return(image_rescale)
+    else:
+        #rescale the entire intensity range of the image
+        image_rescale = exposure.rescale_intensity(image)
+        return(image_rescale)
+
+
+def gauss_smooth(image):
+    """
+    3x3 Gaussian smoother to an image
+
+    Parameters
+    ----------
+    image: 2d array - int32
+        PIV image to be smoothed
+
+    Returns
+    -------
+    im_smooth: 2d array - int
+        Smoothed image
+    """
+
+    im_smooth = gaussian_filter(image, 1, truncate = 1)
+
+    return(im_smooth.astype(np.int32))

@@ -677,7 +677,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                             | 9 --> dcy       | 
                             | 10 --> u        |
                             | 11 --> v        | 
-                            | 12 --> si2noise | 
+                            | 12 --> sig2noise| 
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -709,7 +709,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         Overlap[K]=int(np.floor(overlap_ratio*W[K]))
     #Ncol and Nrow init
     for K in range(nb_iter_max):
-        Nrow[K]=((pic_size[0]-W[K])//(W[K]-Overlap[K]))+1
+        Nrow[K]=((pic_size[0]-W[K])//
+        (W[K]-Overlap[K]))+1
         Ncol[K]=((pic_size[1]-W[K])//(W[K]-Overlap[K]))+1
     #writting the parameters to the screen
     if validation_iter==0:
@@ -806,8 +807,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         if K==0:
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
         print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
+        
+        
         #####################################################
         #validation of the velocity vectors with 3*3 filtering
+        #####################################################
+        
         if K==0 and trust_1st_iter:#1st iteration can generally be trust if it follows the 1/4 rule
             print "no validation : trusting 1st iteration"
         else: 
@@ -923,10 +928,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         pbar.finish()
         print "..[DONE] -----> going to iteration ",K+1
         print " "
-
-
-
-
 
 
 
