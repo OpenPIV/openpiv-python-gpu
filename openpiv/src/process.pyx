@@ -584,6 +584,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         
     overlap_ratio : float
         the ratio of overlap between two windows (between 0 and 1).
+    
+    coarse_factor : int
+        how many times the window size refining processes happens. 
         
     dt : float
         the time delay separating the two frames.
