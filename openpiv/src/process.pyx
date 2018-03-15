@@ -721,17 +721,22 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     #writting the parameters to the screen
     if validation_iter==0:
         validation_method='None'
+
     cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
+    
     #define the main array F that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 14], dtype=DTYPEf)
+    
     #define mask - bool array don't exist in cython so we go to lower level with cast
     #you can access mask with (<object>mask)[I,J]
     cdef np.ndarray[np.uint8_t, ndim=2, cast=True] mask = np.empty([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=np.bool)
+    
     #define u,v, x,y fields (only used as outputs of this programm)
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] y = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
+    
     #define two small arrays used for the validation process
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
@@ -742,14 +747,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for J in range(Ncol[K]):
                 #x unit vector corresponds to rows
                 #y unit vector corresponds to columns
-                if I==0:
-                    F[K,I,J,0]=W[K]/2 #init x on 1st row
+                if I == 0:
+                    F[K,I,J,0] = W[K]/2 #init x on 1st row
                 else:
-                    F[K,I,J,0]=F[K,I-1,J,0] + W[K] - Overlap[K] #init x
-                if J==0:
-                    F[K,I,J,1]=W[K]/2 #init y on first column
+                    F[K,I,J,0] = F[K,I-1,J,0] + W[K] - Overlap[K] #init x
+                if J == 0:
+                    F[K,I,J,1] = W[K]/2 #init y on first column
                 else:
-                    F[K,I,J,1]=F[K,I,J-1,1] + W[K] - Overlap[K] #init y
+                    F[K,I,J,1] = F[K,I,J-1,1] + W[K] - Overlap[K] #init y
                     
     #end of the initializations
     
@@ -781,50 +786,55 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for J in range(Ncol[K]):
                 
                 #compute xb, yb:
-                #TODO this maybe should be np.round instead. unless dxp can't be negative?
                 F[K,I,J,2] = np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
                 F[K,I,J,3] = np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
                 
-                #look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
+                # Look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
                 #TODO should maybe set the velocity to nan and not zero so it can get interpolated later.
-                if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: #if corrupted on x-axis do:
+
+                #if corrupted on x-axis do:
+                if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: 
                     F[K,I,J,2] = F[K,I,J,0]#xb=x
                     F[K,I,J,3] = F[K,I,J,1]#yb=y
                     F[K,I,J,6] = 0.0#dpx=0
                     F[K,I,J,7] = 0.0#dpy=0
-                elif F[K,I,J,3] + W[K]/2 > pic_size[1]-1 or F[K,I,J,3] - W[K]/2 < 0: #if corrupted on y-axis do the same
-                    F[K,I,J,2]=F[K,I,J,0]#xb=x
-                    F[K,I,J,3]=F[K,I,J,1]#yb=y
-                    F[K,I,J,6]=0.0#dpx=0
-                    F[K,I,J,7]=0.0#dpy=0
+                #if corrupted on y-axis do the same
+                elif F[K,I,J,3] + W[K]/2 > pic_size[1]-1 or F[K,I,J,3] - W[K]/2 < 0: 
+                    F[K,I,J,2] = F[K,I,J,0]#xb=x
+                    F[K,I,J,3] = F[K,I,J,1]#yb=y
+                    #TODO: should keep the displacement vector from the previous step?
+                    F[K,I,J,6] = 0.0#dpx=0
+                    F[K,I,J,7] = 0.0#dpy=0
                     
                 #fill windows a and b
                 for L in range(W[K]):
                     for M in range(W[K]):
-                        window_a[L,M]=frame_a[F[K,I,J,0] - W[K]/2 + L, F[K,I,J,1] - W[K]/2 + M]
-                        window_b[L,M]=frame_b[F[K,I,J,2] - W[K]/2 + L, F[K,I,J,3] - W[K]/2 + M]
+                        window_a[L,M] = frame_a[F[K,I,J,0] - W[K]/2 + L, F[K,I,J,1] - W[K]/2 + M]
+                        window_b[L,M] = frame_b[F[K,I,J,2] - W[K]/2 + L, F[K,I,J,3] - W[K]/2 + M]
                         
                 #perform correlation of the two windows
                 corr = correlate_windows( window_b, window_a, nfftx=nfftx, nffty=nffty )
                 c = CorrelationFunction( corr )
                 F[K,I,J,12] = c.sig2noise_ratio( sig2noise_method, width )#compute sig2noise
                 i_peak, j_peak = c.subpixel_peak_position( subpixel_method )#get peak position
-                if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:#prevent 'Not a Number' peak location
-                #if np.any(np.isnan((i_peak, j_peak))):
-                    F[K,I,J,8]=0.0
-                    F[K,I,J,9]=0.0
+
+                #prevent 'Not a Number' peak location
+                if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
+                #TODO thnk about setting this to nan so it can be interpolated over later?
+                    F[K,I,J,8] = 0.0
+                    F[K,I,J,9] = 0.0
                 else:
                     #find residual displacement dcx and dcy
-                    F[K,I,J,8]=i_peak - corr.shape[0]/2#dcx
-                    F[K,I,J,9]=j_peak - corr.shape[1]/2#dcy
-                residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8]+F[K,I,J,9]*F[K,I,J,9])
+                    F[K,I,J,8] = i_peak - corr.shape[0]/2#dcx
+                    F[K,I,J,9] = j_peak - corr.shape[1]/2#dcy
+                residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8] + F[K,I,J,9]*F[K,I,J,9])
                 
                 #get new displacement prediction
-                F[K,I,J,4]=F[K,I,J,6]+F[K,I,J,8]#dx=dpx+dcx
-                F[K,I,J,5]=F[K,I,J,7]+F[K,I,J,9]#dy=dpy+dcy
+                F[K,I,J,4] = F[K,I,J,6] + F[K,I,J,8]  #dx=dpx+dcx
+                F[K,I,J,5] = F[K,I,J,7] + F[K,I,J,9]  #dy=dpy+dcy
                 #get new velocity vectors
-                F[K,I,J,10]=F[K,I,J,5] / dt #u=dy/dt
-                F[K,I,J,11]=-F[K,I,J,4] / dt #v=-dx/dt
+                F[K,I,J,10] = F[K,I,J,5] / dt #u=dy/dt
+                F[K,I,J,11] = -F[K,I,J,4] / dt #v=-dx/dt
                 
         pbar.finish()#close progress bar
         print "..[DONE]"
@@ -865,59 +875,75 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     neighbours[0,L,M] = F[K,I+L-1,J+M-1,10]#u
                                     neighbours[1,L,M] = F[K,I+L-1,J+M-1,11]#v
                                 else:
-                                    neighbours[0,L,M]=0
-                                    neighbours[1,L,M]=0
-                                    
-                            if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
-                            #if np.sum(neighbours_present):
-                                mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))#computing the mean velocity
-                                mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-                                if F[K,I,J,12] < 1.5:#validation with the sig2noise ratio, 1.5 is a recommended minimum value
-                                    if K==0:#if in 1st iteration, no interpolation is needed so just replace by the mean
+                                    neighbours[0,L,M] = 0
+                                    neighbours[1,L,M] = 0
+                        
+                        # If there are neighbours present and no mask, validate the velocity
+                        if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
+                        #if np.sum(neighbours_present):
+
+                            #computing the mean velocity
+                            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+
+                            #validation with the sig2noise ratio, 1.5 is a recommended minimum value
+                            if F[K,I,J,12] < 1.5:
+                                #if in 1st iteration, no interpolation is needed so just replace by the mean
+                                if K==0:
+                                    F[K,I,J,10] = mean_u
+                                    F[K,I,J,11] = mean_v
+                                    (<object>mask)[I,J]=True
+                                    F[K,I,J,4] = -F[K,I,J,11]*dt #recompute displacement from velocity
+                                    F[K,I,J,5] = F[K,I,J,10]*dt
+                                #perform interpolation using previous iteration (which is supposed to be already validated -> this prevents error propagation)
+                                elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+                                    F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
+                                    F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
+
+                            #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
+                            if validation_method=='mean_velocity':
+
+                                #get rms of u and v
+                                rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
+                                rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
+
+                                if rms_u==0 or rms_v==0:
+                                        F[K,I,J,10] = mean_u
+                                        F[K,I,J,11] = mean_v
+                                elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
+
+                                    # No previous iteration. Replace with mean velocity
+                                    if K==0:
                                         F[K,I,J,10] = mean_u
                                         F[K,I,J,11] = mean_v
                                         (<object>mask)[I,J]=True
-                                        F[K,I,J,4] = -F[K,I,J,11]*dt#recompute displacement from velocity
+                                        F[K,I,J,4] = -F[K,I,J,11]*dt
                                         F[K,I,J,5] = F[K,I,J,10]*dt
-                                    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):#perform interpolation using previous iteration (which is supposed to be already validated -> this prevents error propagation)
+                                    #case if different dimensions : interpolation using previous iteration
+                                    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
                                         F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
                                         F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-                                if validation_method=='mean_velocity':#add a validation with the mean and rms values
-                                    rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))#get rms of u
-                                    rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
-                                    if rms_u==0 or rms_v==0:
-                                            F[K,I,J,10] = mean_u
-                                            F[K,I,J,11] = mean_v
-                                    elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-                                        if K==0:
+                                        (<object>mask)[I,J]=True
+                                        F[K,I,J,4] = -F[K,I,J,11]*dt
+                                        F[K,I,J,5] = F[K,I,J,10]*dt
+                                    #case if same dimensions
+                                    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
+                                        for L in range(3):
+                                            for M in range(3):
+                                                if neighbours_present[L,M]:
+                                                    neighbours[0,L,M]=F[K-1,I+L-1,J+M-1,10]#u
+                                                    neighbours[1,L,M]=F[K-1,I+L-1,J+M-1,11]#v
+                                                else:
+                                                    neighbours[0,L,M]=0
+                                                    neighbours[1,L,M]=0
+                                        if np.sum(neighbours_present) !=0:
+                                            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
                                             F[K,I,J,10] = mean_u
                                             F[K,I,J,11] = mean_v
                                             (<object>mask)[I,J]=True
                                             F[K,I,J,4] = -F[K,I,J,11]*dt
                                             F[K,I,J,5] = F[K,I,J,10]*dt
-                                        elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):#case if different dimensions : interpolation using previous iteration
-                                            F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-                                            F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-                                            (<object>mask)[I,J]=True
-                                            F[K,I,J,4] = -F[K,I,J,11]*dt
-                                            F[K,I,J,5] = F[K,I,J,10]*dt
-                                        elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):#case if same dimensions
-                                            for L in range(3):
-                                                for M in range(3):
-                                                    if neighbours_present[L,M]:
-                                                        neighbours[0,L,M]=F[K-1,I+L-1,J+M-1,10]#u
-                                                        neighbours[1,L,M]=F[K-1,I+L-1,J+M-1,11]#v
-                                                    else:
-                                                        neighbours[0,L,M]=0
-                                                        neighbours[1,L,M]=0
-                                            if np.sum(neighbours_present) !=0:
-                                                mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                                                mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-                                                F[K,I,J,10] = mean_u
-                                                F[K,I,J,11] = mean_v
-                                                (<object>mask)[I,J]=True
-                                                F[K,I,J,4] = -F[K,I,J,11]*dt
-                                                F[K,I,J,5] = F[K,I,J,10]*dt
             pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -996,6 +1022,7 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
     the interpolated data (type float)
     
     """
+
     #interpolate data dat from previous iteration
     cdef float lower_lim_previous_x = F[K,0,0,0]
     cdef float lower_lim_previous_y = F[K,0,0,1]
@@ -1005,42 +1032,56 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
     cdef float pos_now_y = F[K+1,I,J,1]
     cdef np.ndarray[DTYPEi_t, ndim=1] Q1 = np.zeros(2, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] Q4 = np.zeros(2, dtype=DTYPEi)
-    if pos_now_x < lower_lim_previous_x:#top row
-        if pos_now_y < lower_lim_previous_y:#top left corner
+
+    # Many cases depending on where the vector location is
+
+    # Top row
+    if pos_now_x < lower_lim_previous_x:
+        #top left corner
+        if pos_now_y < lower_lim_previous_y:
             return F[K,0,0,dat]
-        elif pos_now_y > upper_lim_previous_y:#top right corner
+        #top right corner
+        elif pos_now_y > upper_lim_previous_y:
             return F[K,0,Ncol[K]-1,dat]
-        else:#top row no corners
+        #top row no corners
+        else:
             low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
             if low_y == high_y:
                 return F[K,0,low_y,dat]
             else:
                 return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,0,low_y,dat], F[K,0,high_y,dat])
-    elif pos_now_x > upper_lim_previous_x:#bottom row
-        if pos_now_y < lower_lim_previous_y:#bottom left corner
+    # Bottom row
+    elif pos_now_x > upper_lim_previous_x:
+        # bottom left corner
+        if pos_now_y < lower_lim_previous_y:
             return F[K,Nrow[K]-1,0,dat]
-        elif pos_now_y > upper_lim_previous_y:#bottom right corner
+        #bottom right corner
+        elif pos_now_y > upper_lim_previous_y:
             return F[K,Nrow[K]-1,Ncol[K]-1,dat]
-        else:#bottom row no corners
+        #bottom row no corners
+        else:
             low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
             #print low_y, high_y
             if low_y == high_y:
                 return F[K,Nrow[K]-1,low_y,dat]
             else:
                 return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,Nrow[K]-1,low_y,dat], F[K,Nrow[K]-1,high_y,dat])
-    elif pos_now_y < lower_lim_previous_y:#left column no corners
+    #left column no corners
+    elif pos_now_y < lower_lim_previous_y:
         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
         if low_x == high_x:
             return F[K,low_x,0,dat]
         else:
             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,0,dat], F[K,high_x,0,dat])
-    elif pos_now_y > upper_lim_previous_y:#right column no corners
+    #right column no corners
+    elif pos_now_y > upper_lim_previous_y:
         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
         if low_x == high_x:
             return F[K,low_x,Ncol[K]-1,dat]
         else:
             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,Ncol[K]-1,dat], F[K,high_x,Ncol[K]-1,dat])
-    else:#interior grid
+    #interior grid
+    else:
         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
         low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
         Q1[0] = F[K,low_x,0,0] 
@@ -1119,7 +1160,8 @@ def linear_interpolation(int x1, int x2, int x, int f1, int f2):
 
 
 def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
-    """Look for the position at the iteration K of the points surrounding a given point in the frame.
+    """Look for the position of the vectors at the previous iteration that surround the current point in the fram
+    you want to interpolate. 
     
     Parameters
     ----------
@@ -1155,7 +1197,7 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
     cdef int searching
     low = np.floor(maxhigh/2)
     high = low + 1
-    searching=1
+    searching = 1
     if side == 'x_axis':
         while searching:#start dichotomy
             if pos_now == F[K,low,0,0] or (low == 0 and pos_now < F[K,low,0,0]):
