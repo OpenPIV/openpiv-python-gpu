@@ -705,7 +705,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     
     #window sizes list initialization
     for K in range(coarse_factor+1):
-        W[K] = np.power(2,coarse_factor-K)*min_window_size
+        W[K] = np.power(2,coarse_factor - K)*min_window_size
     for K in range(coarse_factor+1,nb_iter_max):
         W[K] = W[K-1]
         
@@ -786,25 +786,22 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for J in range(Ncol[K]):
                 
                 #compute xb, yb:
-                F[K,I,J,2] = np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
-                F[K,I,J,3] = np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
+                F[K,I,J,2] = np.floor(F[K,I,J,0] + F[K,I,J,6]) #xb=xa+dpx
+                F[K,I,J,3] = np.floor(F[K,I,J,1] + F[K,I,J,7]) #yb=yb+dpy
                 
                 # Look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
-                #TODO should maybe set the velocity to nan and not zero so it can get interpolated later.
-
-                #if corrupted on x-axis do:
+                # if corrupted on x-axis do:
                 if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: 
-                    F[K,I,J,2] = F[K,I,J,0]#xb=x
-                    F[K,I,J,3] = F[K,I,J,1]#yb=y
-                    F[K,I,J,6] = 0.0#dpx=0
-                    F[K,I,J,7] = 0.0#dpy=0
-                #if corrupted on y-axis do the same
+                    F[K,I,J,2] = F[K,I,J,0] #xb=x
+                    F[K,I,J,3] = F[K,I,J,1] #yb=y
+                    F[K,I,J,6] = 0.0 #dpx=0
+                    F[K,I,J,7] = 0.0 #dpy=0
+                # if corrupted on y-axis do the same
                 elif F[K,I,J,3] + W[K]/2 > pic_size[1]-1 or F[K,I,J,3] - W[K]/2 < 0: 
-                    F[K,I,J,2] = F[K,I,J,0]#xb=x
-                    F[K,I,J,3] = F[K,I,J,1]#yb=y
-                    #TODO: should keep the displacement vector from the previous step?
-                    F[K,I,J,6] = 0.0#dpx=0
-                    F[K,I,J,7] = 0.0#dpy=0
+                    F[K,I,J,2] = F[K,I,J,0] #xb=x
+                    F[K,I,J,3] = F[K,I,J,1] #yb=y
+                    F[K,I,J,6] = 0.0 #dpx=0
+                    F[K,I,J,7] = 0.0 #dpy=0
                     
                 #fill windows a and b
                 for L in range(W[K]):
@@ -820,13 +817,13 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                 #prevent 'Not a Number' peak location
                 if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
-                #TODO thnk about setting this to nan so it can be interpolated over later?
                     F[K,I,J,8] = 0.0
                     F[K,I,J,9] = 0.0
                 else:
                     #find residual displacement dcx and dcy
-                    F[K,I,J,8] = i_peak - corr.shape[0]/2#dcx
-                    F[K,I,J,9] = j_peak - corr.shape[1]/2#dcy
+                    F[K,I,J,8] = i_peak - corr.shape[0]/2 #dcx
+                    F[K,I,J,9] = j_peak - corr.shape[1]/2 #dcy
+
                 residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8] + F[K,I,J,9]*F[K,I,J,9])
                 
                 #get new displacement prediction
@@ -851,14 +848,18 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             print "no validation : trusting 1st iteration"
         else: 
             print "Starting validation.."
-            for I in range(Nrow[nb_iter_max-1]):#init mask to False
+
+            #init mask to False
+            for I in range(Nrow[nb_iter_max-1]):
                 for J in range(Ncol[nb_iter_max-1]):
-                    (<object>mask)[I,J]=False
-            for i in range(validation_iter):#real validation starts
+                    (<object>mask)[I,J] = False
+
+            #real validation starts
+            for i in range(validation_iter):
                 print "Validation, iteration number ",i
                 print " "
                 widgets = ['Validation : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
-           ' ', ETA(), ' ', FileTransferSpeed()]
+                ' ', ETA(), ' ', FileTransferSpeed()]
                 pbar = ProgressBar(widgets=widgets, maxval=100)
                 pbar.start()
                 
@@ -948,6 +949,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             print "..[DONE]"
             print " "
         #end of validation
+
         ##############################################################################
         #stop process if this is the last iteration
         if K==nb_iter_max-1:
@@ -963,6 +965,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             end(startTime)
             return x, y, u, v, (<object>mask)
         #############################################################################
+
         #go to next iteration : compute the predictors dpx and dpy from the current displacements
         print "going to next iteration.. "
         print "performing interpolation of the displacement field"
@@ -971,15 +974,21 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
            ' ', ETA(), ' ', FileTransferSpeed()]
         pbar = ProgressBar(widgets=widgets, maxval=100)
         pbar.start()
+
         for I in range(Nrow[K+1]):
             pbar.update(100*I/Nrow[K+1])
             for J in range(Ncol[K+1]):
-                if Nrow[K+1]==Nrow[K] and Ncol[K+1]==Ncol[K]:
-                    F[K+1,I,J,6] = F[K,I,J,4]#dpx_k+1 = dx_k 
-                    F[K+1,I,J,7] = F[K,I,J,5]#dpy_k+1 = dy_k
-                else:#interpolate if dimensions do not agree
-                    F[K+1,I,J,6] = interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4)
-                    F[K+1,I,J,7] = interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5)
+
+                # If vector field dimensions agree
+                # Make sure predictor is an integer number of pixels
+                if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
+                    F[K+1,I,J,6] = np.floor(F[K,I,J,4]) #dpx_k+1 = dx_k 
+                    F[K+1,I,J,7] = np.floor(F[K,I,J,5]) #dpy_k+1 = dy_k
+                #interpolate if dimensions do not agree
+                else:
+                    F[K+1,I,J,6] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4))
+                    F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5))
+
         pbar.finish()
         print "..[DONE] -----> going to iteration ",K+1
         print " "
