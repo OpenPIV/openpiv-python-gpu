@@ -891,7 +891,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                             #validation with the sig2noise ratio, 1.5 is a recommended minimum value
                             if F[K,I,J,12] < 1.5:
                                 if(I == 0 and J == 8):
-                                    print "Validation in sig2noise"
                                 #if in 1st iteration, no interpolation is needed so just replace by the mean
                                 if K==0:
                                     F[K,I,J,10] = mean_u
@@ -912,11 +911,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
 
                                 if rms_u==0 or rms_v==0:
-                                        print "Validation because rms values are zero"
                                         F[K,I,J,10] = mean_u
                                         F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-                                    print "Validation because rms value is less than tolerance"
 
                                     # No previous iteration. Replace with mean velocity
                                     if K==0:
@@ -951,15 +948,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                             F[K,I,J,4] = -F[K,I,J,11]*dt
                                             F[K,I,J,5] = F[K,I,J,10]*dt
 
-                        # check u velocity
-                        if(F[K,I,J,10] < 7.5 or F[K,I,J,10] > 8.5):
-                            print "Validation"
-                            print "Bad U vector at I = " + str(I) + " J = " + str(J)
-                        # check v velocity
-                        if(F[K,I,J,11] < 7.5 or F[K,I,J,11] > 8.5):
-                            print "validation"
-                            print "Bad V vector at I = " + str(I) + " J = " + str(J)
-
 
             pbar.finish()                    
             print "..[DONE]"
@@ -979,7 +967,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     v[I,J]=F[K,I,J,11]
             print "...[DONE]"
             end(startTime)
-            return x, y, u, v, (<object>mask), F, Nrow, Ncol
+            return x, y, u, v, (<object>mask)
         #############################################################################
 
         #go to next iteration : compute the predictors dpx and dpy from the current displacements
