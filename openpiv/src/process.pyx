@@ -819,8 +819,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
                     F[K,I,J,8] = 0.0
                     F[K,I,J,9] = 0.0
-
-                    print "Nan peak at I = " + str(I) + "  J = " + str(J)
                 else:
                     #find residual displacement dcx and dcy
                     F[K,I,J,8] = i_peak - corr.shape[0]/2 #dcx
@@ -834,6 +832,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 #get new velocity vectors
                 F[K,I,J,10] = F[K,I,J,5] / dt #u=dy/dt
                 F[K,I,J,11] = -F[K,I,J,4] / dt #v=-dx/dt
+                
                 
         pbar.finish()#close progress bar
         print "..[DONE]"
@@ -891,6 +890,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                             #validation with the sig2noise ratio, 1.5 is a recommended minimum value
                             if F[K,I,J,12] < 1.5:
+                                if(I == 0 and J == 8):
+                                    print "Validation in sig2noise"
                                 #if in 1st iteration, no interpolation is needed so just replace by the mean
                                 if K==0:
                                     F[K,I,J,10] = mean_u
@@ -904,16 +905,18 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
 
                             #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
-                            if validation_method=='mean_velocity':
+                            if validation_method == 'mean_velocity':
 
                                 #get rms of u and v
                                 rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
                                 rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
 
                                 if rms_u==0 or rms_v==0:
+                                        print "Validation because rms values are zero"
                                         F[K,I,J,10] = mean_u
                                         F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
+                                    print "Validation because rms value is less than tolerance"
 
                                     # No previous iteration. Replace with mean velocity
                                     if K==0:
@@ -947,6 +950,17 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                             (<object>mask)[I,J]=True
                                             F[K,I,J,4] = -F[K,I,J,11]*dt
                                             F[K,I,J,5] = F[K,I,J,10]*dt
+
+                        # check u velocity
+                        if(F[K,I,J,10] < 7.5 or F[K,I,J,10] > 8.5):
+                            print "Validation"
+                            print "Bad U vector at I = " + str(I) + " J = " + str(J)
+                        # check v velocity
+                        if(F[K,I,J,11] < 7.5 or F[K,I,J,11] > 8.5):
+                            print "validation"
+                            print "Bad V vector at I = " + str(I) + " J = " + str(J)
+
+
             pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -965,7 +979,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     v[I,J]=F[K,I,J,11]
             print "...[DONE]"
             end(startTime)
-            return x, y, u, v, (<object>mask)
+            return x, y, u, v, (<object>mask), F, Nrow, Ncol
         #############################################################################
 
         #go to next iteration : compute the predictors dpx and dpy from the current displacements
@@ -1143,7 +1157,7 @@ def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f
 
 
 
-def linear_interpolation(int x1, int x2, int x, int f1, int f2):
+def linear_interpolation(int x1, int x2, int x, float f1, float f2):
     """Perform a linear interpolation between 2 points 
     
     Parameters
