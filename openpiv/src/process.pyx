@@ -819,6 +819,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
                     F[K,I,J,8] = 0.0
                     F[K,I,J,9] = 0.0
+
+                    print "Nan peak at I = " + str(I) + "  J = " + str(J)
                 else:
                     #find residual displacement dcx and dcy
                     F[K,I,J,8] = i_peak - corr.shape[0]/2 #dcx
