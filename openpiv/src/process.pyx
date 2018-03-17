@@ -539,9 +539,11 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
            int coarse_factor,
            float dt,
            str validation_method='mean_velocity',
+           int div_validation = 1,
            int trust_1st_iter=1,
            int validation_iter = 1,
            float tolerance = 1.5,
+           float div_tolerance = 0.1,
            int nb_iter_max=3,
            str subpixel_method='gaussian',
            str sig2noise_method='peak2peak',
@@ -599,10 +601,16 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
      
     validation_iter : int
         number of iterations per validation cycle.
+
+    div_validation : int
+        Boolean - if 1 then the data wil be validated by calculating the divergence. If 0 then it will not be done. 
        
     tolerance : float
         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-    
+   
+    div_tolerance : float
+        Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptible. 
+
     nb_iter_max : int
         global number of iterations.
        
@@ -695,13 +703,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef int L, M #inside window indices
     cdef int O, P #frame indices corresponding to I and J
     cdef int i, j #dumb indices for various works
-    cdef float i_peak, j_peak, mean_u, mean_v, rms_u, rms_v, residual_0
+    cdef float i_peak, j_peak, mean_u, mean_v, rms_u, rms_v, residual_0, div
     cdef int residual, nbwind
     cdef np.ndarray[DTYPEi_t, ndim=1] Nrow = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] Ncol = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] W = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] Overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
     pic_size=frame_a.shape
+
     
     #window sizes list initialization
     for K in range(coarse_factor+1):
@@ -871,6 +880,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                         neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
                         
                         #get the velocity of the neighbours in a 2*3*3 array
+                        
                         for L in range(3):
                             for M in range(3):
                                 if neighbours_present[L,M]:
@@ -879,6 +889,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 else:
                                     neighbours[0,L,M] = 0
                                     neighbours[1,L,M] = 0
+                        
                         
                         # If there are neighbours present and no mask, validate the velocity
                         if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
@@ -890,7 +901,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                             #validation with the sig2noise ratio, 1.5 is a recommended minimum value
                             if F[K,I,J,12] < 1.5:
-                                if(I == 0 and J == 8):
                                 #if in 1st iteration, no interpolation is needed so just replace by the mean
                                 if K==0:
                                     F[K,I,J,10] = mean_u
@@ -915,6 +925,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                         F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
 
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    (<object>mask)[I,J]=True
+                                    """
                                     # No previous iteration. Replace with mean velocity
                                     if K==0:
                                         F[K,I,J,10] = mean_u
@@ -934,12 +947,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                         for L in range(3):
                                             for M in range(3):
                                                 if neighbours_present[L,M]:
-                                                    neighbours[0,L,M]=F[K-1,I+L-1,J+M-1,10]#u
-                                                    neighbours[1,L,M]=F[K-1,I+L-1,J+M-1,11]#v
+                                                    neighbours[0,L,M] = F[K-1,I+L-1,J+M-1,10]#u
+                                                    neighbours[1,L,M] = F[K-1,I+L-1,J+M-1,11]#v
                                                 else:
-                                                    neighbours[0,L,M]=0
-                                                    neighbours[1,L,M]=0
-                                        if np.sum(neighbours_present) !=0:
+                                                    neighbours[0,L,M] = 0
+                                                    neighbours[1,L,M] = 0
+                                        if np.sum(neighbours_present) != 0:
                                             mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
                                             mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
                                             F[K,I,J,10] = mean_u
@@ -947,8 +960,23 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                             (<object>mask)[I,J]=True
                                             F[K,I,J,4] = -F[K,I,J,11]*dt
                                             F[K,I,J,5] = F[K,I,J,10]*dt
+                                    """
 
+                            # Validate based on divergence of the velocity field
 
+                            if div_validation == 1:
+                                #check for boundary
+                                if I ==  Nrow[K] - 1 or J == Ncol[K] - 1:
+                                    # div = du/dy - dv/dx   see paper if you are confused as I was
+                                    div = np.abs((F[K,I,J,10] - F[K,I-1,J,10])/W[K] - (F[K,I,J,11] - F[K,I,J-1,11])/W[K])
+                                else:
+                                    div = np.abs((F[K,I+1,J,10] - F[K,I,J,10])/W[K] - (F[K,I,J+1,11] - F[K,I,J,11])/W[K])
+
+                                # if div is greater than 0.1, interpolate the value. 
+                                if div > 0.1:
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    (<object>mask)[I,J]=True
+ 
             pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -998,7 +1026,47 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print " "
 
 
+def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
+                         np.ndarray[DTYPEi_t, ndim=1] Nrow,
+                         np.ndarray[DTYPEi_t, ndim=1] Ncol,
+                         np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
+                         np.ndarray[DTYPEf_t, ndim=3] neighbours,
+                         float mean_u,
+                         float mean_v,
+                         float dt,
+                         int K,
+                         int I,
+                         int J):
 
+    # No previous iteration. Replace with mean velocity
+    if K==0:
+        F[K,I,J,10] = mean_u
+        F[K,I,J,11] = mean_v
+        F[K,I,J,4] = -F[K,I,J,11]*dt
+        F[K,I,J,5] = F[K,I,J,10]*dt
+    #case if different dimensions : interpolation using previous iteration
+    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+        F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
+        F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
+        F[K,I,J,4] = -F[K,I,J,11]*dt
+        F[K,I,J,5] = F[K,I,J,10]*dt
+    #case if same dimensions
+    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
+        for L in range(3):
+            for M in range(3):
+                if neighbours_present[L,M]:
+                    neighbours[0,L,M] = F[K-1,I+L-1,J+M-1,10]#u
+                    neighbours[1,L,M] = F[K-1,I+L-1,J+M-1,11]#v
+                else:
+                    neighbours[0,L,M] = 0
+                    neighbours[1,L,M] = 0
+        if np.sum(neighbours_present) != 0:
+            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+            F[K,I,J,10] = mean_u
+            F[K,I,J,11] = mean_v
+            F[K,I,J,4] = -F[K,I,J,11]*dt
+            F[K,I,J,5] = F[K,I,J,10]*dt
 
 
 def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
