@@ -939,7 +939,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     div = np.abs((F[K,I+1,J,10] - F[K,I,J,10])/W[K] - (F[K,I,J+1,11] - F[K,I,J,11])/W[K])
 
                                 # if div is greater than 0.1, interpolate the value. 
-                                if div > 0.1:
+                                if div > div_tolerance:
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
  
