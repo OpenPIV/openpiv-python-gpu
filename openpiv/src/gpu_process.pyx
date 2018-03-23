@@ -245,7 +245,7 @@ class CorrelationFunction( ):
 
         # get first peak of correlation function
         self.row, self.col, self.corr_max1 = self._find_peak(self.data)
-        
+
         
                 
     def _IWarrange(self, frame_a, frame_b, d_winA, d_search_area, shift):
@@ -276,12 +276,11 @@ class CorrelationFunction( ):
             int IW_size = window_size*window_size;
             int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
             int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
-            int diff = window_size - overlap;
-            int i; 
+            int diff = window_size - overlap; 
 
             //loop through each interrogation window
            
-            for(i=0; i<batch_size; i++)
+            for(int i=0; i<batch_size; i++)
             {   
                 //indeces of image to map from
                 f_range = (i/n_col*diff + ind_y)*w + (i%n_col)*diff + ind_x;
@@ -318,13 +317,17 @@ class CorrelationFunction( ):
                 // x index in whole image for shifted pixel
                 x_shift = ind_x + dx[i];
                 
-                //indeces of image to map from. Apply shift to pixels
-                f_range = (i/n_col*diff + y_shift)*w + (i%n_col)*diff + x_shift;
-                
                 // Get values outside window in a sneeky way. This array is 1 if the value is inside the window,
                 // and 0 if it is outside the window. Multiply This with the shifted value at end
-                int outside_range = ( y_shift > 0 && y_shift < h && x_shift > 0 && x_shift < w);
+                int outside_range = ( y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
                 
+                // Get rid of values outside the range
+                x_shift = x_shift*outside_range;
+                y_shift = y_shift*outside_range;
+                
+                //indeces of image to map from. Apply shift to pixels
+                f_range = (i/n_col*diff + y_shift)*w + (i%n_col)*diff + x_shift;
+               
                 // indeces of image to map to
                 w_range = i*IW_size + window_size*ind_y + ind_x;      
                 
@@ -354,6 +357,7 @@ class CorrelationFunction( ):
         # slice up windows
         windowSlice = mod_ws.get_function("windowSlice")
         windowSlice(d_frame_a, d_winA, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block = (block_size,block_size,1), grid=(grid_size,grid_size) )
+
         
         if(shift is None):
             windowSlice(d_frame_b, d_search_area, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block = (block_size,block_size,1), grid=(grid_size,grid_size) )
@@ -367,18 +371,17 @@ class CorrelationFunction( ):
             # Move displacements to the gpu
             d_dx = gpuarray.to_gpu(dx)
             d_dy = gpuarray.to_gpu(dy)
-            
+
             windowSlice_shift = mod_ws.get_function("windowSlice_shift")
             windowSlice_shift(d_frame_b, d_search_area, d_dx, d_dy, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block = (block_size,block_size,1), grid=(grid_size,grid_size) )
-            
+
             # free displacement GPU memory
             d_dx.gpudata.free()
             d_dy.gpudata.free()
-        
+
         # free GPU memory
         d_frame_a.gpudata.free()
         d_frame_b.gpudata.free()
-        
         
     def _normalize_intensity(self, d_winA, d_search_area, d_winA_norm, d_search_area_norm):
         """
@@ -498,7 +501,7 @@ class CorrelationFunction( ):
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
         zero_pad(d_winA_zp, d_winA_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
-        zero_pad(d_search_area_zp, d_search_area_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
+        zero_pad(d_search_area_zp, d_search_area_norm, self.nfft    , self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
         
         # Free GPU memory
         d_winA_norm.gpudata.free()
@@ -552,6 +555,9 @@ class CorrelationFunction( ):
         d_tmp.gpudata.free()
         d_winA_zp.gpudata.free()
         d_search_area_zp.gpudata.free()
+        
+        # delete classes for the plan for free any associated memory
+        del(plan_forward, plan_inverse)
              
         return(corr)
         
@@ -1176,9 +1182,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
       
         print "..[DONE]"
         if K==0:
-            print Nrow[K]
-            print ""
-            print Ncol[K]
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
             print(residual_0)
         print " --residual : ", #(residual/np.float(Nrow[K]*Ncol[K]))/residual_0
@@ -1295,6 +1298,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     v[I,J]=F[K,I,J,11]
     
             print "...[DONE]"
+            
+            # delete old correlation function
+            del(c)
             end(startTime)
             return x, y, u, v, (<object>mask)
         #############################################################################
@@ -1323,6 +1329,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5))
         
         pbar.finish()
+        
+        # delete old correlation function
+        del(c)
+        
         print "..[DONE] -----> going to iteration ",K+1
         print " "
 
