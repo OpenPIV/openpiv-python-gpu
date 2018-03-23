@@ -224,22 +224,20 @@ class CorrelationFunction( ):
         ########################################################################################
         
         # START DOING CALCULATIONS
-        
-        # Create gpu arrays to hold data
+
+        # Return stack of all IW's
         d_winA = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         d_search_area = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_winA_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_search_area_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)        
-        d_winA_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype = np.float32)
-        d_search_area_zp = gpuarray.zeros_like(d_winA_zp)  
-        
-        # Return stack of all IW's
         self._IWarrange(frame_a, frame_b, d_winA, d_search_area, shift)
         
         #normalize array
+        d_winA_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
+        d_search_area_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)           
         self._normalize_intensity(d_winA, d_search_area, d_winA_norm, d_search_area_norm)
 
         # zero pad arrays
+        d_winA_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype = np.float32)
+        d_search_area_zp = gpuarray.zeros_like(d_winA_zp)
         self._zero_pad(d_winA_norm, d_search_area_norm, d_winA_zp, d_search_area_zp)
 
         # correlate Windows
