@@ -815,8 +815,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 #fill windows a and b
                 for L in range(W[K]):
                     for M in range(W[K]):
-                        window_a[L,M] = frame_a[F[K,I,J,0] - W[K]/2 + L, F[K,I,J,1] - W[K]/2 + M]
-                        window_b[L,M] = frame_b[F[K,I,J,2] - W[K]/2 + L, F[K,I,J,3] - W[K]/2 + M]
+                        window_a[L,M] = frame_a[int(F[K,I,J,0] - W[K]/2 + L), int(F[K,I,J,1] - W[K]/2 + M)]
+                        window_b[L,M] = frame_b[int(F[K,I,J,2] - W[K]/2 + L), int(F[K,I,J,3] - W[K]/2 + M)]
                         
                 #perform correlation of the two windows
                 corr = correlate_windows( window_b, window_a, nfftx=nfftx, nffty=nffty )
@@ -825,7 +825,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 i_peak, j_peak = c.subpixel_peak_position( subpixel_method )#get peak position
 
                 #prevent 'Not a Number' peak location
-                if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
+                if np.any(np.isnan((i_peak, j_peak))) or mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 0:
                     F[K,I,J,8] = 0.0
                     F[K,I,J,9] = 0.0
                 else:
@@ -892,7 +892,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                         
                         
                         # If there are neighbours present and no mask, validate the velocity
-                        if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
+                        if np.sum(neighbours_present) !=0 and mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 1:
                         #if np.sum(neighbours_present):
 
                             #computing the mean velocity
