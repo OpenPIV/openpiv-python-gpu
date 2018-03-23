@@ -1098,7 +1098,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 F[K,I,J,3] = np.floor(F[K,I,J,1] + F[K,I,J,7]) #yb=yb+dpy
                 
                 #prevent 'Not a Number' peak location
-                if np.any(np.isnan((i_peak[I,J], j_peak[I,J]))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
+                if np.any(np.isnan((i_peak[I,J], j_peak[I,J]))) or mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 0:
                     F[K,I,J,8] = 0.0
                     F[K,I,J,9] = 0.0
                 else:
@@ -1228,7 +1228,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                         
                         
                         # If there are neighbours present and no mask, validate the velocity
-                        if np.sum(neighbours_present) !=0 and mark[F[K,I,J,0], F[K,I,J,1]] == 1:
+                        if np.sum(neighbours_present) !=0 and mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 1:
                         #if np.sum(neighbours_present):
 
                             #computing the mean velocity
