@@ -136,8 +136,8 @@ def gpu_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 
     # Send images to the gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a_f, dtype = np.float32)
-    d_frame_b_f = gpuarray.to_gpu(frame_b_f, dtype = np.float32)
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f, np.float32)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f, np.float32)
     
     # Define variables
     cdef DTYPEi_t n_rows, n_cols
@@ -377,8 +377,8 @@ class CorrelationFunction( ):
             dx = shift[1]
             
             # Move displacements to the gpu
-            d_dx = gpuarray.to_gpu(dx)
-            d_dy = gpuarray.to_gpu(dy)
+            d_dx = gpuarray.to_gpu(dx, np.int32)
+            d_dy = gpuarray.to_gpu(dy, np.int32)
 
             windowSlice_shift = mod_ws.get_function("windowSlice_shift")
             windowSlice_shift(d_frame_b, d_search_area, d_dx, d_dy, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block = (block_size,block_size,1), grid=(grid_size,grid_size) )
@@ -977,7 +977,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     d_frame_a_f = gpuarray.to_gpu(frame_a_f, dtype = np.float32)
     d_frame_b_f = gpuarray.to_gpu(frame_b_f, dtype = np.float32)
     
-    warnings.warn("deprecated", RuntimeWarning)
+    #warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
         raise ValueError( "Please provide a nb_iter_max that is greater than the coarse_level" )
     cdef int K #main iteration index
@@ -1067,16 +1067,16 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     ####################################################
     
     for K in range(nb_iter_max):
-        print " "
-        print "//////////////////////////////////////////////////////////////////"
-        print " "
+        #print " "
+        #print "//////////////////////////////////////////////////////////////////"
+        #print " "
         print "ITERATION # ",K
-        print " "
+        #print " "
         
         
         #a simple progress bar
-        widgets = ['Computing the displacements : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
-           ' ', ETA(), ' ', FileTransferSpeed()]
+        #widgets = ['Computing the displacements : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
+        #   ' ', ETA(), ' ', FileTransferSpeed()]
         #pbar = ProgressBar(widgets=widgets, maxval=100)
         #pbar.start()
         residual = 0
@@ -1196,7 +1196,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         if K==0:
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
             print(residual_0)
-        print " --residual : ", #(residual/np.float(Nrow[K]*Ncol[K]))/residual_0
+        #print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
         
         
         #####################################################
@@ -1217,14 +1217,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for i in range(validation_iter):
                 print "Validation, iteration number ",i
                 print " "
-                widgets = ['Validation : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
-                ' ', ETA(), ' ', FileTransferSpeed()]
-                pbar = ProgressBar(widgets=widgets, maxval=100)
-                pbar.start()
+                #widgets = ['Validation : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
+                #' ', ETA(), ' ', FileTransferSpeed()]
+                #pbar = ProgressBar(widgets=widgets, maxval=100)
+                #pbar.start()
                 
                 #run through locations
                 for I in range(Nrow[K]):
-                    pbar.update(100*I/Nrow[K])                    
+                    #pbar.update(100*I/Nrow[K])                    
                     for J in range(Ncol[K]):
                         neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
                         
@@ -1292,7 +1292,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
  
-            pbar.finish()                    
+            #pbar.finish()                    
             print "..[DONE]"
             print " "
         #end of validation
@@ -1300,7 +1300,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         ##############################################################################
         #stop process if this is the last iteration
         if K==nb_iter_max-1:
-            print "//////////////////////////////////////////////////////////////////"
+            #print "//////////////////////////////////////////////////////////////////"
             print "end of iterative process.. Re-arranging vector fields.."
             for I in range(Nrow[K]):#assembling the u,v and x,y fields for outputs
                 for J in range(Ncol[K]):
@@ -1325,13 +1325,13 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print "going to next iteration.. "
         print "performing interpolation of the displacement field"
         print " "
-        widgets = ['Performing interpolations : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
-           ' ', ETA(), ' ', FileTransferSpeed()]
-        pbar = ProgressBar(widgets=widgets, maxval=100)
-        pbar.start()
+        #widgets = ['Performing interpolations : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
+        #   ' ', ETA(), ' ', FileTransferSpeed()]
+        #pbar = ProgressBar(widgets=widgets, maxval=100)
+        #pbar.start()
 
         for I in range(Nrow[K+1]):
-            pbar.update(100*I/Nrow[K+1])
+            #pbar.update(100*I/Nrow[K+1])
             for J in range(Ncol[K+1]):
 
                 # If vector field dimensions agree
@@ -1344,13 +1344,13 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     F[K+1,I,J,6] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4))
                     F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5))
         
-        pbar.finish()
+        #pbar.finish()
         
         # delete old correlation function
         del(c)
         
-        print "..[DONE] -----> going to iteration ",K+1
-        print " "
+        #print "..[DONE] -----> going to iteration ",K+1
+        #print " "
 
 
 def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
