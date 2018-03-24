@@ -974,8 +974,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 
     # Send images to the gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a_f, dtype = np.float32)
-    d_frame_b_f = gpuarray.to_gpu(frame_b_f, dtype = np.float32)
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f, np.float32)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f, np.float32)
     
     #warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
