@@ -134,6 +134,10 @@ def gpu_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     #TODO  changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
+
+    # Send images to the gpu
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f, dtype = np.float32)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f, dtype = np.float32)
     
     # Define variables
     cdef DTYPEi_t n_rows, n_cols
@@ -141,7 +145,11 @@ def gpu_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     assert nfftx == nffty, 'fft x and y dimensions must be same size'
     
     # Get correlation function
-    c = CorrelationFunction(frame_a_f, frame_b_f, window_size, overlap, nfftx)
+    c = CorrelationFunction(d_frame_a_f, d_frame_b_f, window_size, overlap, nfftx)
+
+    # Free gpu memory
+    d_frame_a_f.gpudata.free()
+    d_frame_b_f.gpudata.free()
     
     # vector field shape
     n_rows, n_cols = c.return_shape()
@@ -178,7 +186,7 @@ def gpu_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         
 
 class CorrelationFunction( ):
-    def __init__(self, frame_a, frame_b, window_size, overlap, nfftx, shift = None):
+    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfftx, shift = None):
         """A class representing a cross correlation function.
         
         NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU.
@@ -188,7 +196,7 @@ class CorrelationFunction( ):
         
         Parameters
         ----------
-        frame_a, frame_b: 2d arrays - float32
+        d_frame_a, d_frame_b: 2d gpu arrays - float32
             image pair
             
         window_size: int
@@ -208,7 +216,7 @@ class CorrelationFunction( ):
         ########################################################################################
         # PARAMETERS FOR CORRELATION FUNCTION
         
-        self.shape = frame_a.shape
+        self.shape = d_frame_a.shape
         self.window_size = np.int32(window_size)
         self.overlap = np.int32(overlap)      
         self.n_rows, self.n_cols = np.int32(get_field_shape( self.shape, window_size, overlap ))       
@@ -228,7 +236,7 @@ class CorrelationFunction( ):
         # Return stack of all IW's
         d_winA = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         d_search_area = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        self._IWarrange(frame_a, frame_b, d_winA, d_search_area, shift)
+        self._IWarrange(d_frame_a, d_frame_b, d_winA, d_search_area, shift)
         
         #normalize array
         d_winA_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
@@ -342,8 +350,8 @@ class CorrelationFunction( ):
         w = np.int32(self.shape[1])
         
         # transfer data to GPU
-        d_frame_a = gpuarray.to_gpu(frame_a)
-        d_frame_b = gpuarray.to_gpu(frame_b)
+        #d_frame_a = gpuarray.to_gpu(frame_a)
+        #d_frame_b = gpuarray.to_gpu(frame_b)
         
         # for debugging
         assert self.window_size >= 8, "Window size is too small"
@@ -380,8 +388,8 @@ class CorrelationFunction( ):
             d_dy.gpudata.free()
 
         # free GPU memory
-        d_frame_a.gpudata.free()
-        d_frame_b.gpudata.free()
+        #d_frame_a.gpudata.free()
+        #d_frame_b.gpudata.free()
         
     def _normalize_intensity(self, d_winA, d_search_area, d_winA_norm, d_search_area_norm):
         """
@@ -964,6 +972,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     #TODO  changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
+
+    # Send images to the gpu
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f, dtype = np.float32)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f, dtype = np.float32)
     
     warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
@@ -1001,7 +1013,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     if validation_iter==0:
         validation_method='None'
 
-    cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
+    #cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
     
     #define the main array F that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 14], dtype=DTYPEf)
@@ -1081,7 +1093,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #if K == 0:
         #    c = CorrelationFunction(frame_a_f, frame_b_f, W[K], Overlap[K], nfftx)
         #else:
-        c = CorrelationFunction(frame_a_f, frame_b_f, W[K], Overlap[K], nfftx, shift = shift[:, 0:Nrow[K]*Ncol[K]])
+        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, W[K], Overlap[K], nfftx, shift = shift[:, 0:Nrow[K]*Ncol[K]])
             
         # Get window displacement to subpixel accuracy
         i_tmp[0:Nrow[K]*Ncol[K]], j_tmp[0:Nrow[K]*Ncol[K]] = c.subpixel_peak_location()
@@ -1298,10 +1310,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     v[I,J]=F[K,I,J,11]
     
             print "...[DONE]"
+
+            # delete images from gpu memory
+            d_frame_a_f.gpudata.free()
+            d_frame_b_f.gpudata.free()
             
             # delete old correlation function
             del(c)
-            end(startTime)
+            #end(startTime)
             return x, y, u, v, (<object>mask)
         #############################################################################
 
