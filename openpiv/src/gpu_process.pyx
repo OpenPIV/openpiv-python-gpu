@@ -136,8 +136,8 @@ def gpu_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 
     # Send images to the gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a_f, np.float32)
-    d_frame_b_f = gpuarray.to_gpu(frame_b_f, np.float32)
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f)
     
     # Define variables
     cdef DTYPEi_t n_rows, n_cols
@@ -256,7 +256,7 @@ class CorrelationFunction( ):
 
         
                 
-    def _IWarrange(self, frame_a, frame_b, d_winA, d_search_area, shift):
+    def _IWarrange(self, d_frame_a, d_frame_b, d_winA, d_search_area, shift):
         """
         Creates a 3D array stack of all of the interrogation windows. 
         This is necessary to do the FFTs all at once on the GPU.
@@ -377,8 +377,8 @@ class CorrelationFunction( ):
             dx = shift[1]
             
             # Move displacements to the gpu
-            d_dx = gpuarray.to_gpu(dx, np.int32)
-            d_dy = gpuarray.to_gpu(dy, np.int32)
+            d_dx = gpuarray.to_gpu(dx)
+            d_dy = gpuarray.to_gpu(dy)
 
             windowSlice_shift = mod_ws.get_function("windowSlice_shift")
             windowSlice_shift(d_frame_b, d_search_area, d_dx, d_dy, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block = (block_size,block_size,1), grid=(grid_size,grid_size) )
@@ -663,11 +663,18 @@ class CorrelationFunction( ):
                 column max location to subpixel accuracy 
         """
 
+        # Define small number to replace zeros and get rid of warnings in calculations
+        cdef DTYPEf_t SMALL = 1e-20
+
         #cast corr and row as a ctype array
         cdef np.ndarray[DTYPEf_t, ndim=3] corr_c = np.array(self.data, dtype = DTYPEf)
-        cdef np.ndarray[DTYPEi_t, ndim=1] row_c = np.array(self.row, dtype = DTYPEi)
-        cdef np.ndarray[DTYPEi_t, ndim=1] col_c = np.array(self.col, dtype = DTYPEi)
-        
+        cdef np.ndarray[DTYPEf_t, ndim=1] row_c = np.array(self.row, dtype = DTYPEf)
+        cdef np.ndarray[DTYPEf_t, ndim=1] col_c = np.array(self.col, dtype = DTYPEf)
+
+        # Define arrays to store the data
+        cdef np.ndarray[DTYPEf_t, ndim=1] row_sp = np.empty(self.batch_size, dtype = DTYPEf)
+        cdef np.ndarray[DTYPEf_t, ndim=1] col_sp = np.empty(self.batch_size, dtype = DTYPEf)
+
         # Move boundary peaks inward one node. Replace later in sig2noise
         row_tmp = np.copy(self.row)
         row_tmp[row_tmp < 1] = 1
@@ -677,15 +684,23 @@ class CorrelationFunction( ):
         col_tmp[col_tmp > self.nfft - 2] = self.nfft - 2
 
         # Initialize arrays
-        c = corr_c[range(self.batch_size), row_tmp, col_tmp]
-        cl = corr_c[range(self.batch_size), row_tmp-1, col_tmp]
-        cr = corr_c[range(self.batch_size), row_tmp+1, col_tmp]
-        cd = corr_c[range(self.batch_size), row_tmp, col_tmp-1]
-        cu = corr_c[range(self.batch_size), row_tmp, col_tmp+1]
+        cdef np.ndarray[DTYPEf_t, ndim=1] c = corr_c[range(self.batch_size), row_tmp, col_tmp]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cl = corr_c[range(self.batch_size), row_tmp-1, col_tmp]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cr = corr_c[range(self.batch_size), row_tmp+1, col_tmp]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cd = corr_c[range(self.batch_size), row_tmp, col_tmp-1]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cu = corr_c[range(self.batch_size), row_tmp, col_tmp+1]
+
+        # Get rid of values that are zero or lower
+        cdef np.ndarray[DTYPEf_t, ndim=1] non_zero = np.array(c > 0, dtype = DTYPEf)
+        c[c <= 0] = SMALL
+        cl[cl <= 0] = SMALL
+        cr[cr <= 0] = SMALL
+        cd[cd <= 0] = SMALL
+        cu[cu <= 0] = SMALL
        
-        # Do subpixel approximation   
-        row_sp = row_c + ( (np.log(cl)-np.log(cr) )/( 2*np.log(cl) - 4*np.log(c) + 2*np.log(cr) ))
-        col_sp = col_c + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) ))
+        # Do subpixel approximation. Add SMALL to avoid zero divide.
+        row_sp = row_c + ( (np.log(cl)-np.log(cr) )/( 2*np.log(cl) - 4*np.log(c) + 2*np.log(cr) + SMALL ))*non_zero
+        col_sp = col_c + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) + SMALL))*non_zero
         
         return(row_sp, col_sp)
         
@@ -974,8 +989,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 
     # Send images to the gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a_f, np.float32)
-    d_frame_b_f = gpuarray.to_gpu(frame_b_f, np.float32)
+    d_frame_a_f = gpuarray.to_gpu(frame_a_f)
+    d_frame_b_f = gpuarray.to_gpu(frame_b_f)
     
     #warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
