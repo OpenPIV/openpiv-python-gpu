@@ -1793,9 +1793,6 @@ def sumsquare_array(arr1):
 
 
 
-
-
-
 def launch( str method, names, arg ):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
     
@@ -1855,6 +1852,34 @@ def end( float startTime ):
     print "[DONE] ..after ", (time.time() - startTime), "seconds "
     print "-------------------------------------------------------------"
     
+    
+    
+    
+    
+################################################################################
+#  CUDA FUNCTIONS
+################################################################################
+
+
+mod_update = SourceModule("""
+
+    __global__ void update_values(float *F, float *i_peak, float *j_peak, int cols, int fourth_dim, int nfft)
+    {
+        // F is where all the data is stored at a particular K
+        // i_peak / j_peak is the correlation peak location
+        // cols = number of colums of IW's
+        // fourth_dim  = size of the fourth dimension of F
+        // nfft = size of the fft window
+        
+        int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
+        int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
+        
+        int window_loc = ind_x*cols*fourth_dim + 
+        
+        F[I,J,2] = np.floor(F[K,I,J,0] + F[K,I,J,6]) #xb=xa+dpx
+        F[I,J,3] = np.floor(F[K,I,J,1] + F[K,I,J,7]) #yb=yb+dpy
+    }
+""")
 
 
 
