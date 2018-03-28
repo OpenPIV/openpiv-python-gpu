@@ -1057,7 +1057,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
     #define two small arrays used for the validation process
-    cdef np.ndarray[DTYPEi_t. ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1107,9 +1107,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         shift[1, 0:Nrow[K]*Ncol[K]] = F[K,0:Nrow[K], 0:Ncol[K], 7].flatten().astype(np.int32)  #yb=ya+dpy
         
         # Get correlation function
-        #if K == 0:
-        #    c = CorrelationFunction(frame_a_f, frame_b_f, W[K], Overlap[K], nfftx)
-        #else:
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, W[K], Overlap[K], nfftx, shift = shift[:, 0:Nrow[K]*Ncol[K]])
             
         # Get window displacement to subpixel accuracy
@@ -1866,7 +1863,7 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
         int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
 
         // index for each IW
-        int window_idx = ind_x*cols + ind_y;
+        int window_idx = ind_y*cols + ind_x;
 
         //Index for each IW in the F array
         int F_idx = window_idx*fourth_dim;
