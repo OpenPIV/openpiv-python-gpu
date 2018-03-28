@@ -1162,11 +1162,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #pbar.finish()#close progress bar
       
         print "..[DONE]"
+        """
         if K==0:
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
             print(residual_0)
-        #print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
-        
+        print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
+        """
         
         #####################################################
         #validation of the velocity vectors with 3*3 filtering
@@ -1213,14 +1214,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                         if np.sum(neighbours_present) !=0 and mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 1:
                         #if np.sum(neighbours_present):
 
-                            #computing the mean velocity
-                            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-
                             #validation with the sig2noise ratio, 1.5 is a recommended minimum value
                             if F[K,I,J,12] < 1.5:
                                 #if in 1st iteration, no interpolation is needed so just replace by the mean
                                 if K==0:
+                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
                                     F[K,I,J,10] = mean_u
                                     F[K,I,J,11] = mean_v
                                     (<object>mask)[I,J]=True
@@ -1232,23 +1231,23 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
 
                             #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
-                            if validation_method == 'mean_velocity':
+                            elif validation_method == 'mean_velocity':
 
                                 #get rms of u and v
                                 rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
                                 rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
 
                                 if rms_u==0 or rms_v==0:
-                                        F[K,I,J,10] = mean_u
-                                        F[K,I,J,11] = mean_v
+                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+                                    F[K,I,J,10] = mean_u
+                                    F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
-
+                                
                             # Validate based on divergence of the velocity field
-
-                            if div_validation == 1:
+                            elif div_validation == 1:
                                 #check for boundary
                                 if I ==  Nrow[K] - 1 or J == Ncol[K] - 1:
                                     # div = du/dy - dv/dx   see paper if you are confused as I was
@@ -1258,9 +1257,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                                 # if div is greater than 0.1, interpolate the value. 
                                 if div > div_tolerance:
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
- 
+                            else:
+                                pass 
             #pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -1327,8 +1327,6 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
                          np.ndarray[DTYPEf_t, ndim=3] neighbours,
-                         float mean_u,
-                         float mean_v,
                          float dt,
                          int K,
                          int I,
@@ -1368,6 +1366,8 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
 
     # No previous iteration. Replace with mean velocity
     if K==0:
+        mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+        mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
         F[K,I,J,10] = mean_u
         F[K,I,J,11] = mean_v
         F[K,I,J,4] = -F[K,I,J,11]*dt
