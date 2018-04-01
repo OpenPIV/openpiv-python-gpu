@@ -1240,15 +1240,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     F[K,I,J,10] = mean_u
                                     F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-<<<<<<< HEAD
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                                 continue
-=======
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                                 
->>>>>>> ea9b4eab2aa758a162dcd49c2d22f7791ed4fd4b
                             # Validate based on divergence of the velocity field
                             elif div_validation == 1:
                                 #check for boundary
@@ -1263,12 +1260,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                             else:
-<<<<<<< HEAD
                                 pass
  
-=======
-                                pass 
->>>>>>> ea9b4eab2aa758a162dcd49c2d22f7791ed4fd4b
             #pbar.finish()                    
             print "..[DONE]"
             print " "
