@@ -1727,11 +1727,6 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
 
 
 
-
-
-
-
-
 def sumsquare_array(arr1):
     """Compute the sum of the square of the elements of a given array or list
     
@@ -1929,3 +1924,215 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
 
 
 
+def gpu_find_neighbours(Nrow, Ncol):
+    """
+    An array that stores if a point has neighbours in a 3x3 grid around it
+    
+    Parameters
+    ----------
+    
+    Nrow : 1D array - int
+        number of rows at each iteration
+        
+    Ncol : 1D array - int
+        nubmer of columns at each iteration
+        
+    Returns
+    -------
+    
+    d_neighbours_present : 4D array [Nrow, Ncol, 3 , 3]
+        gpu array of the neighbours surrounding a particular point 
+    """
+    
+    mod_neighbours = SourceModule("""
+    __global__ void find_neighbours(int *neighbours_present, int Nrow, int Ncol)
+    {   
+        // neighbours_present = boolean array
+        // Nrow = number of rows
+        // Ncol = Number of columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        int row_zero = (w_idx >= Ncol);
+        int row_max = (w_idx < Ncol*(Nrow-1));
+        int col_zero = (w_idx % Ncol != 0);
+        int col_max = (w_idx % Ncol != Ncol-1);
+        
+        // Top Row
+        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * row_zero;
+        neighbours_present[w_idx*9 + 1] = neighbours_present[w_idx*9 + 1] * row_zero;
+        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * row_zero;
+        
+        __syncthreads();
+        
+        // Bottom row
+        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * row_max;
+        neighbours_present[w_idx*9 + 7] = neighbours_present[w_idx*9 + 7] * row_max;
+        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * row_max;
+        
+        __syncthreads();
+        
+        // Left column
+        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * col_zero;
+        neighbours_present[w_idx*9 + 3] = neighbours_present[w_idx*9 + 3] * col_zero;
+        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * col_zero;
+        
+        __syncthreads();
+        
+        // right column
+        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * col_max;
+        neighbours_present[w_idx*9 + 5] = neighbours_present[w_idx*9 + 5] * col_max;
+        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * col_max; 
+        
+        // Set center to zero, can't be a neighbour for yourself
+        neighbours_present[w_idx*9 + 4] = 0;
+    }
+
+    """)
+    
+    block_size = 8   
+    x_blocks = int(Ncol*Nrow // block_size + 1)
+        
+    # send data to gpu
+    neighbours_present = np.ones([Nrow, Ncol, 3, 3], dtype = np.int32)
+    d_neighbours_present = gpuarray.to_gpu(neighbours_present)
+    
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)    
+    
+    find_neighbours = mod_neighbours.get_function("find_neighbours")
+    find_neighbours(d_neighbours_present, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    
+    return(d_neighbours_present)
+
+
+
+def gpu_get_neighbours(d_neighbours_present, d_u, d_v, Nrow, Ncol):
+    """
+    An array that stores the values of the velocity of the neighbours around it.
+    
+    WARNING: this function uses constant memoery on the GPU, which there is only a limited amount of.
+             Do not do this for field that 
+    
+    Parameters
+    ----------
+
+    d_neighbours_present: 4D GPU array - float32
+        arrays indicating if a point has neighbours surrounding it
+    
+    d_u, d_v : 2D GPUarray - float
+        u and v velocity 
+    
+    Nrow : 1D array - int
+        number of rows at each iteration
+        
+    Ncol : 1D array - int
+        nubmer of columns at each iteration
+        
+    Returns
+    -------
+    
+    neighbours : 5D array [Nrow, Ncol, 2, 3 , 3] 
+        stores the values of u anf v of the neighbours of a point
+    """
+    
+    mod_get_neighbours = SourceModule("""
+    __global__ void get_u_neighbours(float *neighbours, float *neighbours_present, float *u, int Nrow, int Ncol)
+    {
+        // neighbours - u and v values around each point
+        //neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+        // u, v : u and v velocities
+        // Nrow, Ncol - number of rows and columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Nrow*Ncol){return;}
+        
+        // get velocities
+        neighbours[w_idx*18 + 0] = u[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];       
+        neighbours[w_idx*18 + 1] = u[w_idx - Ncol] * neighbours_present[w_idx*9 + 1];        
+        neighbours[w_idx*18 + 2] = u[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 3] = u[w_idx - 1] * neighbours_present[w_idx*9 + 3];               
+        neighbours[w_idx*18 + 4] = 0.0;        
+        neighbours[w_idx*18 + 5] = u[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 6] = u[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
+        neighbours[w_idx*18 + 7] = u[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
+        neighbours[w_idx*18 + 8] = u[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];      
+    }
+    
+    __global__ void get_v_neighbours(float *neighbours, float *neighbours_present, float *v, int Nrow, int Ncol)
+    {
+        // neighbours - u and v values around each point
+        //neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+        // u, v : u and v velocities
+        // Nrow, Ncol - number of rows and columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Nrow*Ncol){return;}
+        
+        // get velocities
+        neighbours[w_idx*18 + 9] = v[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];
+        neighbours[w_idx*18 + 10] = v[w_idx - Ncol]* neighbours_present[w_idx*9 + 1];
+        neighbours[w_idx*18 + 11] = v[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 12] = v[w_idx - 1] * neighbours_present[w_idx*9 + 3];       
+        neighbours[w_idx*18 + 13] = 0.0;        
+        neighbours[w_idx*18 + 14] = v[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 15] =  v[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
+        neighbours[w_idx*18 + 16] = v[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
+        neighbours[w_idx*18 + 17] = v[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];        
+    }   
+    """)
+    
+    # set dtype of inputs
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+     
+    # Get GPU grid dimensions and function
+    block_size = 16   
+    x_blocks = int(Ncol*Nrow//block_size + 1)
+    get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
+    get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
+    
+    # find neighbours
+    neighbours = np.zeros([Nrow, Ncol, 2,3,3])
+    neighbours = neighbours.astype(np.float32)   
+    
+    # assert statements for data
+    assert neighbours.dtype == np.float32, "Wrong data type for neighbours"
+    assert type(Nrow) == np.int32, "Wrong data type for Nrow"
+    assert type(Ncol) == np.int32, "Wrong data type for Ncol"
+    
+    # send data to the gpu
+    d_neighbours = gpuarray.to_gpu(neighbours)
+    
+    # Get u and v data    
+    get_u_neighbours(d_neighbours, d_neighbours_present, d_u, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    get_v_neighbours(d_neighbours, d_neighbours_present, d_v, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    
+    # return data
+    #neighbours = d_neighbours.get()
+    
+    #TODO Figure out what is going on here.
+    # With vector fields over size 40000, nans show up in neighbours. But only where zeros should be
+    # I have no idea why this is, but this works...
+    a = np.isnan(d_neighbours)
+    if np.sum(a) > 0:
+        d_neighbours[a] = 0.0
+ 
+    return(d_neighbours)    
