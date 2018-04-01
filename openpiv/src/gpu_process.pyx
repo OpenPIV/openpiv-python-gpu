@@ -1031,7 +1031,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     #cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
     
     #define the main array F that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 14], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] F_check = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
     
     #define mask - bool array don't exist in cython so we go to lower level with cast
     #you can access mask with (<object>mask)[I,J]
@@ -1056,6 +1057,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
     #define two small arrays used for the validation process
+    cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1105,9 +1107,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         shift[1, 0:Nrow[K]*Ncol[K]] = F[K,0:Nrow[K], 0:Ncol[K], 7].flatten().astype(np.int32)  #yb=ya+dpy
         
         # Get correlation function
-        #if K == 0:
-        #    c = CorrelationFunction(frame_a_f, frame_b_f, W[K], Overlap[K], nfftx)
-        #else:
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, W[K], Overlap[K], nfftx, shift = shift[:, 0:Nrow[K]*Ncol[K]])
             
         # Get window displacement to subpixel accuracy
@@ -1121,6 +1120,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         sig2noise[0:Nrow[K], 0:Ncol[K]] = c.sig2noise_ratio(method = sig2noise_method)
         
         # Loop through F and update values
+        """
         for I in range(Nrow[K]):
             #pbar.update(100*I/Nrow[K])#progress update
             for J in range(Ncol[K]):
@@ -1148,71 +1148,23 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 
                 # get sig2noise ratio
                 F[K,I,J,12] = sig2noise[I,J]
+        """
+
+        # update the field with new values
+        #TODO check for nans in i_peak and j_peak
+        F = gpu_update(F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], K, c.nfft, dt )
         
         #################################################################################
-        """
-        #run through interpolations locations
-        for I in range(Nrow[K]):
-            pbar.update(100*I/Nrow[K])#progress update
-            for J in range(Ncol[K]):
-                
-                #compute xb, yb:
-                F[K,I,J,2] = np.floor(F[K,I,J,0] + F[K,I,J,6]) #xb=xa+dpx
-                F[K,I,J,3] = np.floor(F[K,I,J,1] + F[K,I,J,7]) #yb=yb+dpy
-                
-                # Look for corrupted window (ie. going outside of the picture) and relocate them with 0 displacement:
-                # if corrupted on x-axis do:
-                if F[K,I,J,2] + W[K]/2 > pic_size[0]-1 or F[K,I,J,2] - W[K]/2 < 0: 
-                    F[K,I,J,2] = F[K,I,J,0] #xb=x
-                    F[K,I,J,3] = F[K,I,J,1] #yb=y
-                    F[K,I,J,6] = 0.0 #dpx=0
-                    F[K,I,J,7] = 0.0 #dpy=0
-                # if corrupted on y-axis do the same
-                elif F[K,I,J,3] + W[K]/2 > pic_size[1]-1 or F[K,I,J,3] - W[K]/2 < 0: 
-                    F[K,I,J,2] = F[K,I,J,0] #xb=x
-                    F[K,I,J,3] = F[K,I,J,1] #yb=y
-                    F[K,I,J,6] = 0.0 #dpx=0
-                    F[K,I,J,7] = 0.0 #dpy=0
-                    
-                #fill windows a and b
-                for L in range(W[K]):
-                    for M in range(W[K]):
-                        window_a[L,M] = frame_a[F[K,I,J,0] - W[K]/2 + L, F[K,I,J,1] - W[K]/2 + M]
-                        window_b[L,M] = frame_b[F[K,I,J,2] - W[K]/2 + L, F[K,I,J,3] - W[K]/2 + M]
-                        
-                #perform correlation of the two windows
-                corr = correlate_windows( window_b, window_a, nfftx=nfftx, nffty=nffty )
-                c = CorrelationFunction( corr )
-                F[K,I,J,12] = c.sig2noise_ratio( sig2noise_method, width )#compute sig2noise
-                i_peak, j_peak = c.subpixel_peak_position( subpixel_method )#get peak position
-
-                #prevent 'Not a Number' peak location
-                if np.any(np.isnan((i_peak, j_peak))) or mark[F[K,I,J,0], F[K,I,J,1]] == 0:
-                    F[K,I,J,8] = 0.0
-                    F[K,I,J,9] = 0.0
-                else:
-                    #find residual displacement dcx and dcy
-                    F[K,I,J,8] = i_peak - corr.shape[0]/2 #dcx
-                    F[K,I,J,9] = j_peak - corr.shape[1]/2 #dcy
-
-                residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8] + F[K,I,J,9]*F[K,I,J,9])
-                
-                #get new displacement prediction
-                F[K,I,J,4] = F[K,I,J,6] + F[K,I,J,8]  #dx=dpx+dcx
-                F[K,I,J,5] = F[K,I,J,7] + F[K,I,J,9]  #dy=dpy+dcy
-                #get new velocity vectors
-                F[K,I,J,10] = F[K,I,J,5] / dt #u=dy/dt
-                F[K,I,J,11] = -F[K,I,J,4] / dt #v=-dx/dt
-                
-        """      
+      
         #pbar.finish()#close progress bar
       
         print "..[DONE]"
+        """
         if K==0:
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
             print(residual_0)
-        #print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
-        
+        print " --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0
+        """
         
         #####################################################
         #validation of the velocity vectors with 3*3 filtering
@@ -1259,14 +1211,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                         if np.sum(neighbours_present) !=0 and mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 1:
                         #if np.sum(neighbours_present):
 
-                            #computing the mean velocity
-                            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-
                             #validation with the sig2noise ratio, 1.5 is a recommended minimum value
                             if F[K,I,J,12] < 1.5:
                                 #if in 1st iteration, no interpolation is needed so just replace by the mean
                                 if K==0:
+                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
                                     F[K,I,J,10] = mean_u
                                     F[K,I,J,11] = mean_v
                                     (<object>mask)[I,J]=True
@@ -1285,12 +1235,20 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
 
                                 if rms_u==0 or rms_v==0:
-                                        F[K,I,J,10] = mean_u
-                                        F[K,I,J,11] = mean_v
+                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+                                    F[K,I,J,10] = mean_u
+                                    F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
+<<<<<<< HEAD
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                                 continue
+=======
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
+                                    (<object>mask)[I,J] = True
+                                
+>>>>>>> ea9b4eab2aa758a162dcd49c2d22f7791ed4fd4b
                             # Validate based on divergence of the velocity field
                             elif div_validation == 1:
                                 #check for boundary
@@ -1302,11 +1260,15 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                                 # if div is greater than 0.1, interpolate the value. 
                                 if div > div_tolerance:
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                             else:
+<<<<<<< HEAD
                                 pass
  
+=======
+                                pass 
+>>>>>>> ea9b4eab2aa758a162dcd49c2d22f7791ed4fd4b
             #pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -1373,8 +1335,6 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
                          np.ndarray[DTYPEf_t, ndim=3] neighbours,
-                         float mean_u,
-                         float mean_v,
                          float dt,
                          int K,
                          int I,
@@ -1414,6 +1374,8 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
 
     # No previous iteration. Replace with mean velocity
     if K==0:
+        mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+        mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
         F[K,I,J,10] = mean_u
         F[K,I,J,11] = mean_v
         F[K,I,J,4] = -F[K,I,J,11]*dt
@@ -1793,9 +1755,6 @@ def sumsquare_array(arr1):
 
 
 
-
-
-
 def launch( str method, names, arg ):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
     
@@ -1855,6 +1814,118 @@ def end( float startTime ):
     print "[DONE] ..after ", (time.time() - startTime), "seconds "
     print "-------------------------------------------------------------"
     
+    
+    
+    
+    
+################################################################################
+#  CUDA FUNCTIONS
+################################################################################
+
+def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
+    """
+    Updates the velocity values after an iteration of the WiDIM algorithm
+    
+    Paramters
+    ---------
+    
+    F: np.ndarray - 4D - float
+        main array in WiDIM algorithm
+                
+    sig2noise - 2D array
+        signal to noise ratio at each IW at each iteration
+        
+    i_peak, j_peak: 2D array - float
+        correlation function peak at each iteration
+
+    Nrows, Ncols: 1D np array - int
+        number of rows and columns at each iteration
+                
+    K: int
+        iteration number
+        
+    nfft : int
+        size of the fft window
+        
+    dt : float
+        time between images
+        
+    Returns
+    -------
+    
+    F : 4D numpy array - float
+        Updated main WiDIM array
+        
+    """
+
+
+    mod_update = SourceModule("""
+    __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int cols, int fourth_dim, int nfft, float dt)
+    {
+        // F is where all the data is stored at a particular K
+        // i_peak / j_peak is the correlation peak location
+        // sig2noise = sig2noise ratio from correlation function
+        // cols = number of colums of IW's
+        // fourth_dim  = size of the fourth dimension of F
+        // nfft = size of the fft window
+        // dt = time step between frames
+
+        int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
+        int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
+
+        // index for each IW
+        int window_idx = ind_y*cols + ind_x;
+
+        //Index for each IW in the F array
+        int F_idx = window_idx*fourth_dim;
+
+        F[F_idx + 2] = floorf(F[F_idx + 0] + F[F_idx + 6]);
+        F[F_idx + 3] = floorf(F[F_idx + 1] + F[F_idx + 7]);
+
+        F[F_idx + 8] = i_peak[window_idx] - nfft/2;
+        F[F_idx + 9] = j_peak[window_idx] - nfft/2;
+
+        //get new displacement prediction
+        F[F_idx + 4] = F[F_idx + 6] + F[F_idx + 8];
+        F[F_idx + 5] = F[F_idx + 7] + F[F_idx + 9];
+
+        //get new velocity vectors
+        F[F_idx + 10] = F[F_idx + 5] / dt;
+        F[F_idx + 11] = -F[F_idx + 4] / dt;
+
+        // get sig2noise ratio
+        F[F_idx + 12] = sig2noise[window_idx];
+    }
+    """)
+
+    block_size = 16
+
+    x_blocks = Ncol // block_size + 1
+    y_blocks = Nrow // block_size + 1
+
+    # move data to gpu
+    d_F = gpuarray.to_gpu(F[K, 0:Nrow, 0:Ncol, :])
+    d_i_peak = gpuarray.to_gpu(i_peak)
+    d_j_peak = gpuarray.to_gpu(j_peak)
+    d_sig2noise = gpuarray.to_gpu(sig2noise)
+
+    fourth_dim = np.int32(F.shape[-1])
+    Ncol = np.int32(Ncol)
+    nfft = np.int32(nfft)
+    dt = np.float32(dt)
+
+    update_values = mod_update.get_function("update_values")
+    update_values(d_F, d_i_peak, d_j_peak, d_sig2noise, Ncol, fourth_dim, nfft , dt, block = (block_size, block_size, 1), grid = (x_blocks, y_blocks))
+
+    F[K, 0:Nrow, 0:Ncol, :] = d_F.get()
+
+    #Free gpu memory
+    d_F.gpudata.free()
+    d_i_peak.gpudata.free()
+    d_j_peak.gpudata.free()
+    d_sig2noise.gpudata.free()
+
+    return(F)
 
 
 
