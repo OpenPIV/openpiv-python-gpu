@@ -1276,9 +1276,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
                                     F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
                                     F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-
+                                continue
                             #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
-                            if validation_method == 'mean_velocity':
+                            elif validation_method == 'mean_velocity':
 
                                 #get rms of u and v
                                 rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
@@ -1288,13 +1288,11 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                         F[K,I,J,10] = mean_u
                                         F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
-
+                                continue
                             # Validate based on divergence of the velocity field
-
-                            if div_validation == 1:
+                            elif div_validation == 1:
                                 #check for boundary
                                 if I ==  Nrow[K] - 1 or J == Ncol[K] - 1:
                                     # div = du/dy - dv/dx   see paper if you are confused as I was
@@ -1306,6 +1304,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 if div > div_tolerance:
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
+                            else:
+                                pass
  
             #pbar.finish()                    
             print "..[DONE]"
