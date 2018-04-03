@@ -1254,7 +1254,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
                                     F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
                                     F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-
+                                continue
                             #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
                             elif validation_method == 'mean_velocity':
 
@@ -1268,6 +1268,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     F[K,I,J,10] = mean_u
                                     F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
+                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    (<object>mask)[I,J] = True
+                                continue
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                                 
@@ -1285,9 +1288,11 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
                                     (<object>mask)[I,J] = True
                             else:
+
                                 pass 
                                 
                     """
+ 
             #pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -1743,11 +1748,6 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
         neighbours[1,2]=0
         neighbours[2,2]=0
     return neighbours
-
-
-
-
-
 
 
 
@@ -2303,7 +2303,6 @@ def gpu_get_neighbours(d_u, d_v, Nrow, Ncol):
         neighbours[w_idx*18 + 14] = v[w_idx + 1] * neighbours_present[w_idx*9 + 5];
         
         __syncthreads();
-
         neighbours[w_idx*18 + 15] =  v[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
         neighbours[w_idx*18 + 16] = v[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
         neighbours[w_idx*18 + 17] = v[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];
@@ -2357,7 +2356,7 @@ def gpu_get_neighbours(d_u, d_v, Nrow, Ncol):
 def gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol):
     """
     Calculates the mean velocity in a 3x3 grid around each point in a velocity field.
-    
+ 
     Parameters
     ----------
     
@@ -2640,4 +2639,5 @@ def gpu_div(d_u, d_v, w, Nrow, Ncol):
     return(d_div, d_u, d_v)
     
     
-     
+
+
