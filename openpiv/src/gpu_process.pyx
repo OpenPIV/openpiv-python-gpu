@@ -1056,8 +1056,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     # define array for signal to noise ratio
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
-    #define two small arrays used for the validation process
+    #define arrays used for the validation process
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEi_t, ndim=2] u_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEi_t, ndim=2] v_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=3] val_neighbours = np.zeros([Nrow[-1], Ncol[-1], 2,3,3], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEi_t, ndim=2] val_neighbours_present = np.zeros([Nrow[-1], Ncol[-1], 3,3], dtype=DTYPEi)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1189,6 +1193,30 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 #pbar = ProgressBar(widgets=widgets, maxval=100)
                 #pbar.start()
                 
+                # get list of places that need to be validated
+                validation_list[0:Nrow[K], 0:Ncol[K]], \
+                    u_mean[0:Nrow[K], 0:Ncol[K]], \
+                    v_mean[0:Nrow[K], 0:Ncol[K]], \
+                    val_neighbours[0:Nrow[K], 0:Ncol[K],:,:,:], \
+                    val_neighbours_present[0:Nrow[K], 0:Ncol[K],:,:] = gpu_validation(sig2noise[0:Nrow[K], 0:Ncol[K]], 
+                                                                                      F[K, 0:Nrow[K], 0:Ncol[K], 10], 
+                                                                                      F[K, 0:Nrow[K], 0:Ncol[K], 11], 
+                                                                                      Nrow[K], 
+                                                                                      Ncol[K], 
+                                                                                      W[K], 
+                                                                                      1.5, 
+                                                                                      tolerance, 
+                                                                                      div_tol )
+                
+                # run through all the spots, validate where necessary
+                for I in range(Nrow[K]):
+                    for J in range(Ncol[K]):
+                        
+                        if(validation_list[I,J] == 0):
+                            initiate_validation(F, Nrow, Ncol, neighbours_present[I,J,:,:], neighbours[I,J,:,:], u_mean[I,J], v_mean[I,J], dt, K, I, J)
+                
+                
+                """
                 #run through locations
                 for I in range(Nrow[K]):
                     #pbar.update(100*I/Nrow[K])                    
@@ -1233,10 +1261,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                 #get rms of u and v
                                 rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
                                 rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
-
+                                mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+                                mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
                                 if rms_u==0 or rms_v==0:
-                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+                                
                                     F[K,I,J,10] = mean_u
                                     F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
@@ -1258,6 +1286,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     (<object>mask)[I,J] = True
                             else:
                                 pass 
+                                
+                    """
             #pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -1324,6 +1354,8 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
                          np.ndarray[DTYPEf_t, ndim=3] neighbours,
+                         float mean_u,
+                         float mean_v,
                          float dt,
                          int K,
                          int I,
@@ -1363,8 +1395,6 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
 
     # No previous iteration. Replace with mean velocity
     if K==0:
-        mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-        mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
         F[K,I,J,10] = mean_u
         F[K,I,J,11] = mean_v
         F[K,I,J,4] = -F[K,I,J,11]*dt
@@ -1808,7 +1838,7 @@ def end( float startTime ):
     
     
 ################################################################################
-#  CUDA FUNCTIONS
+#  CUDA GPU FUNCTIONS
 ################################################################################
 
 def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
@@ -1915,6 +1945,699 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
     d_sig2noise.gpudata.free()
 
     return(F)
+    
+    
+def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
+    """
+    Retuns a array indicating which indeces need to be validated.
+    
+    Parameters
+    ----------
+    
+    sig2noise: 2D array - float
+        signal to noise ratio of each velocity
+
+    u, v: 2D array
+        u and v velocity 
+        
+    Nrow, Ncol: int
+        number of rows and columns in the velocity field
+
+    w : float
+        number of pixels between each interrogation window center
+            
+    s2n_tol: float
+        minimum value for sig2noise
+
+    mean_tol : float
+        tolerance for mean velocity validation
+
+    div_tol: float
+        tolerance for divergence validation
+
+    Returns
+    -------
+
+    val_list : 2D array - int
+        list of indeces that need to be validated. 0 indicates that the index needs to be corrected.
+        1 means no correction is needed
+    """
+    
+    # GPU functions
+    
+    mod_validation = SourceModule("""
+    __global__ void s2n(int *val_list, float *sig2noise, float s2n_tol, int Nrow, int Ncol)
+    {
+        //val_list : list of indeces to be validated
+        //sig2noise : signal to noise ratio
+        // s2n_tol : min sig2noise value
+        // Ncol : number of columns in the 
+        
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Ncol*Nrow){return;}
+        
+        val_list[w_idx] = val_list[w_idx] * (sig2noise[w_idx] > s2n_tol);
+    }
+   
+   
+    __global__ void mean_validation(int *val_list, float *u_rms, float *v_rms, float *u_mean, float *v_mean, float *u, float *v, int Nrow, int Ncol, float tol)
+    {
+        // val_list: list of locations where validation is needed
+        // rms_u : rms u velocity of neighbours
+        // rms_v : rms v velocity of neighbours
+        // mean_u: mean u velocity of neigbours
+        // mean_v: mean v velocity of neighbours
+        // u: u velocity at that point
+        // v: v velocity at that point
+        // Nrow, Ncol: number of rows and columns
+        // tol : validation tolerance. usually 1.5
+
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+        if(w_idx >= Nrow*Ncol){return;}
+
+        int u_validation = ((u[w_idx] - u_mean[w_idx])/u_rms[w_idx] < tol);
+        int v_validation = ((v[w_idx] - v_mean[w_idx])/v_rms[w_idx] < tol);
+
+        val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
+
+    }
+
+    __global__ void div_validation(int *val_list, float *div,  int Nrow, int Ncol, float div_tol)
+    {
+        // u: u velocity
+        // v: v velocity
+        // w: window size
+        // Nrow, Ncol: number of rows and columns
+
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+        if(w_idx >= Nrow*Ncol){return;}
+        
+        val_list[w_idx] = val_list[w_idx] * (fabsf(div[w_idx]) < div_tol);
+    }
+
+    """)
+    
+    # create array to store validation list
+    val_list = np.ones_like(sig2noise, dtype = np.int32)
+    d_val_list = gpuarray.to_gpu(val_list)
+    
+    # cast inputs to appropriate data types
+    sig2noise = sig2noise.astype(np.float32)
+    s2n_tol = np.float32(s2n_tol)
+    mean_tol = np.float32(mean_tol)
+    div_tol = np.float32(div_tol)
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+    u = u.astype(np.float32)
+    v = v.astype(np.float32)
+    w = np.float32(w)
+    
+    assert sig2noise.dtype == np.float32, "dtype of sig2noise is wrong. Should be np.float32"
+    assert type(s2n_tol) == np.float32, "type of s2n_tol is wrong. Should be np.float32"
+    assert type(Nrow) == np.int32, "type of Nrow is wrong. Should be np.int32"
+    assert type(Ncol) == np.int32, "type of Ncol is wrong. Should be np.int32"
+    assert u.dtype == np.float32, "dtype of u has wrong type. Should be np.float32"
+    assert v.dtype == np.float32, "dtype of v has wrong type. Should be np.float32"
+    assert type(w) == np.float32, "type of w is wrong. Should be np.float32" 
+    
+    # GPU settings
+    block_size = 16
+    x_blocks = int(Ncol*Nrow/block_size + 1)
+    
+    # send velocity field to GPU
+    d_u = gpuarray.to_gpu(u)
+    d_v = gpuarray.to_gpu(v)
+    
+    # get neighbours information
+    d_neighbours, d_neighbours_present, d_u, d_v = get_neighbours.gpu_get_neighbours(d_u, d_v, Nrow, Ncol)
+      
+    ##########################
+    # sig2noise validation
+    ##########################
+    
+    # move data to the gpu
+    d_sig2noise = gpuarray.to_gpu(sig2noise)
+    
+    # Launch signal to noise kernel and free sig2noise data
+    s2n = mod_validation.get_function("s2n")
+    s2n(d_val_list, d_sig2noise, s2n_tol, Nrow, Ncol,  block = (block_size, 1, 1), grid = (x_blocks, 1)) 
+    d_sig2noise.gpudata.free()
+     
+    ##########################
+    # mean_velocity validation
+    ##########################
+    
+    # get rms data and mean velocity data.
+    d_u_rms, d_v_rms, d_neighbours, d_neighbours_present = rms.gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol)
+    d_u_mean, d_v_mean, d_neighbours, d_neighbours_present = mean_velocity.gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol)
+    
+    # get mean velocity data
+    u_mean = d_u_mean.get()
+    v_mean = d_v_mean.get() 
+    
+    # get and launch rms 
+    mean_validation = mod_validation.get_function("mean_validation")
+    mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, Nrow, Ncol, mean_tol, block = (block_size,1,1), grid = (x_blocks, 1))
+
+    ##########################
+    # divergence validation
+    ##########################
+    
+    d_div, d_u, d_v = divergence.gpu_div(d_u, d_v, w, Nrow, Ncol)  
+    
+    # launch divergence validation kernel
+    div_validation = mod_validation.get_function("div_validation")
+    div_validation(d_val_list, d_div, Nrow, Ncol, div_tol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+
+    # return the final validation list and neighbours
+    neighbours = d_neighbours.get()
+    neighbours_present = d_neighbours_present.get()
+    val_list = d_val_list.get()
+    
+    # Free gpu memory   
+    d_val_list.gpudata.free()
+    d_neighbours_present.gpudata.free()
+    d_neighbours.gpudata.free() 
+    d_u.gpudata.free()
+    d_v.gpudata.free()
+    d_u_rms.gpudata.free()
+    d_v_rms.gpudata.free()
+    d_u_mean.gpudata.free()
+    d_v_mean.gpudata.free()
+    d_div.gpudata.free()
+        
+    del(d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms, d_div)
+        
+    return(val_list, u_mean, v_mean, neighbours, neighbours_present)
 
 
+def gpu_find_neighbours(Nrow, Ncol):
+    """
+    An array that stores if a point has neighbours in a 3x3 grid surrounding it
+    
+    Parameters
+    ----------
+    
+    Nrow : 1D array - int
+        number of rows at each iteration
+        
+    Ncol : 1D array - int
+        nubmer of columns at each iteration
+        
+    Returns
+    -------
+    
+    neighbours_present : 4D array [Nrow, Ncol, 3 , 3] 
+    """
+    
+    mod_neighbours = SourceModule("""
+    __global__ void find_neighbours(int *neighbours_present, int Nrow, int Ncol)
+    {   
+        // neighbours_present = boolean array
+        // Nrow = number of rows
+        // Ncol = Number of columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        int row_zero = (w_idx >= Ncol);
+        int row_max = (w_idx < Ncol*(Nrow-1));
+        int col_zero = (w_idx % Ncol != 0);
+        int col_max = (w_idx % Ncol != Ncol-1);
+        
+        // Top Row
+        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * row_zero;
+        neighbours_present[w_idx*9 + 1] = neighbours_present[w_idx*9 + 1] * row_zero;
+        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * row_zero;
+        
+        __syncthreads();
+        
+        // Bottom row
+        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * row_max;
+        neighbours_present[w_idx*9 + 7] = neighbours_present[w_idx*9 + 7] * row_max;
+        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * row_max;
+        
+        __syncthreads();
+        
+        // Left column
+        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * col_zero;
+        neighbours_present[w_idx*9 + 3] = neighbours_present[w_idx*9 + 3] * col_zero;
+        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * col_zero;
+        
+        __syncthreads();
+        
+        // right column
+        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * col_max;
+        neighbours_present[w_idx*9 + 5] = neighbours_present[w_idx*9 + 5] * col_max;
+        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * col_max; 
+        
+        // Set center to zero, can't be a neighbour for yourself
+        neighbours_present[w_idx*9 + 4] = 0;
+    }
+    """)
+    
+    # GPU settings
+    block_size = 8   
+    x_blocks = int(Ncol*Nrow // block_size + 1)
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol) 
+     
+    # allcate space for new array
+    neighbours_present = np.ones([Nrow, Ncol, 3, 3], dtype = np.int32)
+    
+    assert neighbours_present.dtype == np.int32, "Wrong data type for neighbours present"
+    
+    # send data to gpu
+    d_neighbours_present = gpuarray.to_gpu(neighbours_present)
+    
+    # get and launch kernel  
+    find_neighbours = mod_neighbours.get_function("find_neighbours")
+    find_neighbours(d_neighbours_present, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    
+    return(d_neighbours_present)
+    
+    
+def gpu_get_neighbours(d_u, d_v, Nrow, Ncol):
+    """
+    An array that stores the values of the velocity of the neighbours around it.
+    
+    WARNING: this function uses constant memoery on the GPU, which there is only a limited amount of.
+             Do not do this for field that 
+    
+    Parameters
+    ----------
+    
+    d_u, d_v : 2D GPUarray - float32
+        u and v velocity 
+    
+    Nrow : 1D array - int
+        number of rows at each iteration
+        
+    Ncol : 1D array - int
+        nubmer of columns at each iteration
+        
+    Returns
+    -------
+    
+    neighbours : 5D array [Nrow, Ncol, 2, 3 , 3] 
+        stores the values of u anf v of the neighbours of a point
+    """
+    
+    mod_get_neighbours = SourceModule("""
+    __global__ void get_u_neighbours(float *neighbours, float *neighbours_present, float *u, int Nrow, int Ncol)
+    {
+        // neighbours - u and v values around each point
+        // neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+        // u, v : u and v velocities
+        // Nrow, Ncol - number of rows and columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Nrow*Ncol){return;}
+        
+        // get velocities
+        neighbours[w_idx*18 + 0] = u[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];       
+        neighbours[w_idx*18 + 1] = u[w_idx - Ncol] * neighbours_present[w_idx*9 + 1];        
+        neighbours[w_idx*18 + 2] = u[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        
+        __syncthreads();
 
+        neighbours[w_idx*18 + 3] = u[w_idx - 1] * neighbours_present[w_idx*9 + 3];               
+        neighbours[w_idx*18 + 4] = 0.0;        
+        neighbours[w_idx*18 + 5] = u[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 6] = u[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
+        neighbours[w_idx*18 + 7] = u[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
+        neighbours[w_idx*18 + 8] = u[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];
+        
+        __syncthreads();       
+    }
+    
+    __global__ void get_v_neighbours(float *neighbours, float *neighbours_present, float *v, int Nrow, int Ncol)
+    {
+        // neighbours - u and v values around each point
+        //neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+        // u, v : u and v velocities
+        // Nrow, Ncol - number of rows and columns
+        
+        // references each IW
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Nrow*Ncol){return;}
+        
+        // get velocities
+        neighbours[w_idx*18 + 9] = v[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];
+        neighbours[w_idx*18 + 10] = v[w_idx - Ncol]* neighbours_present[w_idx*9 + 1];
+        neighbours[w_idx*18 + 11] = v[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 12] = v[w_idx - 1] * neighbours_present[w_idx*9 + 3];       
+        neighbours[w_idx*18 + 13] = 0.0;        
+        neighbours[w_idx*18 + 14] = v[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        
+        __syncthreads();
+
+        neighbours[w_idx*18 + 15] =  v[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
+        neighbours[w_idx*18 + 16] = v[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
+        neighbours[w_idx*18 + 17] = v[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];
+        
+        __syncthreads();   
+    }   
+    """)
+    
+    # set dtype of inputs
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+     
+    # Get GPU grid dimensions and function
+    block_size = 16   
+    x_blocks = int(Ncol*Nrow//block_size + 1)
+    get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
+    get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
+    
+    # find neighbours
+    d_neighbours_present = fn.gpu_find_neighbours(Nrow, Ncol).astype(np.float32)
+    neighbours = np.zeros([Nrow, Ncol, 2,3,3])
+    neighbours = neighbours.astype(np.float32)   
+    
+    # assert statements for data
+    assert neighbours.dtype == np.float32, "Wrong data type for neighbours"
+    assert type(Nrow) == np.int32, "Wrong data type for Nrow"
+    assert type(Ncol) == np.int32, "Wrong data type for Ncol"
+    
+    # send data to the gpu
+    d_neighbours = gpuarray.to_gpu(neighbours)
+    
+    # Get u and v data   
+    get_u_neighbours(d_neighbours, d_neighbours_present, d_u, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    get_v_neighbours(d_neighbours, d_neighbours_present, d_v, Nrow, Ncol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    
+    # return data
+    neighbours = d_neighbours.get()
+    
+    #TODO Figure out what is going on here.
+    # With vector fields over size 40000, nans show up in neighbours. But only where zeros should be
+    # I have no idea why this is, but this works...
+    a = np.isnan(neighbours)
+    if np.sum(a) > 0:
+        neighbours[a] = 0.0
+        
+    d_neighbours = gpuarray.to_gpu(neighbours)
+
+    return(d_neighbours, d_neighbours_present, d_u, d_v) 
+    
+    
+def gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol):
+    """
+    Calculates the mean velocity in a 3x3 grid around each point in a velocity field.
+    
+    Parameters
+    ----------
+    
+    d_neighbours: 5D gpuarray - float32
+        all the neighbouring velocities of every point
+    
+    d_neighbours_present: 4D gpuarray - float32
+        indicates if a neighbour is present
+     
+    Nrow, Ncol : int
+        number of rows and columns of the velocity field
+    
+    
+    Returns
+    -------
+    
+    u_mean, v_mean : 2D array - float32
+        mean velocities at each point
+     
+    d_neighbours, d_neighbours_present: inputs
+        need to return the gpu array handle or else it gets lost
+    
+    """
+    
+    mod_mean_vel = SourceModule("""
+    __global__ void u_mean_vel(float *u_mean, float *n, float *np, int Nrow, int Ncol)
+    {
+        // mean_u : mean velocity of surrounding points
+        // n : velocity of neighbours
+        // np : neighbours present
+        // Nrow, Ncol: number of rows and columns
+       
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Ncol*Nrow){return;}
+        
+        float numerator_u = n[w_idx*18] + n[w_idx*18+1] + n[w_idx*18+2] + n[w_idx*18+3] + n[w_idx*18+5] + n[w_idx*18+6] + n[w_idx*18+7] + n[w_idx*18+8];            
+        float denominator = np[w_idx*9] + np[w_idx*9+1] + np[w_idx*9+2] + np[w_idx*9+3] + np[w_idx*9+5] + np[w_idx*9+6] + np[w_idx*9+7] + np[w_idx*9+8];
+        
+        __syncthreads();
+        
+        u_mean[w_idx] = numerator_u / denominator;   
+    }
+    
+    __global__ void v_mean_vel(float *v_mean, float *n, float *np, int Nrow, int Ncol)
+    {   
+        
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Ncol*Nrow){return;}
+ 
+        float numerator_v = n[w_idx*18+9] + n[w_idx*18+10] + n[w_idx*18+11] + n[w_idx*18+12] + n[w_idx*18+14] + n[w_idx*18+15] + n[w_idx*18+16] + n[w_idx*18+17];       
+        float denominator = np[w_idx*9] + np[w_idx*9+1] + np[w_idx*9+2] + np[w_idx*9+3] + np[w_idx*9+5] + np[w_idx*9+6] + np[w_idx*9+7] + np[w_idx*9+8];
+        
+        __syncthreads();
+        
+        v_mean[w_idx] = numerator_v / denominator;
+    }
+    """)
+    
+    # allocate space for arrays
+    u_mean = np.empty((Nrow, Ncol) , dtype=np.float32)
+    v_mean = np.empty_like(u_mean)
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+    
+    # define GPU data
+    block_size = 16
+    x_blocks = int(Nrow*Ncol//block_size + 1)
+    
+    assert u_mean.dtype == np.float32, "dtype for u_mean is wrong. Should be np.float32"
+    assert v_mean.dtype == np.float32, "dtype for v_mean is wrong. Should be np.float32"
+    
+    #send data to gpu
+    d_u_mean = gpuarray.to_gpu(u_mean)
+    d_v_mean = gpuarray.to_gpu(v_mean)
+    
+    # get and launch kernel
+    u_mean_vel = mod_mean_vel.get_function("u_mean_vel")
+    v_mean_vel = mod_mean_vel.get_function("v_mean_vel")
+    u_mean_vel(d_u_mean, d_neighbours, d_neighbours_present, Nrow, Ncol, block = (block_size, 1,1), grid = (x_blocks, 1))
+    v_mean_vel(d_v_mean, d_neighbours, d_neighbours_present, Nrow, Ncol, block = (block_size, 1,1), grid = (x_blocks, 1))
+      
+    return(d_u_mean, d_v_mean, d_neighbours, d_neighbours_present)
+    
+    
+def gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol):
+    """
+    Calculates the mean velocity in a 3x3 grid around each point in a velocity field.
+    
+    Parameters
+    ----------
+    
+    d_neighbours: 5D gpuarray - float32
+        all the neighbouring velocities of every point
+    
+    d_neighbours_present: 4D gpuarray - float32
+        indicates if a neighbour is present
+     
+    Nrow, Ncol : int
+        number of rows and columns of the velocity field
+    
+    
+    Returns
+    -------
+    
+    u_mean, v_mean : 2D array - float32
+        mean velocities at each point
+        
+    d_neighbours, d_neighbours_present: inputs
+        need to return the gpu array handle or else it gets lost
+    
+    """
+    
+    mod_rms = SourceModule("""
+    __global__ void u_rms_k(float *u_rms, float *n, float *np, int Nrow, int Ncol)
+    {
+
+        // Ncol : number of columns in the 
+       
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Ncol*Nrow){return;}
+
+        float numerator = (powf(n[w_idx*18+0], 2) + powf(n[w_idx*18+1], 2) + powf(n[w_idx*18+2], 2) + \
+                           powf(n[w_idx*18+3], 2) + powf(n[w_idx*18+5], 2) + powf(n[w_idx*18+6], 2) + \
+                           powf(n[w_idx*18+7], 2) + powf(n[w_idx*18+8], 2) );
+        float denominator = np[w_idx*9] + np[w_idx*9+1] + np[w_idx*9+2] + np[w_idx*9+3] + np[w_idx*9+5] + np[w_idx*9+6] + np[w_idx*9+7] + np[w_idx*9+8];
+
+        __syncthreads();
+
+        u_rms[w_idx] =  sqrtf(numerator / denominator);        
+    }
+    
+    __global__ void v_rms_k(float *v_rms, float *n,float *np, int Nrow, int Ncol)
+    {
+
+        // Ncol : number of columns in the 
+       
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(w_idx >= Ncol*Nrow){return;}
+
+        float numerator = (powf(n[w_idx*18+9], 2) + powf(n[w_idx*18+10], 2) + powf(n[w_idx*18+11], 2) + \
+                           powf(n[w_idx*18+12], 2) + powf(n[w_idx*18+14], 2) + powf(n[w_idx*18+15], 2) + \
+                           powf(n[w_idx*18+16], 2) + powf(n[w_idx*18+17], 2) );
+        float denominator = np[w_idx*9] + np[w_idx*9+1] + np[w_idx*9+2] + np[w_idx*9+3] + np[w_idx*9+5] + np[w_idx*9+6] + np[w_idx*9+7] + np[w_idx*9+8];
+
+        __syncthreads();
+
+        v_rms[w_idx] = sqrtf(numerator / denominator);      
+    }
+    """)
+    
+    
+    # allocate space for data
+    u_rms = np.empty((Nrow, Ncol), dtype = np.float32)
+    v_rms = np.empty((Nrow, Ncol), dtype = np.float32)
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+    
+    # define GPU data
+    block_size = 16
+    x_blocks = int(Nrow*Ncol//block_size + 1)
+    
+    assert u_rms.dtype == np.float32, "dtype for u_rms is wrong. Should be np.float32"
+    assert v_rms.dtype == np.float32, "dtype for v_rms is wrong. Should be np.float32"
+    
+    # send data to gpu
+    d_u_rms = gpuarray.to_gpu(u_rms)
+    d_v_rms = gpuarray.to_gpu(v_rms)
+    
+    # get and launch kernel
+    mod_u_rms = mod_rms.get_function("u_rms_k")
+    mod_v_rms = mod_rms.get_function("v_rms_k")
+    mod_u_rms(d_u_rms, d_neighbours, d_neighbours_present, Nrow, Ncol, block = (block_size,1,1), grid = (x_blocks, 1))
+    mod_v_rms(d_v_rms, d_neighbours, d_neighbours_present, Nrow, Ncol, block = (block_size,1,1), grid = (x_blocks, 1))
+
+    return(d_u_rms, d_v_rms, d_neighbours, d_neighbours_present)
+    
+    
+
+def gpu_div(d_u, d_v, w, Nrow, Ncol):
+    """
+    Calculates the divergence at each point in a velocity field.
+    
+    Parameters
+    ----------
+    
+    u,v: 2D array - float
+        velocity field
+        
+    w: int
+        pixel separation between velocity vectors
+        
+    Nrow, Ncol : int
+        number of rows and columns of the velocity field
+    
+    Returns
+    -------
+    
+    div : 2D array - float32
+        divergence at each point
+    
+    d_u, d_v: inputs
+        need to return the gpu array handle or else it gets lost
+    """
+    
+    
+    mod_div = SourceModule("""
+    __global__ void div_k(float *div, float *u, float *v, float w, int Nrow, int Ncol)
+    {
+        // u: u velocity
+        // v: v velocity
+        // w: window size
+        // Nrow, Ncol: number of rows and columns
+
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+        // Avoid the boundary
+        if(w_idx >= (Nrow-1)*Ncol){return;}
+        if(w_idx%Ncol == Ncol-1){return;}
+
+        float u1 = u[w_idx + Ncol];
+        float v1 = v[w_idx + 1];
+
+        __syncthreads();
+
+        div[w_idx] = (u1 - u[w_idx]) / w - (v1 - v[w_idx]) / w;
+
+    }
+    
+    __global__ void div_boundary_k(float *div, float *u, float *v, float w, int Nrow, int Ncol)
+    {
+        // u: u velocity
+        // v: v velocity
+        // w: window size
+        // Nrow, Ncol: number of rows and columns
+
+        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+        // only calculate on the boundary
+        if(w_idx < (Nrow-1)*Ncol && w_idx%Ncol != Ncol-1){return;}
+
+        float u1 = u[w_idx - Ncol];
+        float v1 = v[w_idx - 1];   
+        
+        __syncthreads();
+
+        div[w_idx] = (u[w_idx] - u1) / w - (v[w_idx] - v1) / w;
+        
+        
+    }
+    """)
+    
+    div = np.empty((Nrow, Ncol), dtype = np.float32)
+    Nrow = np.int32(Nrow)
+    Ncol = np.int32(Ncol)
+    w = np.float32(w)
+    
+    # define GPU data
+    block_size = 16
+    x_blocks = int(Nrow*Ncol//block_size + 1)
+    
+    assert div.dtype == np.float32, "dtype of div is not correct. Should be np.float32"
+    
+    # move data to gpu
+    d_div = gpuarray.to_gpu(div)
+    
+    # get and launch kerel
+    div_k = mod_div.get_function("div_k")
+    div_boundary_k = mod_div.get_function("div_boundary_k")
+    div_k(d_div, d_u, d_v, w, Nrow, Ncol, block = (block_size,1,1), grid = (x_blocks, 1))
+    div_boundary_k(d_div, d_u, d_v, w, Nrow, Ncol, block = (block_size,1,1), grid = (x_blocks, 1))
+    
+    # get single case of bottom i = 0, j = Ncol-1
+    d_div[0, Ncol-1] = (d_u[1,Ncol-1] - d_u[0, Ncol-1])/w - (d_v[0, Ncol-1] - d_v[0, Ncol-2])/w 
+    d_div[Nrow-1, 0] = (d_u[Nrow-1,0] - d_u[Nrow-2, 0])/w - (d_v[Nrow-1, 1] - d_v[Nrow-1, 0])/w
+    
+    return(d_div, d_u, d_v)
+    
+    
+     
