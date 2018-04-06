@@ -1058,10 +1058,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     
     #define arrays used for the validation process
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=2] u_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEi_t, ndim=2] v_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=3] val_neighbours = np.zeros([Nrow[-1], Ncol[-1], 2,3,3], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEi_t, ndim=2] val_neighbours_present = np.zeros([Nrow[-1], Ncol[-1], 3,3], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEf_t, ndim=2] u_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] v_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=5] val_neighbours = np.zeros([Nrow[-1], Ncol[-1], 2,3,3], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEi_t, ndim=4] val_neighbours_present = np.zeros([Nrow[-1], Ncol[-1], 3,3], dtype=DTYPEi)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1206,14 +1206,16 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                                                       W[K], 
                                                                                       1.5, 
                                                                                       tolerance, 
-                                                                                      div_tol )
+                                                                                      div_tolerance )
                 
                 # run through all the spots, validate where necessary
                 for I in range(Nrow[K]):
                     for J in range(Ncol[K]):
                         
                         if(validation_list[I,J] == 0):
-                            initiate_validation(F, Nrow, Ncol, neighbours_present[I,J,:,:], neighbours[I,J,:,:], u_mean[I,J], v_mean[I,J], dt, K, I, J)
+                            mean_u = u_mean[I,J]
+                            mean_v = v_mean[I,J]
+                            initiate_validation(F, Nrow, Ncol, val_neighbours_present[I,J,:,:], val_neighbours[I,J,:,:], mean_u, mean_v, dt, K, I, J)
                 
                 
                 """
@@ -1324,7 +1326,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
         #go to next iteration : compute the predictors dpx and dpy from the current displacements
         print "going to next iteration.. "
-        print "performing interpolation of the displacement field"
+        print "performing interpolation of the displacement field for next iteration predictors"
         print " "
         #widgets = ['Performing interpolations : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
         #   ' ', ETA(), ' ', FileTransferSpeed()]
@@ -1350,8 +1352,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         # delete old correlation function
         del(c)
         
-        #print "..[DONE] -----> going to iteration ",K+1
-        #print " "
+        print "..[DONE] -----> going to iteration ",K+1
+        print " "
 
 
 def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
@@ -1841,6 +1843,7 @@ def end( float startTime ):
 #  CUDA GPU FUNCTIONS
 ################################################################################
 
+
 def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
     """
     Updates the velocity values after an iteration of the WiDIM algorithm
@@ -1983,8 +1986,6 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
         1 means no correction is needed
     """
     
-    # GPU functions
-    
     mod_validation = SourceModule("""
     __global__ void s2n(int *val_list, float *sig2noise, float s2n_tol, int Nrow, int Ncol)
     {
@@ -2021,7 +2022,6 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
         int v_validation = ((v[w_idx] - v_mean[w_idx])/v_rms[w_idx] < tol);
 
         val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
-
     }
 
     __global__ void div_validation(int *val_list, float *div,  int Nrow, int Ncol, float div_tol)
@@ -2072,7 +2072,7 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     d_v = gpuarray.to_gpu(v)
     
     # get neighbours information
-    d_neighbours, d_neighbours_present, d_u, d_v = get_neighbours.gpu_get_neighbours(d_u, d_v, Nrow, Ncol)
+    d_neighbours, d_neighbours_present, d_u, d_v = gpu_get_neighbours(d_u, d_v, Nrow, Ncol)
       
     ##########################
     # sig2noise validation
@@ -2091,8 +2091,8 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     ##########################
     
     # get rms data and mean velocity data.
-    d_u_rms, d_v_rms, d_neighbours, d_neighbours_present = rms.gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol)
-    d_u_mean, d_v_mean, d_neighbours, d_neighbours_present = mean_velocity.gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol)
+    d_u_rms, d_v_rms, d_neighbours, d_neighbours_present = gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol)
+    d_u_mean, d_v_mean, d_neighbours, d_neighbours_present = gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol)
     
     # get mean velocity data
     u_mean = d_u_mean.get()
@@ -2106,7 +2106,7 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     # divergence validation
     ##########################
     
-    d_div, d_u, d_v = divergence.gpu_div(d_u, d_v, w, Nrow, Ncol)  
+    d_div, d_u, d_v = gpu_divergence(d_u, d_v, w, Nrow, Ncol)  
     
     # launch divergence validation kernel
     div_validation = mod_validation.get_function("div_validation")
@@ -2322,7 +2322,7 @@ def gpu_get_neighbours(d_u, d_v, Nrow, Ncol):
     get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
     
     # find neighbours
-    d_neighbours_present = fn.gpu_find_neighbours(Nrow, Ncol).astype(np.float32)
+    d_neighbours_present = gpu_find_neighbours(Nrow, Ncol).astype(np.float32)
     neighbours = np.zeros([Nrow, Ncol, 2,3,3])
     neighbours = neighbours.astype(np.float32)   
     
@@ -2539,7 +2539,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol):
     
     
 
-def gpu_div(d_u, d_v, w, Nrow, Ncol):
+def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     """
     Calculates the divergence at each point in a velocity field.
     
