@@ -1058,10 +1058,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     
     #define arrays used for the validation process
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-    cdef np.ndarray[DTYPEf_t, ndim=2] u_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] v_mean = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=5] val_neighbours = np.zeros([Nrow[-1], Ncol[-1], 2,3,3], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEi_t, ndim=4] val_neighbours_present = np.zeros([Nrow[-1], Ncol[-1], 3,3], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEf_t, ndim=2] u_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] v_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1164,10 +1162,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 
                 # get list of places that need to be validated
                 validation_list[0:Nrow[K], 0:Ncol[K]], \
-                    u_mean[0:Nrow[K], 0:Ncol[K]], \
-                    v_mean[0:Nrow[K], 0:Ncol[K]], \
-                    val_neighbours[0:Nrow[K], 0:Ncol[K],:,:,:], \
-                    val_neighbours_present[0:Nrow[K], 0:Ncol[K],:,:] = gpu_validation(sig2noise[0:Nrow[K], 0:Ncol[K]], 
+                    u_mean[K, 0:Nrow[K], 0:Ncol[K]], \
+                    v_mean[K, 0:Nrow[K], 0:Ncol[K]],  = gpu_validation(sig2noise[0:Nrow[K], 0:Ncol[K]], 
                                                                                       F[K, 0:Nrow[K], 0:Ncol[K], 10], 
                                                                                       F[K, 0:Nrow[K], 0:Ncol[K], 11], 
                                                                                       Nrow[K], 
@@ -1176,16 +1172,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                                                       1.5, 
                                                                                       tolerance, 
                                                                                       div_tolerance )
-                
-                # run through all the spots, validate where necessary
-                for I in range(Nrow[K]):
-                    for J in range(Ncol[K]):
-                        
-                        if(validation_list[I,J] == 0):
-                            mean_u = u_mean[I,J]
-                            mean_v = v_mean[I,J]
-                            initiate_validation(F, Nrow, Ncol, val_neighbours_present[I,J,:,:], val_neighbours[I,J,:,:], mean_u, mean_v, dt, K, I, J)
-                
+                # do the validation
+                initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
                 
                 
             #pbar.finish()                    
@@ -1248,29 +1236,36 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print "..[DONE] -----> going to iteration ",K+1
         print " "
 
-def new_init_validation(validation_list, F, u_mean, v_mean, K):
+def initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
     """
     Initiate the full GPU version of the validation and interpolation
 
     """
     
     #first iteration, just replace with mean velocity
-    if(K ==0):
+    if(K == 0):
         for I in range(Nrow[K]):
             for J in range(Ncol[K]):
                         
                 if(validation_list[I,J] == 0):
-                    F[K,I,J,10] = u_mean[I,J]
-                    F[K,I,J,11] = v_mean[I,J]
+                    F[K,I,J,10] = u_mean[K,I,J]
+                    F[K,I,J,11] = v_mean[K,I,J]
                     F[K,I,J,4] = -F[K,I,J,11]*dt
                     F[K,I,J,5] = F[K,I,J,10]*dt
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+        gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K)
+    #case if same dimensions
+    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
+        if(validation_list[I,J] == 0):
+            F[K,I,J,10] = mean_u[K-1,I,J]
+            F[K,I,J,11] = mean_v[K-1,I,J]
+            F[K,I,J,4] = -F[K,I,J,11]*dt
+            F[K,I,J,5] = F[K,I,J,10]*dt
 
 
 
-
-def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
+def old_initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Nrow,
                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
@@ -1403,6 +1398,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     # Do interpolation and update velocity values
     d_F[K+1, interior_list, 10] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1u, d_f2u, d_f3u, d_f4u)
     d_F[K+1, interior_list, 11] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1v, d_f2v, d_f3v, d_f4v)
+    d_F[K,interior_list,4] = -d_F[K,interior_list,11]*dt
+    d_F[K,interior_list,5] = d_F[K,interior_list,10]*dt
 
     # free some GPU memory
     d_x1.gpudata.free()
@@ -1447,6 +1444,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
 
     d_F[K+1, top_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
     d_F[K+1, top_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
+    d_F[K, top_list, 4] = -d_F[K, top_list, 11]*dt
+    d_F[K, top_list, 5] = d_F[K, top_list, 10]*dt
 
     # free some data
     d_pos_now_y.gpudata.free()
@@ -1478,6 +1477,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
 
     d_F[K+1, bottom_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
     d_F[K+1, bottom_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
+    d_F[K, bottom_list, 4] = -d_F[K, bottom_list, 11]*dt
+    d_F[K, bottom_list, 5] = d_F[K, bottom_list, 10]*dt
 
     # free some data
     d_pos_now_y.gpudata.free()
@@ -1509,6 +1510,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
 
     d_F[K+1, left_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
     d_F[K+1, left_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
+    d_F[K, left_list, 4] = -d_F[K, left_list, 11]*dt
+    d_F[K, left_list, 5] = d_F[K, left_list, 10]*dt
 
     # free some data
     d_pos_now_x.gpudata.free()
@@ -1537,6 +1540,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
 
     d_F[K+1, right_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
     d_F[K+1, right_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
+    d_F[K, right_list, 4] = -d_F[K, right_list, 11]*dt
+    d_F[K, right_list, 5] = d_F[K, right_list, 10]*dt
 
     # free some data
     d_pos_now_x.gpudata.free()
@@ -1552,18 +1557,29 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     if(validation_list[0,0] == 0):
         d_F[K+1, 0, 0, 10] = d_F[K, 0, 0, 10]
         d_F[K+1, 0, 0, 11] = d_F[K, 0, 0, 11] 
+        d_F[K, 0, 0, 4] = -d_F[K, 0, 0, 11]*dt
+        d_F[K, 0, 0, 5] = d_F[K, 0, 0, 10]*dt
     #top right
     if(validation_list[0,Ncol[K+1]-1] == 0):
         d_F[K+1, 0, Ncol[K+1]-1, 10] = d_F[K, 0, Ncol[K]-1, 10]
         d_F[K+1, 0, Ncol[K+1]-1, 11] = d_F[K, 0, Ncol[K]-1, 11]
+        d_F[K, 0, Ncol[K+1]-1, 4] = -d_F[K, 0, Ncol[K]-1, 11]*dt
+        d_F[K, 0, Ncol[K+1]-1, 5] = d_F[K, 0, Ncol[K]-1, 10]*dt
     #bottom left
     if(validation_list[Nrow[K+1]-1, 0] == 0):
         d_F[K+1, Nrow[K+1]-1, 0, 10] = d_F[K, Nrow[K]-1, 0, 10]
         d_F[K+1, Nrow[K+1]-1, 0, 11] = d_F[K, Nrow[K]-1, 0, 11]
+        d_F[K, Nrow[K+1]-1, 0, 4] = -d_F[K, Nrow[K]-1, 0, 11]*dt
+        d_F[K, Nrow[K+1]-1, 0, 5] = d_F[K, Nrow[K]-1, 0, 10]*dt
     #bottom right
     if(validation_list[Nrow[K+1]-1, Ncol[K+1]-1] == 0):
         d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 10] = d_F[K, Nrow[K]-1, Ncol[K]-1, 10]
         d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 11] = d_F[K, Nrow[K]-1, Ncol[K]-1, 11]
+        d_F[K, Nrow[K+1]-1, Ncol[K+1]-1 4] = -d_F[K, Nrow[K]-1, Ncol[K]-1, 11]*dt
+        d_F[K, Nrow[K+1]-1, Ncol[K+1]-1 5] = d_F[K, Nrow[K]-1, Ncol[K]-1, 10]*dt
+
+    # pull data back to the cpu
+    F = d_F.gpudata.get()
 
     
 
