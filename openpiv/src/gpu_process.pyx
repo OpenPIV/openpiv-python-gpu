@@ -1123,37 +1123,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         # Get signal to noise ratio
         sig2noise[0:Nrow[K], 0:Ncol[K]] = c.sig2noise_ratio(method = sig2noise_method)
         
-        # Loop through F and update values
-        """
-        for I in range(Nrow[K]):
-            #pbar.update(100*I/Nrow[K])#progress update
-            for J in range(Ncol[K]):
-            
-                F[K,I,J,2] = np.floor(F[K,I,J,0] + F[K,I,J,6]) #xb=xa+dpx
-                F[K,I,J,3] = np.floor(F[K,I,J,1] + F[K,I,J,7]) #yb=yb+dpy
-                
-                #prevent 'Not a Number' peak location
-                if np.any(np.isnan((i_peak[I,J], j_peak[I,J]))) or mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 0:
-                    F[K,I,J,8] = 0.0
-                    F[K,I,J,9] = 0.0
-                else:
-                    #find residual displacement dcx and dcy
-                    F[K,I,J,8] = i_peak[I,J] - c.nfft/2 #dcx
-                    F[K,I,J,9] = j_peak[I,J] - c.nfft/2 #dcy
-                    
-                residual = residual + np.sqrt(F[K,I,J,8]*F[K,I,J,8] + F[K,I,J,9]*F[K,I,J,9])
-                
-                #get new displacement prediction
-                F[K,I,J,4] = F[K,I,J,6] + F[K,I,J,8]  #dx=dpx+dcx
-                F[K,I,J,5] = F[K,I,J,7] + F[K,I,J,9]  #dy=dpy+dcy
-                #get new velocity vectors
-                F[K,I,J,10] = F[K,I,J,5] / dt #u=dy/dt
-                F[K,I,J,11] = -F[K,I,J,4] / dt #v=-dx/dt
-                
-                # get sig2noise ratio
-                F[K,I,J,12] = sig2noise[I,J]
-        """
-
         # update the field with new values
         #TODO check for nans in i_peak and j_peak
         F = gpu_update(F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], K, c.nfft, dt )
@@ -1218,83 +1187,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                             initiate_validation(F, Nrow, Ncol, val_neighbours_present[I,J,:,:], val_neighbours[I,J,:,:], mean_u, mean_v, dt, K, I, J)
                 
                 
-                """
-                #run through locations
-                for I in range(Nrow[K]):
-                    #pbar.update(100*I/Nrow[K])                    
-                    for J in range(Ncol[K]):
-                        neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
-                        
-                        #get the velocity of the neighbours in a 2*3*3 array
-                        
-                        for L in range(3):
-                            for M in range(3):
-                                if neighbours_present[L,M]:
-                                    neighbours[0,L,M] = F[K,I+L-1,J+M-1,10]#u
-                                    neighbours[1,L,M] = F[K,I+L-1,J+M-1,11]#v
-                                else:
-                                    neighbours[0,L,M] = 0
-                                    neighbours[1,L,M] = 0
-                        
-                        
-                        # If there are neighbours present and no mask, validate the velocity
-                        if np.sum(neighbours_present) !=0 and mark[int(F[K,I,J,0]), int(F[K,I,J,1])] == 1:
-                        #if np.sum(neighbours_present):
-
-                            #validation with the sig2noise ratio, 1.5 is a recommended minimum value
-                            if F[K,I,J,12] < 1.5:
-                                #if in 1st iteration, no interpolation is needed so just replace by the mean
-                                if K==0:
-                                    mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                                    mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-                                    F[K,I,J,10] = mean_u
-                                    F[K,I,J,11] = mean_v
-                                    (<object>mask)[I,J]=True
-                                    F[K,I,J,4] = -F[K,I,J,11]*dt #recompute displacement from velocity
-                                    F[K,I,J,5] = F[K,I,J,10]*dt
-                                #perform interpolation using previous iteration (which is supposed to be already validated -> this prevents error propagation)
-                                elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-                                    F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-                                    F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-                                continue
-                            #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
-                            elif validation_method == 'mean_velocity':
-
-                                #get rms of u and v
-                                rms_u = np.sqrt(sumsquare_array(neighbours[0])/np.float(np.sum(neighbours_present)))
-                                rms_v = np.sqrt(sumsquare_array(neighbours[1])/np.float(np.sum(neighbours_present)))
-                                mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-                                mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-                                if rms_u==0 or rms_v==0:
-                                
-                                    F[K,I,J,10] = mean_u
-                                    F[K,I,J,11] = mean_v
-                                elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
-                                    (<object>mask)[I,J] = True
-                                continue
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
-                                    (<object>mask)[I,J] = True
-                                
-                            # Validate based on divergence of the velocity field
-                            elif div_validation == 1:
-                                #check for boundary
-                                if I ==  Nrow[K] - 1 or J == Ncol[K] - 1:
-                                    # div = du/dy - dv/dx   see paper if you are confused as I was
-                                    div = np.abs((F[K,I,J,10] - F[K,I-1,J,10])/W[K] - (F[K,I,J,11] - F[K,I,J-1,11])/W[K])
-                                else:
-                                    div = np.abs((F[K,I+1,J,10] - F[K,I,J,10])/W[K] - (F[K,I,J+1,11] - F[K,I,J,11])/W[K])
-
-                                # if div is greater than 0.1, interpolate the value. 
-                                if div > div_tolerance:
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, dt, K, I, J)
-                                    (<object>mask)[I,J] = True
-                            else:
-
-                                pass 
-                                
-                    """
- 
+                
             #pbar.finish()                    
             print "..[DONE]"
             print " "
@@ -1355,6 +1248,27 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print "..[DONE] -----> going to iteration ",K+1
         print " "
 
+def new_init_validation(validation_list, F, u_mean, v_mean, K):
+    """
+    Initiate the full GPU version of the validation and interpolation
+
+    """
+    
+    #first iteration, just replace with mean velocity
+    if(K ==0):
+        for I in range(Nrow[K]):
+            for J in range(Ncol[K]):
+                        
+                if(validation_list[I,J] == 0):
+                    F[K,I,J,10] = u_mean[I,J]
+                    F[K,I,J,11] = v_mean[I,J]
+                    F[K,I,J,4] = -F[K,I,J,11]*dt
+                    F[K,I,J,5] = F[K,I,J,10]*dt
+    #case if different dimensions : interpolation using previous iteration
+    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+
+
+
 
 def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Nrow,
@@ -1399,7 +1313,7 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
         indices of the point that need interpolation 
     """
 
-
+    
     # No previous iteration. Replace with mean velocity
     if K==0:
         F[K,I,J,10] = mean_u
@@ -1430,7 +1344,230 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
             F[K,I,J,4] = -F[K,I,J,11]*dt
             F[K,I,J,5] = F[K,I,J,10]*dt
 
+def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
+    """
+    """
 
+    # Separate validation list into multiple lists for each region
+    validation_list = validation_list.astype(bool)
+
+    #invert list so that true picks out where to perform validation
+    validation_list = np.invert(validation_list)
+
+    # set all sides to false for interior points
+    interior_list = np.copy(validation_list)
+    interior_list[0,:] = False
+    interior_list[Nrow[K+1]-1:,:] = False
+    interior_list[:,0] = False
+    interior_list[:,Ncol[K+1]-1] = False
+
+    # do similar things for all the sides
+    top_list = np.copy(validation_list)
+    top_list[1:,:] = False
+
+    bottom_list = np.copy(validation_list)
+    bottom_list[:Nrow[K+1]-1,:] = False
+
+    left_list = np.copy(validation_list)
+    left_list[:,1:] = False
+
+    right_list = np.copy(validation_list)
+    right_list[:,:Ncol[K+1]-1] = False
+
+    #--------------------------INTERIOR GRID---------------------------------
+    pos_now_x = F[K+1, interior_list, 0]
+    pos_now_y = F[K+1, interior_list, 1]
+
+    # send data to the GPU
+    d_F = gpuarray.to_gpu(F)
+    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
+    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+
+    d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
+    d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
+    d_x1 = gpuarray.copy(d_F[K, d_low_x, 0, 0])
+    d_x2 = gpuarray.copy(d_F[K, d_high_x, 0, 0])
+    d_y1 = gpuarray.copy(d_F[K, 0, d_low_y, 1])
+    d_y2 = gpuarray.copy(d_F[K, 0 d_high_y, 1])
+    d_x = gpuarray.copy(d_F[K+1, d_pos_now_x, 0, 0])
+    d_y = gpuarray.copy(d_F[K+1, 0, d_pos_now_y, 1])
+    d_f1u = gpuarray.copy(d_F[K, d_low_x, d_low_y, 10])
+    d_f2u = gpuarray.copy(d_F[K, d_low_x, d_high_y, 10])
+    d_f3u = gpuarray.copy(d_F[K, d_high_x, d_low_y, 10])
+    d_f4u = gpuarray.copy(d_F[K, d_high_x, d_high_y, 10])
+    d_f1v = gpuarray.copy(d_F[K, d_low_x, d_low_y, 11])
+    d_f2v = gpuarray.copy(d_F[K, d_low_x, d_high_y, 11])
+    d_f3v = gpuarray.copy(d_F[K, d_high_x, d_low_y, 11])
+    d_f4v = gpuarray.copy(d_F[K, d_high_x, d_high_y, 11])
+
+    # Do interpolation and update velocity values
+    d_F[K+1, interior_list, 10] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1u, d_f2u, d_f3u, d_f4u)
+    d_F[K+1, interior_list, 11] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1v, d_f2v, d_f3v, d_f4v)
+
+    # free some GPU memory
+    d_x1.gpudata.free()
+    d_x2.gpudata.free()
+    d_x.gpudata.free()
+    d_y1.gpudata.free()
+    d_y2.gpudata.free()
+    d_y.gpudata.free()
+    d_f1u.gpudata.free()
+    d_f2u.gpudata.free()
+    d_f3u.gpudata.free()
+    d_f4u.gpudata.free()
+    d_f1v.gpudata.free()
+    d_f2v.gpudata.free()
+    d_f3v.gpudata.free()
+    d_f4v.gpudata.free()
+    d_low_x.gpudata.free()
+    d_low_y.gpudata.free()
+    d_high_x.gpudata.free()
+    d_high_y.gpudata.free()
+    d_pos_now_x.gpudata.free()
+    d_pos_now_y.gpudata.free()
+
+
+    #------------------------------SIDES-----------------------------------
+
+    # TOP
+    pos_now_y = F[K+1, top_list, 1]
+
+    # send data to the GPU
+    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+    d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
+
+    # Get values to compute interpolation
+    d_y1 = d_F[K, 0, d_low_y, 1]
+    d_y2 = d_F[K, 0 d_high_y, 1]
+    d_y = d_F[K+1, 0, d_pos_now_y, 1]
+    d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, 10])
+    d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, 10])
+    d_f1v = gpuarray.copy(d_F[K, 0, d_low_y, 11])
+    d_f2v = gpuarray.copy(d_F[K, 0, d_high_y, 11])
+
+    d_F[K+1, top_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
+    d_F[K+1, top_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
+
+    # free some data
+    d_pos_now_y.gpudata.free()
+    d_low_y.gpudata.free()
+    d_high_y.gpudata.free()
+    d_y1.gpudata.free()
+    d_y2.gpudata.free()
+    d_y.gpudata.free()
+    d_f1u.gpudata.free()
+    d_f2u.gpudata.free()
+    d_f1v.gpudata.free()
+    d_f2v.gpudata.free()
+
+    # BOTTOM
+    pos_now_y = F[K+1, bottom_list, 1]
+
+    # send data to the GPU
+    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+    d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
+
+    # Get values to compute interpolation
+    d_y1 = d_F[K, 0, d_low_y, 1]
+    d_y2 = d_F[K, 0 d_high_y, 1]
+    d_y = d_F[K+1, 0, d_pos_now_y, 1]
+    d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, 10])
+    d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, 10])
+    d_f1v = gpuarray.copy(d_F[K, 0, d_low_y, 11])
+    d_f2v = gpuarray.copy(d_F[K, 0, d_high_y, 11])
+
+    d_F[K+1, bottom_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
+    d_F[K+1, bottom_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
+
+    # free some data
+    d_pos_now_y.gpudata.free()
+    d_low_y.gpudata.free()
+    d_high_y.gpudata.free()
+    d_y1.gpudata.free()
+    d_y2.gpudata.free()
+    d_y.gpudata.free()
+    d_f1u.gpudata.free()
+    d_f2u.gpudata.free()
+    d_f1v.gpudata.free()
+    d_f2v.gpudata.free()
+
+    # LEFT
+    pos_now_x = F[K+1, left_list, 1]
+
+    # send data to the GPU
+    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
+    d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
+
+    # Get values to compute interpolation
+    d_x1 = gpuarray.copy(d_F[K, d_low_x, 0, 0])
+    d_x2 = gpuarray.copy(d_F[K, d_high_x, 0, 0])
+    d_x = gpuarray.copy(d_F[])
+    d_f1u = gpuarray.copy(d_F[K, d_low_x, 0 10])
+    d_f2u = gpuarray.copy(d_F[K, d_high_x, 0, 10])
+    d_f1v = gpuarray.copy(d_F[K, d_low_x, 0, 11])
+    d_f2v = gpuarray.copy(d_F[K, d_high_x, 0, 11])
+
+    d_F[K+1, left_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
+    d_F[K+1, left_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
+
+    # free some data
+    d_pos_now_x.gpudata.free()
+    d_low_x.gpudata.free()
+    d_high_x.gpudata.free()
+    d_f1u.gpudata.free()
+    d_f2u.gpudata.free()
+    d_f1v.gpudata.free()
+    d_f2v.gpudata.free()
+
+    # RIGHT
+    pos_now_x = F[K+1, right_list, 1]
+
+    # send data to the GPU
+    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
+    d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
+
+    # Get values to compute interpolation
+    d_x1 = gpuarray.copy(d_F[K, d_low_x, 0, 0])
+    d_x2 = gpuarray.copy(d_F[K, d_high_x, 0, 0])
+    d_x = gpuarray.copy(d_F[])
+    d_f1u = gpuarray.copy(d_F[K, d_low_x, 0 10])
+    d_f2u = gpuarray.copy(d_F[K, d_high_x, 0, 10])
+    d_f1v = gpuarray.copy(d_F[K, d_low_x, 0, 11])
+    d_f2v = gpuarray.copy(d_F[K, d_high_x, 0, 11])
+
+    d_F[K+1, right_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
+    d_F[K+1, right_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
+
+    # free some data
+    d_pos_now_x.gpudata.free()
+    d_low_x.gpudata.free()
+    d_high_x.gpudata.free()
+    d_f1u.gpudata.free()
+    d_f2u.gpudata.free()
+    d_f1v.gpudata.free()
+    d_f2v.gpudata.free()
+
+    # ----------------------------CORNERS-----------------------------------
+    #top left
+    if(validation_list[0,0] == 0):
+        d_F[K+1, 0, 0, 10] = d_F[K, 0, 0, 10]
+        d_F[K+1, 0, 0, 11] = d_F[K, 0, 0, 11] 
+    #top right
+    if(validation_list[0,Ncol[K+1]-1] == 0):
+        d_F[K+1, 0, Ncol[K+1]-1, 10] = d_F[K, 0, Ncol[K]-1, 10]
+        d_F[K+1, 0, Ncol[K+1]-1, 11] = d_F[K, 0, Ncol[K]-1, 11]
+    #bottom left
+    if(validation_list[Nrow[K+1]-1, 0] == 0):
+        d_F[K+1, Nrow[K+1]-1, 0, 10] = d_F[K, Nrow[K]-1, 0, 10]
+        d_F[K+1, Nrow[K+1]-1, 0, 11] = d_F[K, Nrow[K]-1, 0, 11]
+    #bottom right
+    if(validation_list[Nrow[K+1]-1, Ncol[K+1]-1] == 0):
+        d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 10] = d_F[K, Nrow[K]-1, Ncol[K]-1, 10]
+        d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 11] = d_F[K, Nrow[K]-1, Ncol[K]-1, 11]
+
+    
+
+    
 def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
                              np.ndarray[DTYPEi_t, ndim=1] Nrow,
                              np.ndarray[DTYPEi_t, ndim=1] Ncol,
@@ -2761,3 +2898,125 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
         
     return(d_F, d_low, d_high)
 
+
+
+def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4):
+    """
+    Performs a bilinear interpolation using the gpu
+
+    Parameters
+    ----------
+
+    d_x1, d_x2 : 1D GPUarray
+        grid locations surrounding the interpolation point
+
+    d_x: 1D GPUarray
+        the location to interpolate the new value
+    
+    d_f1, d_f2: 1D GPUarray
+        values of the interpolation function at x1 and x2
+
+    Returns
+    -------
+
+    d_f: 1D GPUarray
+        value of the interpolated function
+    """
+    
+    
+    mod_bi = SourceModule("""
+    __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int N)
+    {
+        // 1D grid of 1D blocks
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(idx >= N){return;}
+        
+        float numerator = f1[idx]*(x2[idx]-x[idx])*(y2[idx]-y[idx])+f2[idx]*(x2[idx]-x[idx])*(y[idx]-y1[idx])+f3[idx]*(x[idx]-x1[idx])*(y2[idx]-y[idx])+f4[idx]*(x[idx]-x1[idx])*(y[idx]-y1[idx]);
+        float denominator = (x2[idx]-x1[idx])*(y2[idx]-y1[idx]);
+        
+        f[idx] = numerator / denominator;      
+    }
+    """)
+    
+    # define gpu parameters
+    block_size = 32
+    x_blocks = int(len(d_x1)//block_size + 1)
+    N = np.int32(len(d_x1))
+    
+    d_f = gpuarray.zeros_like(d_x1, dtype = np.float32)
+    
+    # get kernel    
+    bilinear_interp = mod_bi.get_function("bilinear_interp")
+    bilinear_interp(d_f, d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4, N, block = (block_size, 1,1), grid = (x_blocks,1))
+    
+    #free gpu data
+    d_x1.gpudata.free()
+    d_x2.gpudata.free()
+    d_y1.gpudata.free()
+    d_y2.gpudata.free()
+    d_x.gpudata.free()
+    d_y.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
+    d_f3.gpudata.free()
+    d_f4.gpudata.free()
+    
+    return(d_f)
+
+def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
+    """
+    Performs a linear interpolation using the GPU. 
+
+    Parameters
+    ----------
+
+    d_x1, d_x2 : 1D GPUarray
+        grid locations surrounding the interpolation point
+
+    d_x: 1D GPUarray
+        the location to interpolate the new value
+    
+    d_f1, d_f2: 1D GPUarray
+        values of the interpolation function at x1 and x2
+
+    Returns
+    -------
+
+    d_f: 1D GPUarray
+        value of the interpolated function
+
+    """
+
+
+    mod_lin = SourceModule("""
+    __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int N)
+    {
+        // 1D grid of 1D blocks
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        
+        if(idx >= N){return;}
+        
+        f[idx] = ((x2[idx]-x[idx])/(x2[idx]-x1[idx]))*f1[idx] + ((x[idx]-x1[idx])/(x2[idx]-x1[idx]))*f2[idx];      
+    }
+    """)
+    
+    # define gpu parameters
+    block_size = 8
+    x_blocks = int(len(d_x1)//block_size + 1)
+    N = np.int32(len(d_x1))
+    
+    d_f = gpuarray.zeros_like(d_x1, dtype = np.float32)
+    
+    # get kernel    
+    linear_interp = mod_lin.get_function("linear_interp")
+    linear_interp(d_f, d_x1, d_x2, d_x, d_f1, d_f2, N, block = (block_size, 1,1), grid = (x_blocks,1))
+    
+        #free gpu data
+    d_x1.gpudata.free()
+    d_x2.gpudata.free()
+    d_x.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
+    
+    return(d_f)
