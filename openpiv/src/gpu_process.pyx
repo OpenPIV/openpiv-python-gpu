@@ -1103,6 +1103,9 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #################################################################################
         #  GPU VERSION
         #################################################################################
+
+        #Move F to the GPU for the whole calculation
+        d_F = gpuarray.to_gpu(F)
         
         # Calculate second frame displacement (shift)
         shift[0, 0:Nrow[K]*Ncol[K]] = F[K,0:Nrow[K], 0:Ncol[K], 6].flatten().astype(np.int32)  #xb=xa+dpx
@@ -1123,7 +1126,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         
         # update the field with new values
         #TODO check for nans in i_peak and j_peak
-        F = gpu_update(F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], K, c.nfft, dt )
+        d_F = gpu_update(d_F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], K, c.nfft, dt )
         
         #################################################################################
       
@@ -1159,9 +1162,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 #' ', ETA(), ' ', FileTransferSpeed()]
                 #pbar = ProgressBar(widgets=widgets, maxval=100)
                 #pbar.start()
+
+                # reset validation list
+                validation_list = np.ones(Nrow[-1], Ncol[-1], dtype=DTYPEi)
                 
                 # get list of places that need to be validated
-                validation_list[0:Nrow[K], 0:Ncol[K]], \
+                d_F, validation_list[0:Nrow[K], 0:Ncol[K]], \
                     u_mean[K, 0:Nrow[K], 0:Ncol[K]], \
                     v_mean[K, 0:Nrow[K], 0:Ncol[K]],  = gpu_validation(sig2noise[0:Nrow[K], 0:Ncol[K]], 
                                                                                       F[K, 0:Nrow[K], 0:Ncol[K], 10], 
@@ -1173,8 +1179,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                                                       tolerance, 
                                                                                       div_tolerance )
                 # do the validation
-                initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
-                
+                d_F = initiate_validation(validation_list, d_F, u_mean, v_mean, K, Nrow, Ncol, dt):
                 
             #pbar.finish()                    
             print "..[DONE]"
@@ -1183,9 +1188,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
         ##############################################################################
         #stop process if this is the last iteration
+        ##############################################################################
+
         if K==nb_iter_max-1:
             #print "//////////////////////////////////////////////////////////////////"
             print "end of iterative process.. Re-arranging vector fields.."
+
+            F = d_F.gpudata.get()
+            d_F.gpudata.free()
             for I in range(Nrow[K]):#assembling the u,v and x,y fields for outputs
                 for J in range(Ncol[K]):
                     x[I,J]=F[K,I,J,1]
@@ -1200,7 +1210,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             d_frame_b_f.gpudata.free()
             
             # delete old correlation function
-            del(c)
+            del(c, d_F)
             #end(startTime)
             return x, y, u, v, (<object>mask)
         #############################################################################
@@ -1216,12 +1226,15 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
 
         if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
-            F[K+1,:,:,6] = np.floor(F[K,:,:,4]) #dpx_k+1 = dx_k 
-            F[K+1,:,:,7] = np.floor(F[K,:,:,5]) #dpy_k+1 = dy_k
+            d_F[K+1,:,:,6] = np.floor(d_F[K,:,:,4]) #dpx_k+1 = dx_k 
+            d_F[K+1,:,:,7] = np.floor(d_F[K,:,:,5]) #dpy_k+1 = dy_k
         #interpolate if dimensions do not agree
         else:
-            F[K+1,I,J,6] = np.floor(interpolate_surroundings(F, validation_list, Nrow, Ncol, K))
-            F[K+1,I,J,7] = np.floor(interpolate_surroundings(F, validation_list, Nrow, Ncol, K))
+            validation_list = np.zeros(Nrow[-1], Ncol[-1], dtype=DTYPEi)
+            d_F = interpolate_surroundings(d_F, validation_list, Nrow, Ncol, K, 6)
+            d_F = interpolate_surroundings(d_F, validation_list, Nrow, Ncol, K, 7)
+            d_F[K+1,:,:,6] = np.floor(d_F[K+1,:,:,6])
+            d_F[K+1,:,:,7] = np.floor(d_F[K+1,:,:,7])
         
         #pbar.finish()
         
@@ -1237,9 +1250,33 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 #  VALIDATION FUNCTIONS
 ################################################################################        
 
-def initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
+def initiate_validation(validation_list, d_F, u_mean, v_mean, K, Nrow, Ncol, dt, dat):
     """
     Initiate the full GPU version of the validation and interpolation
+
+    Parameters
+    ----------
+
+    validation_list: 2D array - int
+        indicates which alues must be validate 
+
+    d_F: 4D gpuarray - float
+        main array that stores all velocity data
+
+    u_mean, v_mean: 2D array - float
+        mean velocity surrounding each point
+
+    K: int
+        main loop iteration count
+
+    Nrow, Ncol: 1D array
+        number of rows an columns in each main loop iteration
+
+    dt: float
+        time between image frames
+
+    dat: int
+        data point to interpolate. Fourth index of the F array
 
     """
     
@@ -1249,31 +1286,59 @@ def initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
             for J in range(Ncol[K]):
                         
                 if(validation_list[I,J] == 0):
-                    F[K,I,J,10] = u_mean[K,I,J]
-                    F[K,I,J,11] = v_mean[K,I,J]
-                    F[K,I,J,4] = -F[K,I,J,11]*dt
-                    F[K,I,J,5] = F[K,I,J,10]*dt
+                    d_F[K,I,J,10] = u_mean[K,I,J]
+                    d_F[K,I,J,11] = v_mean[K,I,J]
+                    d_F[K,I,J,4] = -d_F[K,I,J,11]*dt
+                    d_F[K,I,J,5] = d_F[K,I,J,10]*dt
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-        gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K-1)
+        d_F = gpu_interpolate_surroundings(d_F, validation_list, Nrow, Ncol, K-1, 10)
+        d_F = gpu_interpolate_surroundings(d_F, validation_list, Nrow, Ncol, K-1, 11)
         for I in range(Nrow[K]):
             for J in range(Ncol[K]):
                 if(validation_list[I,J] == 0):
-                    F[K,I,J,4] = -F[K,I,J,11]*dt
-                    F[K,I,J,5] = F[K,I,J,10]*dt
+                    d_F[K,I,J,4] = -d_F[K,I,J,11]*dt
+                    d_F[K,I,J,5] = d_F[K,I,J,10]*dt
     #case if same dimensions
     elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
         if(validation_list[I,J] == 0):
             for I in range(Nrow[K]):
                 for J in range(Ncol[K]):
-                    F[K,I,J,10] = mean_u[K-1,I,J]
-                    F[K,I,J,11] = mean_v[K-1,I,J]
-                    F[K,I,J,4] = -F[K,I,J,11]*dt
-                    F[K,I,J,5] = F[K,I,J,10]*dt
+                    d_F[K,I,J,10] = mean_u[K-1,I,J]
+                    d_F[K,I,J,11] = mean_v[K-1,I,J]
+                    d_F[K,I,J,4] = -d_F[K,I,J,11]*dt
+                    d_F[K,I,J,5] = d_F[K,I,J,10]*dt
+
+    return(d_F)
 
 
-def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
+def gpu_interpolate_surroundings(d_F, validation_list, Nrow, Ncol, K, dat):
     """
+    interpolate a point based on the surroundings
+
+    Parameters
+    ----------
+
+    d_F: 4D gpuarray - float
+        main array that stores all velocity data
+
+    validation_list: 2D array - int
+        indicates which alues must be validate
+
+    Nrow, Ncol: 1D array
+        counts how many rows and columns in each iteration
+
+    K: int
+        the current iteration
+
+    dat: int
+        the data that needs to be interpolated. 4th index in the F array
+
+    Returns
+    -------
+
+    d_F: 4D gpuarray - float
+        This must always be returned so the class handle is not lost
     """
 
     # Separate validation list into multiple lists for each region
@@ -1303,13 +1368,10 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     right_list[:,:Ncol[K+1]-1] = False
 
     #--------------------------INTERIOR GRID---------------------------------
-    pos_now_x = F[K+1, interior_list, 0]
-    pos_now_y = F[K+1, interior_list, 1]
 
-    # send data to the GPU
-    d_F = gpuarray.to_gpu(F)
-    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
-    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+    # get gpu data for position now
+    d_pos_now_x = gpuarray.copy(d_F[K+1, interior_list, 0])
+    d_pos_now_y = gpuarray.copy(d_F[K+1, interior_list, 1])
 
     d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
     d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
@@ -1349,16 +1411,15 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     #------------------------------SIDES-----------------------------------
 
     # TOP
-    pos_now_y = F[K+1, top_list, 1]
 
-    # send data to the GPU
-    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+    # get now position and surrounding points
+    d_pos_now_y = gpuarray.copy(d_F[K+1, top_list, 1])
     d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
 
     # Get values to compute interpolation
-    d_y1 = d_F[K, 0, d_low_y, 1]
-    d_y2 = d_F[K, 0 d_high_y, 1]
-    d_y = d_F[K+1, 0, d_pos_now_y, 1]
+    d_y1 = gpuarray.copy(d_F[K, 0, d_low_y, 1])
+    d_y2 = gpuarray.copy(d_F[K, 0 d_high_y, 1])
+    d_y = gpuarray.copy(d_F[K+1, 0, d_pos_now_y, 1])
     d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, dat])
     d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, dat])
 
@@ -1375,16 +1436,15 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     d_f2.gpudata.free()
 
     # BOTTOM
-    pos_now_y = F[K+1, bottom_list, 1]
 
-    # send data to the GPU
-    d_pos_now_y = gpuarray.to_gpu(pos_now_y)
+    #get position data
+    d_pos_now_y = gpuarray.copy(d_F[K+1, bottom_list, 1])
     d_F, d_low_y, d_high_y = F_dichotomy_gpu(d_F, K, "y_axis", d_pos_now_y, W, Overlap, Nrow, Ncol)
 
     # Get values to compute interpolation
-    d_y1 = d_F[K, 0, d_low_y, 1]
-    d_y2 = d_F[K, 0 d_high_y, 1]
-    d_y = d_F[K+1, 0, d_pos_now_y, 1]
+    d_y1 = gpuarray.copy(d_F[K, 0, d_low_y, 1])
+    d_y2 = gpuarray.copy(d_F[K, 0 d_high_y, 1])
+    d_y = gpuarray.copy(d_F[K+1, 0, d_pos_now_y, 1])
     d_f1 = gpuarray.copy(d_F[K, 0, d_low_y, dat])
     d_f2 = gpuarray.copy(d_F[K, 0, d_high_y, dat])
 
@@ -1401,10 +1461,9 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     d_f2.gpudata.free()
 
     # LEFT
-    pos_now_x = F[K+1, left_list, 1]
 
-    # send data to the GPU
-    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
+    # gwt position data
+    d_pos_now_x = gpuarray.copy(d_F[K+1, left_list, 1])
     d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
 
     # Get values to compute interpolation
@@ -1424,10 +1483,9 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     d_f2.gpudata.free()
 
     # RIGHT
-    pos_now_x = F[K+1, right_list, 1]
 
-    # send data to the GPU
-    d_pos_now_x = gpuarray.to_gpu(pos_now_x)
+    # get position data
+    d_pos_now_x = gpuarray.copy(d_F[K+1, right_list, 1])
     d_F, d_low_x, d_high_x = F_dichotomy_gpu(d_F, K, "x_axis", d_pos_now_x, W, Overlap, Nrow, Ncol)
 
     # Get values to compute interpolation
@@ -1460,9 +1518,7 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     if(validation_list[Nrow[K+1]-1, Ncol[K+1]-1] == 0):
         d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, dat] = d_F[K, Nrow[K]-1, Ncol[K]-1, dat]
 
-    # pull data back to the cpu
-    F = d_F.gpudata.get()
-    d_F.gpudata.free()
+    return(d_F)
 
 
 
@@ -1535,7 +1591,7 @@ def end( float startTime ):
 ################################################################################
 
 
-def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
+def gpu_update(d_F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
     """
     Updates the velocity values after an iteration of the WiDIM algorithm
     
@@ -1573,7 +1629,7 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
 
 
     mod_update = SourceModule("""
-    __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int cols, int fourth_dim, int nfft, float dt)
+    __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int cols, int fourth_dim, int nfft, float dt, int K)
     {
         // F is where all the data is stored at a particular K
         // i_peak / j_peak is the correlation peak location
@@ -1617,7 +1673,6 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
     y_blocks = Nrow // block_size + 1
 
     # move data to gpu
-    d_F = gpuarray.to_gpu(F[K, 0:Nrow, 0:Ncol, :])
     d_i_peak = gpuarray.to_gpu(i_peak)
     d_j_peak = gpuarray.to_gpu(j_peak)
     d_sig2noise = gpuarray.to_gpu(sig2noise)
@@ -1630,29 +1685,27 @@ def gpu_update(F, sig2noise, i_peak, j_peak, Nrow, Ncol, K, nfft, dt):
     update_values = mod_update.get_function("update_values")
     update_values(d_F, d_i_peak, d_j_peak, d_sig2noise, Ncol, fourth_dim, nfft , dt, block = (block_size, block_size, 1), grid = (x_blocks, y_blocks))
 
-    F[K, 0:Nrow, 0:Ncol, :] = d_F.get()
-
     #Free gpu memory
-    d_F.gpudata.free()
     d_i_peak.gpudata.free()
     d_j_peak.gpudata.free()
     d_sig2noise.gpudata.free()
 
-    return(F)
+    return(d_F)
     
     
-def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
+def gpu_validation(d_F, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     """
     Retuns a array indicating which indeces need to be validated.
     
     Parameters
     ----------
+
+    d_F: 4D gpuarray - float
+        main loop array
     
     sig2noise: 2D array - float
         signal to noise ratio of each velocity
 
-    u, v: 2D array
-        u and v velocity 
         
     Nrow, Ncol: int
         number of rows and columns in the velocity field
@@ -1671,6 +1724,9 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
 
     Returns
     -------
+
+    d_F: 4D gpuarray
+        must return so class handle is not lost
 
     val_list : 2D array - int
         list of indeces that need to be validated. 0 indicates that the index needs to be corrected.
@@ -1742,8 +1798,6 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     div_tol = np.float32(div_tol)
     Nrow = np.int32(Nrow)
     Ncol = np.int32(Ncol)
-    u = u.astype(np.float32)
-    v = v.astype(np.float32)
     w = np.float32(w)
     
     assert sig2noise.dtype == np.float32, "dtype of sig2noise is wrong. Should be np.float32"
@@ -1759,8 +1813,8 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
     x_blocks = int(Ncol*Nrow/block_size + 1)
     
     # send velocity field to GPU
-    d_u = gpuarray.to_gpu(u)
-    d_v = gpuarray.to_gpu(v)
+    d_u = gpuarray.copy(d_F[K, 0:Nrow[K], 0:Ncol[K], 10])
+    d_v = gpuarray.copy(d_F[K, 0:Nrow[K], 0:Ncol[K], 11])
     
     # get neighbours information
     d_neighbours, d_neighbours_present, d_u, d_v = gpu_get_neighbours(d_u, d_v, Nrow, Ncol)
@@ -1822,7 +1876,7 @@ def gpu_validation(sig2noise, u, v, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol ):
         
     del(d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms, d_div)
         
-    return(val_list, u_mean, v_mean, neighbours, neighbours_present)
+    return(d_F, val_list, u_mean, v_mean, neighbours, neighbours_present)
 
 
 def gpu_find_neighbours(Nrow, Ncol):
