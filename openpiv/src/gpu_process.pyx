@@ -1214,19 +1214,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #pbar = ProgressBar(widgets=widgets, maxval=100)
         #pbar.start()
 
-        for I in range(Nrow[K+1]):
-            #pbar.update(100*I/Nrow[K+1])
-            for J in range(Ncol[K+1]):
 
-                # If vector field dimensions agree
-                # Make sure predictor is an integer number of pixels
-                if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
-                    F[K+1,I,J,6] = np.floor(F[K,I,J,4]) #dpx_k+1 = dx_k 
-                    F[K+1,I,J,7] = np.floor(F[K,I,J,5]) #dpy_k+1 = dy_k
-                #interpolate if dimensions do not agree
-                else:
-                    F[K+1,I,J,6] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4))
-                    F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5))
+        if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
+            F[K+1,:,:,6] = np.floor(F[K,:,:,4]) #dpx_k+1 = dx_k 
+            F[K+1,:,:,7] = np.floor(F[K,:,:,5]) #dpy_k+1 = dy_k
+        #interpolate if dimensions do not agree
+        else:
+            F[K+1,I,J,6] = np.floor(interpolate_surroundings(F, validation_list, Nrow, Ncol, K))
+            F[K+1,I,J,7] = np.floor(interpolate_surroundings(F, validation_list, Nrow, Ncol, K))
         
         #pbar.finish()
         
@@ -1235,6 +1230,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         
         print "..[DONE] -----> going to iteration ",K+1
         print " "
+
+
+
+################################################################################
+#  VALIDATION FUNCTIONS
+################################################################################        
 
 def initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
     """
@@ -1254,92 +1255,24 @@ def initiate_validation(validation_list, F, u_mean, v_mean, K, Nrow, Ncol, dt):
                     F[K,I,J,5] = F[K,I,J,10]*dt
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-        gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K)
+        gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K-1)
+        for I in range(Nrow[K]):
+            for J in range(Ncol[K]):
+                if(validation_list[I,J] == 0):
+                    F[K,I,J,4] = -F[K,I,J,11]*dt
+                    F[K,I,J,5] = F[K,I,J,10]*dt
     #case if same dimensions
     elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
         if(validation_list[I,J] == 0):
-            F[K,I,J,10] = mean_u[K-1,I,J]
-            F[K,I,J,11] = mean_v[K-1,I,J]
-            F[K,I,J,4] = -F[K,I,J,11]*dt
-            F[K,I,J,5] = F[K,I,J,10]*dt
+            for I in range(Nrow[K]):
+                for J in range(Ncol[K]):
+                    F[K,I,J,10] = mean_u[K-1,I,J]
+                    F[K,I,J,11] = mean_v[K-1,I,J]
+                    F[K,I,J,4] = -F[K,I,J,11]*dt
+                    F[K,I,J,5] = F[K,I,J,10]*dt
 
 
-
-def old_initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
-                         np.ndarray[DTYPEi_t, ndim=1] Nrow,
-                         np.ndarray[DTYPEi_t, ndim=1] Ncol,
-                         np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
-                         np.ndarray[DTYPEf_t, ndim=3] neighbours,
-                         float mean_u,
-                         float mean_v,
-                         float dt,
-                         int K,
-                         int I,
-                         int J):
-
-    """
-    Parameters
-    ----------
-    F :  4d np.ndarray
-        The main array of the WIDIM algorithm.
-
-    Nrow : 1d np.ndarray
-        list of the numbers of row for each iteration K
-       
-    Ncol : 1d np.ndarray
-        list of the numbers of column for each iteration K
-
-    neighbours_present : 2d np.ndarray
-        3x3 array surrounding the point indicating if the point has neighbouring values
-
-    neighbours : 3d np.ndarray
-        the value of the velocity at the neighbouring points
-
-    mean_u, mean_v : float
-        mean velocities of the neighbouring points
-
-    dt : float
-        time step between image frames
-    
-    K : int
-        The current main loop iteration
-    
-    I,J : int
-        indices of the point that need interpolation 
-    """
-
-    
-    # No previous iteration. Replace with mean velocity
-    if K==0:
-        F[K,I,J,10] = mean_u
-        F[K,I,J,11] = mean_v
-        F[K,I,J,4] = -F[K,I,J,11]*dt
-        F[K,I,J,5] = F[K,I,J,10]*dt
-    #case if different dimensions : interpolation using previous iteration
-    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-        F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-        F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-        F[K,I,J,4] = -F[K,I,J,11]*dt
-        F[K,I,J,5] = F[K,I,J,10]*dt
-    #case if same dimensions
-    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
-        for L in range(3):
-            for M in range(3):
-                if neighbours_present[L,M]:
-                    neighbours[0,L,M] = F[K-1,I+L-1,J+M-1,10]#u
-                    neighbours[1,L,M] = F[K-1,I+L-1,J+M-1,11]#v
-                else:
-                    neighbours[0,L,M] = 0
-                    neighbours[1,L,M] = 0
-        if np.sum(neighbours_present) != 0:
-            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-            F[K,I,J,10] = mean_u
-            F[K,I,J,11] = mean_v
-            F[K,I,J,4] = -F[K,I,J,11]*dt
-            F[K,I,J,5] = F[K,I,J,10]*dt
-
-def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
+def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K, dat):
     """
     """
 
@@ -1386,20 +1319,13 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y2 = gpuarray.copy(d_F[K, 0 d_high_y, 1])
     d_x = gpuarray.copy(d_F[K+1, d_pos_now_x, 0, 0])
     d_y = gpuarray.copy(d_F[K+1, 0, d_pos_now_y, 1])
-    d_f1u = gpuarray.copy(d_F[K, d_low_x, d_low_y, 10])
-    d_f2u = gpuarray.copy(d_F[K, d_low_x, d_high_y, 10])
-    d_f3u = gpuarray.copy(d_F[K, d_high_x, d_low_y, 10])
-    d_f4u = gpuarray.copy(d_F[K, d_high_x, d_high_y, 10])
-    d_f1v = gpuarray.copy(d_F[K, d_low_x, d_low_y, 11])
-    d_f2v = gpuarray.copy(d_F[K, d_low_x, d_high_y, 11])
-    d_f3v = gpuarray.copy(d_F[K, d_high_x, d_low_y, 11])
-    d_f4v = gpuarray.copy(d_F[K, d_high_x, d_high_y, 11])
+    d_f1 = gpuarray.copy(d_F[K, d_low_x, d_low_y, dat])
+    d_f2 = gpuarray.copy(d_F[K, d_low_x, d_high_y, dat])
+    d_f3 = gpuarray.copy(d_F[K, d_high_x, d_low_y, dat])
+    d_f4 = gpuarray.copy(d_F[K, d_high_x, d_high_y, dat])
 
     # Do interpolation and update velocity values
-    d_F[K+1, interior_list, 10] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1u, d_f2u, d_f3u, d_f4u)
-    d_F[K+1, interior_list, 11] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1v, d_f2v, d_f3v, d_f4v)
-    d_F[K,interior_list,4] = -d_F[K,interior_list,11]*dt
-    d_F[K,interior_list,5] = d_F[K,interior_list,10]*dt
+    d_F[K+1, interior_list, dat] = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4)
 
     # free some GPU memory
     d_x1.gpudata.free()
@@ -1408,14 +1334,10 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y1.gpudata.free()
     d_y2.gpudata.free()
     d_y.gpudata.free()
-    d_f1u.gpudata.free()
-    d_f2u.gpudata.free()
-    d_f3u.gpudata.free()
-    d_f4u.gpudata.free()
-    d_f1v.gpudata.free()
-    d_f2v.gpudata.free()
-    d_f3v.gpudata.free()
-    d_f4v.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
+    d_f3.gpudata.free()
+    d_f4.gpudata.free()
     d_low_x.gpudata.free()
     d_low_y.gpudata.free()
     d_high_x.gpudata.free()
@@ -1437,15 +1359,10 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y1 = d_F[K, 0, d_low_y, 1]
     d_y2 = d_F[K, 0 d_high_y, 1]
     d_y = d_F[K+1, 0, d_pos_now_y, 1]
-    d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, 10])
-    d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, 10])
-    d_f1v = gpuarray.copy(d_F[K, 0, d_low_y, 11])
-    d_f2v = gpuarray.copy(d_F[K, 0, d_high_y, 11])
+    d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, dat])
+    d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, dat])
 
-    d_F[K+1, top_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
-    d_F[K+1, top_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
-    d_F[K, top_list, 4] = -d_F[K, top_list, 11]*dt
-    d_F[K, top_list, 5] = d_F[K, top_list, 10]*dt
+    d_F[K+1, top_list, dat] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1, d_f2)
 
     # free some data
     d_pos_now_y.gpudata.free()
@@ -1454,10 +1371,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y1.gpudata.free()
     d_y2.gpudata.free()
     d_y.gpudata.free()
-    d_f1u.gpudata.free()
-    d_f2u.gpudata.free()
-    d_f1v.gpudata.free()
-    d_f2v.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
 
     # BOTTOM
     pos_now_y = F[K+1, bottom_list, 1]
@@ -1470,15 +1385,10 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y1 = d_F[K, 0, d_low_y, 1]
     d_y2 = d_F[K, 0 d_high_y, 1]
     d_y = d_F[K+1, 0, d_pos_now_y, 1]
-    d_f1u = gpuarray.copy(d_F[K, 0, d_low_y, 10])
-    d_f2u = gpuarray.copy(d_F[K, 0, d_high_y, 10])
-    d_f1v = gpuarray.copy(d_F[K, 0, d_low_y, 11])
-    d_f2v = gpuarray.copy(d_F[K, 0, d_high_y, 11])
+    d_f1 = gpuarray.copy(d_F[K, 0, d_low_y, dat])
+    d_f2 = gpuarray.copy(d_F[K, 0, d_high_y, dat])
 
-    d_F[K+1, bottom_list, 10] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1u, d_f2u)
-    d_F[K+1, bottom_list, 11] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1v, d_f2v)
-    d_F[K, bottom_list, 4] = -d_F[K, bottom_list, 11]*dt
-    d_F[K, bottom_list, 5] = d_F[K, bottom_list, 10]*dt
+    d_F[K+1, bottom_list, dat] = linear_interp_gpu(d_y1, d_y2, d_y, d_f1, d_f2)
 
     # free some data
     d_pos_now_y.gpudata.free()
@@ -1487,10 +1397,8 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_y1.gpudata.free()
     d_y2.gpudata.free()
     d_y.gpudata.free()
-    d_f1u.gpudata.free()
-    d_f2u.gpudata.free()
-    d_f1v.gpudata.free()
-    d_f2v.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
 
     # LEFT
     pos_now_x = F[K+1, left_list, 1]
@@ -1503,24 +1411,17 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_x1 = gpuarray.copy(d_F[K, d_low_x, 0, 0])
     d_x2 = gpuarray.copy(d_F[K, d_high_x, 0, 0])
     d_x = gpuarray.copy(d_F[])
-    d_f1u = gpuarray.copy(d_F[K, d_low_x, 0 10])
-    d_f2u = gpuarray.copy(d_F[K, d_high_x, 0, 10])
-    d_f1v = gpuarray.copy(d_F[K, d_low_x, 0, 11])
-    d_f2v = gpuarray.copy(d_F[K, d_high_x, 0, 11])
-
-    d_F[K+1, left_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
-    d_F[K+1, left_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
-    d_F[K, left_list, 4] = -d_F[K, left_list, 11]*dt
-    d_F[K, left_list, 5] = d_F[K, left_list, 10]*dt
+    d_f1 = gpuarray.copy(d_F[K, d_low_x, 0 dat])
+    d_f2 = gpuarray.copy(d_F[K, d_high_x, 0, dat])
+    
+    d_F[K+1, left_list, dat] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2)
 
     # free some data
     d_pos_now_x.gpudata.free()
     d_low_x.gpudata.free()
     d_high_x.gpudata.free()
-    d_f1u.gpudata.free()
-    d_f2u.gpudata.free()
-    d_f1v.gpudata.free()
-    d_f2v.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
 
     # RIGHT
     pos_now_x = F[K+1, right_list, 1]
@@ -1533,399 +1434,36 @@ def gpu_interpolate_surroundings(F, validation_list, Nrow, Ncol, K):
     d_x1 = gpuarray.copy(d_F[K, d_low_x, 0, 0])
     d_x2 = gpuarray.copy(d_F[K, d_high_x, 0, 0])
     d_x = gpuarray.copy(d_F[])
-    d_f1u = gpuarray.copy(d_F[K, d_low_x, 0 10])
-    d_f2u = gpuarray.copy(d_F[K, d_high_x, 0, 10])
-    d_f1v = gpuarray.copy(d_F[K, d_low_x, 0, 11])
-    d_f2v = gpuarray.copy(d_F[K, d_high_x, 0, 11])
+    d_f1 = gpuarray.copy(d_F[K, d_low_x, 0 dat])
+    d_f2 = gpuarray.copy(d_F[K, d_high_x, 0, dat])
 
-    d_F[K+1, right_list, 10] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
-    d_F[K+1, right_list, 11] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1v, d_f2v)
-    d_F[K, right_list, 4] = -d_F[K, right_list, 11]*dt
-    d_F[K, right_list, 5] = d_F[K, right_list, 10]*dt
+    d_F[K+1, right_list, dat] = linear_interp_gpu(d_x1, d_x2, d_x, d_f1u, d_f2u)
 
     # free some data
     d_pos_now_x.gpudata.free()
     d_low_x.gpudata.free()
     d_high_x.gpudata.free()
-    d_f1u.gpudata.free()
-    d_f2u.gpudata.free()
-    d_f1v.gpudata.free()
-    d_f2v.gpudata.free()
+    d_f1.gpudata.free()
+    d_f2.gpudata.free()
 
     # ----------------------------CORNERS-----------------------------------
     #top left
     if(validation_list[0,0] == 0):
-        d_F[K+1, 0, 0, 10] = d_F[K, 0, 0, 10]
-        d_F[K+1, 0, 0, 11] = d_F[K, 0, 0, 11] 
-        d_F[K, 0, 0, 4] = -d_F[K, 0, 0, 11]*dt
-        d_F[K, 0, 0, 5] = d_F[K, 0, 0, 10]*dt
+        d_F[K+1, 0, 0, dat] = d_F[K, 0, 0, dat]
     #top right
     if(validation_list[0,Ncol[K+1]-1] == 0):
-        d_F[K+1, 0, Ncol[K+1]-1, 10] = d_F[K, 0, Ncol[K]-1, 10]
-        d_F[K+1, 0, Ncol[K+1]-1, 11] = d_F[K, 0, Ncol[K]-1, 11]
-        d_F[K, 0, Ncol[K+1]-1, 4] = -d_F[K, 0, Ncol[K]-1, 11]*dt
-        d_F[K, 0, Ncol[K+1]-1, 5] = d_F[K, 0, Ncol[K]-1, 10]*dt
+        d_F[K+1, 0, Ncol[K+1]-1, dat] = d_F[K, 0, Ncol[K]-1, dat]
     #bottom left
     if(validation_list[Nrow[K+1]-1, 0] == 0):
-        d_F[K+1, Nrow[K+1]-1, 0, 10] = d_F[K, Nrow[K]-1, 0, 10]
-        d_F[K+1, Nrow[K+1]-1, 0, 11] = d_F[K, Nrow[K]-1, 0, 11]
-        d_F[K, Nrow[K+1]-1, 0, 4] = -d_F[K, Nrow[K]-1, 0, 11]*dt
-        d_F[K, Nrow[K+1]-1, 0, 5] = d_F[K, Nrow[K]-1, 0, 10]*dt
+        d_F[K+1, Nrow[K+1]-1, 0, dat] = d_F[K, Nrow[K]-1, 0, dat]
     #bottom right
     if(validation_list[Nrow[K+1]-1, Ncol[K+1]-1] == 0):
-        d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 10] = d_F[K, Nrow[K]-1, Ncol[K]-1, 10]
-        d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, 11] = d_F[K, Nrow[K]-1, Ncol[K]-1, 11]
-        d_F[K, Nrow[K+1]-1, Ncol[K+1]-1 4] = -d_F[K, Nrow[K]-1, Ncol[K]-1, 11]*dt
-        d_F[K, Nrow[K+1]-1, Ncol[K+1]-1 5] = d_F[K, Nrow[K]-1, Ncol[K]-1, 10]*dt
+        d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, dat] = d_F[K, Nrow[K]-1, Ncol[K]-1, dat]
 
     # pull data back to the cpu
     F = d_F.gpudata.get()
+    d_F.gpudata.free()
 
-    
-
-    
-def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
-                             np.ndarray[DTYPEi_t, ndim=1] Nrow,
-                             np.ndarray[DTYPEi_t, ndim=1] Ncol,
-                             int K,
-                             int I,
-                             int J,
-                             int dat):
-    """Perform interpolation of between to iterations of the F 4d-array for a specific location I,J and the data type dat.
-    
-    Parameters
-    ----------
-    F :  4d np.ndarray
-        The main array of the WIDIM algorithm.
-
-    Nrow : 1d np.ndarray
-        list of the numbers of row for each iteration K
-       
-    Ncol : 1d np.ndarray
-        list of the numbers of column for each iteration K
-    
-    K : int
-        the iteration that contains the valid data. K+1 will be the iteration at which the interpolation is needed.
-    
-    I,J : int
-        indices of the point that need interpolation (in iteration K+1)
-    
-    dat : int
-        the index of the data to interpolate.
-    
-    Returns
-    -------
-    the interpolated data (type float)
-    
-    """
-
-    #interpolate data dat from previous iteration
-    cdef float lower_lim_previous_x = F[K,0,0,0]
-    cdef float lower_lim_previous_y = F[K,0,0,1]
-    cdef float upper_lim_previous_x = F[K,Nrow[K]-1,Ncol[K]-1,0]
-    cdef float upper_lim_previous_y = F[K,Nrow[K]-1,Ncol[K]-1,1]
-    cdef float pos_now_x = F[K+1,I,J,0]
-    cdef float pos_now_y = F[K+1,I,J,1]
-    cdef np.ndarray[DTYPEi_t, ndim=1] Q1 = np.zeros(2, dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=1] Q4 = np.zeros(2, dtype=DTYPEi)
-
-    # Many cases depending on where the vector location is
-
-    # Top row
-    if pos_now_x < lower_lim_previous_x:
-        #top left corner
-        if pos_now_y < lower_lim_previous_y:
-            return F[K,0,0,dat]
-        #top right corner
-        elif pos_now_y > upper_lim_previous_y:
-            return F[K,0,Ncol[K]-1,dat]
-        #top row no corners
-        else:
-            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-            if low_y == high_y:
-                return F[K,0,low_y,dat]
-            else:
-                return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,0,low_y,dat], F[K,0,high_y,dat])
-    # Bottom row
-    elif pos_now_x > upper_lim_previous_x:
-        # bottom left corner
-        if pos_now_y < lower_lim_previous_y:
-            return F[K,Nrow[K]-1,0,dat]
-        #bottom right corner
-        elif pos_now_y > upper_lim_previous_y:
-            return F[K,Nrow[K]-1,Ncol[K]-1,dat]
-        #bottom row no corners
-        else:
-            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-            #print low_y, high_y
-            if low_y == high_y:
-                return F[K,Nrow[K]-1,low_y,dat]
-            else:
-                return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,Nrow[K]-1,low_y,dat], F[K,Nrow[K]-1,high_y,dat])
-    #left column no corners
-    elif pos_now_y < lower_lim_previous_y:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-        if low_x == high_x:
-            return F[K,low_x,0,dat]
-        else:
-            return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,0,dat], F[K,high_x,0,dat])
-    #right column no corners
-    elif pos_now_y > upper_lim_previous_y:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-        if low_x == high_x:
-            return F[K,low_x,Ncol[K]-1,dat]
-        else:
-            return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,Ncol[K]-1,dat], F[K,high_x,Ncol[K]-1,dat])
-    #interior grid
-    else:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-        low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-        Q1[0] = F[K,low_x,0,0] 
-        Q1[1] = F[K,0,low_y,1]
-        Q4[0] = F[K,high_x,0,0]
-        Q4[1] = F[K,0,high_y,1]
-        if pos_now_x >= Q1[0] and pos_now_x <= Q4[0] and pos_now_y >= Q1[1] and pos_now_y <= Q4[1]:
-            return bilinear_interpolation(Q1[0],Q4[0],Q1[1],Q4[1],pos_now_x,pos_now_y,F[K,low_x,low_y,dat],F[K,low_x,high_y,dat],F[K,high_x,low_y,dat],F[K,high_x,high_y,dat])
-        else:
-            raise ValueError( "cannot perform interpolation, a problem occured" )
-
-
-
-
-
-
-def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
-    """Perform a bilinear interpolation between 4 points 
-    
-    Parameters
-    ----------
-    x1,x2,y1,y2 :  int
-        x-axis and y-axis locations of the 4 points. (ie. location in the frame) 
-        (Note that the x axis is vertical and pointing down while the y-axis is horizontal)
-
-    x,y : int
-        locations of the target point for the interpolation (in the frame)
-       
-    f1,f2,f3,f4 : float
-        value at each point : f1=f(x1,y1), f2=f(x1,y2), f3=f(x2, y1), f4=f(x2,y2)
-       
-    Returns
-    -------
-    the interpolated data (type float)
-    
-    """
-    if x1 == x2:
-        if y1 == y2:
-            return f1
-        else:
-            return linear_interpolation(y1,y2,y,f1,f2)
-    elif y1 == y2:
-        return linear_interpolation(x1,x2,x,f1,f3)
-    else:
-        return (f1*(x2-x)*(y2-y)+f2*(x2-x)*(y-y1)+f3*(x-x1)*(y2-y)+f4*(x-x1)*(y-y1))/(np.float(x2-x1)*np.float(y2-y1))
-
-
-
-
-
-def linear_interpolation(int x1, int x2, int x, float f1, float f2):
-    """Perform a linear interpolation between 2 points 
-    
-    Parameters
-    ----------
-    x1,x2 :  int
-        locations of the 2 points. (along any axis) 
-
-    x : int
-        locations of the target point for the interpolation (along the same axis as x1 and x2)
-       
-    f1,f2 : float
-        value at each point : f1=f(x1), f2=f(x2)
-       
-    Returns
-    -------
-    the interpolated data (type float)
-    
-    """
-    return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
-
-
-
-
-
-
-
-def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
-    """Look for the position of the vectors at the previous iteration that surround the current point in the fram
-    you want to interpolate. 
-    
-    Parameters
-    ----------
-    F :  4d np.ndarray
-        The main array of the WIDIM algorithm.
-
-    K : int
-        the iteration of interest (1st index for F).
-    
-    N : 1d np.ndarray
-        list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
-
-    side : string
-        the axis of interest : can be either 'x_axis' or 'y_axis'    
-
-    pos_now : int
-        position of the point in the frame (along the axis 'side').
-    
-    Returns
-    -------
-    low : int
-        largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.    
-
-    high : int
-        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.                                                        
-    
-    """
-    #print "starting dichotomy"
-    cdef int low
-    cdef int high
-    cdef int minlow = 0
-    cdef int maxhigh = N[K]-1
-    cdef int searching
-    low = np.floor(maxhigh/2)
-    high = low + 1
-    searching = 1
-    if side == 'x_axis':
-        while searching:#start dichotomy
-            if pos_now == F[K,low,0,0] or (low == 0 and pos_now < F[K,low,0,0]):
-                searching = 0
-                high = low
-            elif pos_now == F[K,high,0,0] or (high == N[K]-1 and pos_now > F[K,high,0,0]):
-                searching = 0
-                low = high
-            elif pos_now > F[K,low,0,0] and pos_now < F[K,high,0,0]:
-                searching = 0
-            elif pos_now < F[K,low,0,0]:
-                maxhigh = low
-                low = np.floor((low-minlow)/2)
-                high = low + 1
-            else:
-                minlow=high
-                low = low + np.floor((maxhigh-low)/2)
-                high = low + 1
-        return low, high
-    elif side == 'y_axis':
-        while searching:#start dichotomy
-            if pos_now == F[K,0,low,1] or (low == 0 and pos_now < F[K,0,low,1]):
-                searching = 0
-                high = low
-            elif pos_now == F[K,0,high,1] or (high == N[K]-1 and pos_now > F[K,0,high,1]):
-                searching = 0
-                low = high
-            elif pos_now > F[K,0,low,1] and pos_now < F[K,0,high,1]:
-                searching = 0
-            elif pos_now < F[K,0,low,1]:
-                maxhigh = low
-                low = np.floor((low-minlow)/2)
-                high = low + 1
-            else:
-                minlow=high
-                low = low + np.floor((maxhigh-low)/2)
-                high = low + 1
-        return low, high
-    else:
-        raise ValueError( "no valid side for F-dichotomy!" )
-
-
-
-
-
-
-
-def define_windows( int size ):
-    """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
-    
-    Parameters
-    ----------
-    size : int
-        size of the two windows
-       
-    Returns
-    -------
-    window_a, window_b : two 2d np.ndarray of zero (integer)
-    
-    """
-    cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([size, size], dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=2] window_b = np.zeros([size, size], dtype=DTYPEi)
-    return window_a, window_b
-
-
-
-
-
-
-def find_neighbours(int I, int J, int Imax, int Jmax):
-    """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
-    
-    Parameters
-    ----------
-    I,J : int
-        indices of the point of interest
-       
-    Imax,Jmax : int
-        max indices for the neighbours (ie. (size of the array) - 1)
-       
-    Returns
-    -------
-    neighbours : 2d np.ndarray of size 3*3 
-        containing value 1 if neighbour is present, 0 if not. Value is 0 at the center (corresponds to point I,J).
-    
-    """
-    cdef np.ndarray[DTYPEi_t, ndim=2] neighbours = np.zeros([3,3], dtype=DTYPEi)
-    cdef int k,l
-    for k in range(3):
-        for l in range(3):
-            neighbours[k,l]=1
-    neighbours[1,1]=0
-    if I == 0:
-        neighbours[0,0]=0
-        neighbours[0,1]=0
-        neighbours[0,2]=0
-    if J == 0:
-        neighbours[0,0]=0
-        neighbours[1,0]=0
-        neighbours[2,0]=0
-    if I == Imax:
-        neighbours[2,0]=0
-        neighbours[2,1]=0
-        neighbours[2,2]=0
-    if J == Jmax:
-        neighbours[0,2]=0
-        neighbours[1,2]=0
-        neighbours[2,2]=0
-    return neighbours
-
-
-
-def sumsquare_array(arr1):
-    """Compute the sum of the square of the elements of a given array or list
-    
-    Parameters
-    ----------
-    arr1 : array or list of any size
-
-    Returns
-    -------
-    result : float
-        = sum( arr1_i * arr1_i)
-    
-    """
-    cdef float result
-    cdef I, J    
-    result = 0
-    for I in range(arr1.shape[0]):
-        for J in range(arr1.shape[1]):
-            result = result + arr1[I,J]*arr1[I,J]
-    return result
 
 
 
@@ -2939,7 +2477,6 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
         value of the interpolated function
     """
     
-    
     mod_bi = SourceModule("""
     __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int N)
     {
@@ -2980,6 +2517,7 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
     
     return(d_f)
 
+
 def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
     """
     Performs a linear interpolation using the GPU. 
@@ -3003,7 +2541,6 @@ def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
         value of the interpolated function
 
     """
-
 
     mod_lin = SourceModule("""
     __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int N)
@@ -3036,3 +2573,432 @@ def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
     d_f2.gpudata.free()
     
     return(d_f)
+
+
+
+
+
+
+
+
+################################################################################
+#  OLD/DEPRECIATED FUNCTIONS
+################################################################################
+
+
+
+def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
+                             np.ndarray[DTYPEi_t, ndim=1] Nrow,
+                             np.ndarray[DTYPEi_t, ndim=1] Ncol,
+                             int K,
+                             int I,
+                             int J,
+                             int dat):
+    """Perform interpolation of between to iterations of the F 4d-array for a specific location I,J and the data type dat.
+    
+    Parameters
+    ----------
+    F :  4d np.ndarray
+        The main array of the WIDIM algorithm.
+
+    Nrow : 1d np.ndarray
+        list of the numbers of row for each iteration K
+       
+    Ncol : 1d np.ndarray
+        list of the numbers of column for each iteration K
+    
+    K : int
+        the iteration that contains the valid data. K+1 will be the iteration at which the interpolation is needed.
+    
+    I,J : int
+        indices of the point that need interpolation (in iteration K+1)
+    
+    dat : int
+        the index of the data to interpolate.
+    
+    Returns
+    -------
+    the interpolated data (type float)
+    
+    """
+
+    #interpolate data dat from previous iteration
+    cdef float lower_lim_previous_x = F[K,0,0,0]
+    cdef float lower_lim_previous_y = F[K,0,0,1]
+    cdef float upper_lim_previous_x = F[K,Nrow[K]-1,Ncol[K]-1,0]
+    cdef float upper_lim_previous_y = F[K,Nrow[K]-1,Ncol[K]-1,1]
+    cdef float pos_now_x = F[K+1,I,J,0]
+    cdef float pos_now_y = F[K+1,I,J,1]
+    cdef np.ndarray[DTYPEi_t, ndim=1] Q1 = np.zeros(2, dtype=DTYPEi)
+    cdef np.ndarray[DTYPEi_t, ndim=1] Q4 = np.zeros(2, dtype=DTYPEi)
+
+    # Many cases depending on where the vector location is
+
+    # Top row
+    if pos_now_x < lower_lim_previous_x:
+        #top left corner
+        if pos_now_y < lower_lim_previous_y:
+            return F[K,0,0,dat]
+        #top right corner
+        elif pos_now_y > upper_lim_previous_y:
+            return F[K,0,Ncol[K]-1,dat]
+        #top row no corners
+        else:
+            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+            if low_y == high_y:
+                return F[K,0,low_y,dat]
+            else:
+                return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,0,low_y,dat], F[K,0,high_y,dat])
+    # Bottom row
+    elif pos_now_x > upper_lim_previous_x:
+        # bottom left corner
+        if pos_now_y < lower_lim_previous_y:
+            return F[K,Nrow[K]-1,0,dat]
+        #bottom right corner
+        elif pos_now_y > upper_lim_previous_y:
+            return F[K,Nrow[K]-1,Ncol[K]-1,dat]
+        #bottom row no corners
+        else:
+            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+            #print low_y, high_y
+            if low_y == high_y:
+                return F[K,Nrow[K]-1,low_y,dat]
+            else:
+                return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,Nrow[K]-1,low_y,dat], F[K,Nrow[K]-1,high_y,dat])
+    #left column no corners
+    elif pos_now_y < lower_lim_previous_y:
+        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
+        if low_x == high_x:
+            return F[K,low_x,0,dat]
+        else:
+            return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,0,dat], F[K,high_x,0,dat])
+    #right column no corners
+    elif pos_now_y > upper_lim_previous_y:
+        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
+        if low_x == high_x:
+            return F[K,low_x,Ncol[K]-1,dat]
+        else:
+            return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,Ncol[K]-1,dat], F[K,high_x,Ncol[K]-1,dat])
+    #interior grid
+    else:
+        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
+        low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+        Q1[0] = F[K,low_x,0,0] 
+        Q1[1] = F[K,0,low_y,1]
+        Q4[0] = F[K,high_x,0,0]
+        Q4[1] = F[K,0,high_y,1]
+        if pos_now_x >= Q1[0] and pos_now_x <= Q4[0] and pos_now_y >= Q1[1] and pos_now_y <= Q4[1]:
+            return bilinear_interpolation(Q1[0],Q4[0],Q1[1],Q4[1],pos_now_x,pos_now_y,F[K,low_x,low_y,dat],F[K,low_x,high_y,dat],F[K,high_x,low_y,dat],F[K,high_x,high_y,dat])
+        else:
+            raise ValueError( "cannot perform interpolation, a problem occured" )
+
+
+
+
+
+
+def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
+    """Perform a bilinear interpolation between 4 points 
+    
+    Parameters
+    ----------
+    x1,x2,y1,y2 :  int
+        x-axis and y-axis locations of the 4 points. (ie. location in the frame) 
+        (Note that the x axis is vertical and pointing down while the y-axis is horizontal)
+
+    x,y : int
+        locations of the target point for the interpolation (in the frame)
+       
+    f1,f2,f3,f4 : float
+        value at each point : f1=f(x1,y1), f2=f(x1,y2), f3=f(x2, y1), f4=f(x2,y2)
+       
+    Returns
+    -------
+    the interpolated data (type float)
+    
+    """
+    if x1 == x2:
+        if y1 == y2:
+            return f1
+        else:
+            return linear_interpolation(y1,y2,y,f1,f2)
+    elif y1 == y2:
+        return linear_interpolation(x1,x2,x,f1,f3)
+    else:
+        return (f1*(x2-x)*(y2-y)+f2*(x2-x)*(y-y1)+f3*(x-x1)*(y2-y)+f4*(x-x1)*(y-y1))/(np.float(x2-x1)*np.float(y2-y1))
+
+
+
+
+
+def linear_interpolation(int x1, int x2, int x, float f1, float f2):
+    """Perform a linear interpolation between 2 points 
+    
+    Parameters
+    ----------
+    x1,x2 :  int
+        locations of the 2 points. (along any axis) 
+
+    x : int
+        locations of the target point for the interpolation (along the same axis as x1 and x2)
+       
+    f1,f2 : float
+        value at each point : f1=f(x1), f2=f(x2)
+       
+    Returns
+    -------
+    the interpolated data (type float)
+    
+    """
+    return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
+
+
+
+
+
+
+
+def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
+    """Look for the position of the vectors at the previous iteration that surround the current point in the fram
+    you want to interpolate. 
+    
+    Parameters
+    ----------
+    F :  4d np.ndarray
+        The main array of the WIDIM algorithm.
+
+    K : int
+        the iteration of interest (1st index for F).
+    
+    N : 1d np.ndarray
+        list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
+
+    side : string
+        the axis of interest : can be either 'x_axis' or 'y_axis'    
+
+    pos_now : int
+        position of the point in the frame (along the axis 'side').
+    
+    Returns
+    -------
+    low : int
+        largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.    
+
+    high : int
+        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.                                                        
+    
+    """
+    #print "starting dichotomy"
+    cdef int low
+    cdef int high
+    cdef int minlow = 0
+    cdef int maxhigh = N[K]-1
+    cdef int searching
+    low = np.floor(maxhigh/2)
+    high = low + 1
+    searching = 1
+    if side == 'x_axis':
+        while searching:#start dichotomy
+            if pos_now == F[K,low,0,0] or (low == 0 and pos_now < F[K,low,0,0]):
+                searching = 0
+                high = low
+            elif pos_now == F[K,high,0,0] or (high == N[K]-1 and pos_now > F[K,high,0,0]):
+                searching = 0
+                low = high
+            elif pos_now > F[K,low,0,0] and pos_now < F[K,high,0,0]:
+                searching = 0
+            elif pos_now < F[K,low,0,0]:
+                maxhigh = low
+                low = np.floor((low-minlow)/2)
+                high = low + 1
+            else:
+                minlow=high
+                low = low + np.floor((maxhigh-low)/2)
+                high = low + 1
+        return low, high
+    elif side == 'y_axis':
+        while searching:#start dichotomy
+            if pos_now == F[K,0,low,1] or (low == 0 and pos_now < F[K,0,low,1]):
+                searching = 0
+                high = low
+            elif pos_now == F[K,0,high,1] or (high == N[K]-1 and pos_now > F[K,0,high,1]):
+                searching = 0
+                low = high
+            elif pos_now > F[K,0,low,1] and pos_now < F[K,0,high,1]:
+                searching = 0
+            elif pos_now < F[K,0,low,1]:
+                maxhigh = low
+                low = np.floor((low-minlow)/2)
+                high = low + 1
+            else:
+                minlow=high
+                low = low + np.floor((maxhigh-low)/2)
+                high = low + 1
+        return low, high
+    else:
+        raise ValueError( "no valid side for F-dichotomy!" )
+
+
+
+
+def find_neighbours(int I, int J, int Imax, int Jmax):
+    """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
+    
+    Parameters
+    ----------
+    I,J : int
+        indices of the point of interest
+       
+    Imax,Jmax : int
+        max indices for the neighbours (ie. (size of the array) - 1)
+       
+    Returns
+    -------
+    neighbours : 2d np.ndarray of size 3*3 
+        containing value 1 if neighbour is present, 0 if not. Value is 0 at the center (corresponds to point I,J).
+    
+    """
+    cdef np.ndarray[DTYPEi_t, ndim=2] neighbours = np.zeros([3,3], dtype=DTYPEi)
+    cdef int k,l
+    for k in range(3):
+        for l in range(3):
+            neighbours[k,l]=1
+    neighbours[1,1]=0
+    if I == 0:
+        neighbours[0,0]=0
+        neighbours[0,1]=0
+        neighbours[0,2]=0
+    if J == 0:
+        neighbours[0,0]=0
+        neighbours[1,0]=0
+        neighbours[2,0]=0
+    if I == Imax:
+        neighbours[2,0]=0
+        neighbours[2,1]=0
+        neighbours[2,2]=0
+    if J == Jmax:
+        neighbours[0,2]=0
+        neighbours[1,2]=0
+        neighbours[2,2]=0
+    return neighbours
+
+
+
+
+def old_initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
+                         np.ndarray[DTYPEi_t, ndim=1] Nrow,
+                         np.ndarray[DTYPEi_t, ndim=1] Ncol,
+                         np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
+                         np.ndarray[DTYPEf_t, ndim=3] neighbours,
+                         float mean_u,
+                         float mean_v,
+                         float dt,
+                         int K,
+                         int I,
+                         int J):
+
+    """
+    Parameters
+    ----------
+    F :  4d np.ndarray
+        The main array of the WIDIM algorithm.
+
+    Nrow : 1d np.ndarray
+        list of the numbers of row for each iteration K
+       
+    Ncol : 1d np.ndarray
+        list of the numbers of column for each iteration K
+
+    neighbours_present : 2d np.ndarray
+        3x3 array surrounding the point indicating if the point has neighbouring values
+
+    neighbours : 3d np.ndarray
+        the value of the velocity at the neighbouring points
+
+    mean_u, mean_v : float
+        mean velocities of the neighbouring points
+
+    dt : float
+        time step between image frames
+    
+    K : int
+        The current main loop iteration
+    
+    I,J : int
+        indices of the point that need interpolation 
+    """
+
+    
+    # No previous iteration. Replace with mean velocity
+    if K==0:
+        F[K,I,J,10] = mean_u
+        F[K,I,J,11] = mean_v
+        F[K,I,J,4] = -F[K,I,J,11]*dt
+        F[K,I,J,5] = F[K,I,J,10]*dt
+    #case if different dimensions : interpolation using previous iteration
+    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+        F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
+        F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
+        F[K,I,J,4] = -F[K,I,J,11]*dt
+        F[K,I,J,5] = F[K,I,J,10]*dt
+    #case if same dimensions
+    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
+        for L in range(3):
+            for M in range(3):
+                if neighbours_present[L,M]:
+                    neighbours[0,L,M] = F[K-1,I+L-1,J+M-1,10]#u
+                    neighbours[1,L,M] = F[K-1,I+L-1,J+M-1,11]#v
+                else:
+                    neighbours[0,L,M] = 0
+                    neighbours[1,L,M] = 0
+        if np.sum(neighbours_present) != 0:
+            mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
+            mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
+            F[K,I,J,10] = mean_u
+            F[K,I,J,11] = mean_v
+            F[K,I,J,4] = -F[K,I,J,11]*dt
+            F[K,I,J,5] = F[K,I,J,10]*dt
+
+
+
+
+def define_windows( int size ):
+    """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
+    
+    Parameters
+    ----------
+    size : int
+        size of the two windows
+       
+    Returns
+    -------
+    window_a, window_b : two 2d np.ndarray of zero (integer)
+    
+    """
+    cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([size, size], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEi_t, ndim=2] window_b = np.zeros([size, size], dtype=DTYPEi)
+    return window_a, window_b
+
+
+
+
+def sumsquare_array(arr1):
+    """Compute the sum of the square of the elements of a given array or list
+    
+    Parameters
+    ----------
+    arr1 : array or list of any size
+
+    Returns
+    -------
+    result : float
+        = sum( arr1_i * arr1_i)
+    
+    """
+    cdef float result
+    cdef I, J    
+    result = 0
+    for I in range(arr1.shape[0]):
+        for J in range(arr1.shape[1]):
+            result = result + arr1[I,J]*arr1[I,J]
+    return result
