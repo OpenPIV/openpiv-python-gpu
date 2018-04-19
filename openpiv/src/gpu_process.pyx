@@ -2398,12 +2398,13 @@ def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     
     
 def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
-    """Look for the position of the vectors at the previous iteration that surround the current point in the fram
-    you want to interpolate. 
+    """Look for the position of the vectors at the previous iteration that surround the current point in the frame
+    you want to validate. Returns the low and high index of the points from the previous iteration on either side of 
+    the point in the current iteration that needs to be validated.
     
     Parameters
     ----------
-    F :  4d np.ndarray
+    d_F :  4d gpuarray
         The main array of the WIDIM algorithm.
 
     K : int
@@ -2414,7 +2415,7 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
         the axis of interest : can be either 'x_axis' or 'y_axis'    
 
     d_pos_index : 1D gpuarray - int
-        index of the point in the frame (along the axis 'side').
+        index of the point in the frame you want to validate (along the axis 'side').
 
     W: 1D array - int
         array of window sizes
@@ -2422,40 +2423,39 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     Overlap: 1D array - int
         overlap in number of pixels
         
-    Nrow, Ncol : int
-        maximum number of rows and columns in the F dataset
+    Nrow, Ncol : 1D array
+        number of rows and columns in the F dataset in each iteration
 
     
     Returns
     -------
+    d_F: 4D gpuarray
+        Must return the class handle
     
-    d_F : 4D gpuarray
-        must return the function handle
-        
-    low : 1D gpuarray
+    d_low : 1D gpuarray - int
         largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.    
 
-    high : 1D gpuarray
-        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.     
+    d_high : 1D gpuarray - int
+        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.    
         
-    d_pos_index : 1D gpuarray
-        must return the function handle                                                 
+    d_pos_index :   1D gpuarray - int
+        Must return class handle                                                  
     
     """
 
     # GPU kernel
 
     mod_f_dichotomy = SourceModule("""
-    __global__ void F_dichotomy_x(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dxa, float dxb, int Nrow, int Ncol)
+    __global__ void F_dichotomy_x(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dxa, float dxb, int Nrow, int NrowMax, int NcolMax)
     {
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
         // How to go from one iteration index to the next in the F array
-        int leap = Nrow*Ncol*13;
+        int leap = NrowMax*NcolMax*13;
 
         // initial guess for low and high values
         low[w_idx] = (int)floorf((Wa/2. - Wb/2. + pos_index[w_idx]*dxa) / dxb);
-        high[w_idx] = low[w_idx] + 1*(F[(K+1)*leap + pos_index[w_idx]*Ncol*13] != F[K*leap + low[w_idx]*Ncol*13]);
+        high[w_idx] = low[w_idx] + 1*(F[(K+1)*leap + pos_index[w_idx]*NcolMax*13] != F[K*leap + low[w_idx]*NcolMax*13]);
 
         // if lower than lowest
         low[w_idx] = low[w_idx] * (low[w_idx] >= 0);
@@ -2466,12 +2466,12 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
         high[w_idx] = high[w_idx] + (Nrow - 1 - high[w_idx])*(high[w_idx] > Nrow - 1);
     }
 
-    __global__ void F_dichotomy_y(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dya, float dyb, int Nrow, int Ncol)
+    __global__ void F_dichotomy_y(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dya, float dyb, int Ncol, int NrowMax, int NcolMax)
     {
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
         
         // How to go from one iteration index to the next in the F array
-        int leap = Nrow*Ncol*13;
+        int leap = NrowMax*NcolMax*13;
 
         low[w_idx] = (int)floorf((Wa/2. - Wb/2. + pos_index[w_idx]*dya) / dyb);
         high[w_idx] = low[w_idx] + 1*(F[(K+1)*leap + pos_index[w_idx]*13 + 1] != F[K*leap + low[w_idx]*13 + 1]);
@@ -2483,14 +2483,16 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
         // if higher than highest
         low[w_idx] = low[w_idx] + (Ncol - 1 - low[w_idx])*(high[w_idx] > Ncol - 1);
         high[w_idx] = high[w_idx] + (Ncol - 1 - high[w_idx])*(high[w_idx] > Ncol - 1);
-    }
-    
+    }   
     """)
 
     # Define values needed for the calculations
     Wa = np.float32(W[K+1])
     Wb = np.float32(W[K])
     K = np.int32(K)
+    
+    assert Nrow.dtype == np.int32, "Data type on Nrow is wrong. Should be int32"
+    assert Ncol.dtype == np.int32, "Data type on Ncol is wrong. Should be int32"
 
     # define gpu settings
     block_size = 8
@@ -2507,7 +2509,7 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     
         # get gpu kenerl
         F_dichotomy_x = mod_f_dichotomy.get_function("F_dichotomy_x")
-        F_dichotomy_x(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dxa, dxb, Nrow, Ncol, block = (block_size, 1,1), grid = (x_blocks, 1))
+        F_dichotomy_x(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dxa, dxb, Nrow[K], Nrow[-1], Ncol[-1], block = (block_size, 1,1), grid = (x_blocks, 1))
         
     elif(side == "y_axis"):
     
@@ -2516,13 +2518,10 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     
         # get gpu kenerl
         F_dichotomy_y = mod_f_dichotomy.get_function("F_dichotomy_y")
-        F_dichotomy_y(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dya, dyb, Nrow, Ncol, block = (block_size, 1,1), grid = (x_blocks, 1))
+        F_dichotomy_y(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dya, dyb, Ncol[K], Nrow[-1], Ncol[-1], block = (block_size, 1,1), grid = (x_blocks, 1))
         
     else:
         raise ValueError("Not a proper axis. Choose either x or y axis.")
-  
-    # free some gpudata
-    d_pos_index.gpudata.free()
         
     return(d_F, d_low, d_high, d_pos_index)
 
