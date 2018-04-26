@@ -2383,6 +2383,7 @@ def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     
     return(d_div, d_u, d_v)
     
+
     
 def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     """Look for the position of the vectors at the previous iteration that surround the current point in the fram
@@ -2570,6 +2571,7 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
     d_f4.gpudata.free()
     
     return(d_f)
+
 
 
 def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
