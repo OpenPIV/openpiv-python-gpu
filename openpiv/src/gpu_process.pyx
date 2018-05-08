@@ -1116,9 +1116,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         
         # update the field with new values
         #TODO check for nans in i_peak and j_peak
-        print("gpu_update before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
         d_F = gpu_update(d_F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], c.nfft, dt, K )
-        print("gpu_update after - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
         
         #################################################################################
       
@@ -1151,7 +1149,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                 # reset validation list
                 validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-                print("gpu_validation before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
+
                 # get list of places that need to be validated
                 d_F, validation_list[0:Nrow[K], 0:Ncol[K]], \
                     u_mean[K, 0:Nrow[K], 0:Ncol[K]], \
@@ -1164,7 +1162,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                                        1.5, 
                                                                        tolerance, 
                                                                        div_tolerance )
-                print("gpu_validation after - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
                 # do the validation
                 d_F = initiate_validation(d_F, validation_list, u_mean, v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
                                  
@@ -1207,7 +1204,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print "going to next iteration.. "
         print "performing interpolation of the displacement field for next iteration predictors"
         print " "
-        print(d_F[K,0,0,10])
 
         if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
              gpu_floor(d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6], d_F[K, :Nrow[K], :Ncol[K], 4]) #dpx_k+1 = dx_k 
@@ -1215,10 +1211,11 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #interpolate if dimensions do not agree
         else:
             v_list = np.ones((Nrow[-1], Ncol[-1]), dtype=bool)
-            d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 6)
-            d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 7)
-            gpu_floor(d_F[K+1,:,:,6], d_F[K+1,:,:,6])
-            gpu_floor(d_F[K+1,:,:,7], d_F[K+1,:,:,7])
+            #interpolate velocity onto next iterations grid. Then take the floor as the predictor for the next step 
+            d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 4)
+            d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 5)
+            gpu_floor(d_F[K+1,:,:,6], d_F[K+1,:,:,4])
+            gpu_floor(d_F[K+1,:,:,7], d_F[K+1,:,:,5])
 
         # delete old correlation function
         del(c)
@@ -1290,7 +1287,6 @@ def initiate_validation(d_F, validation_list, u_mean, v_mean, nb_iter_max, K, Nr
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-        print("gpu_interp before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 10)
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 11)
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
@@ -1310,10 +1306,8 @@ def initiate_validation(d_F, validation_list, u_mean, v_mean, nb_iter_max, K, Nr
         # update the velocity values
         d_F[K,:,:,10], d_indeces = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indeces, ReturnIndeces=True)
         d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indeces)
-        print("gpu_done before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
-        print("gpu_done after - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
 
     return(d_F)
 
@@ -1348,8 +1342,6 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
     """
 
     #### Separate validation list into multiple lists for each region ####
-    
-    print("gpu_interp inside before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
 
     # set all sides to false for interior points
     interior_list = np.copy(v_list[:Nrow[K+1], :Ncol[K+1]]).astype('bool')
@@ -1398,16 +1390,16 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
     right_ind = np.where(right_list.flatten() == True)[0].astype(np.int32)
     if(right_ind.size != 0):
         d_right_ind = gpuarray.to_gpu(right_ind)
-
+        
+    pycuda.driver.Context.synchronize()
 
     #--------------------------INTERIOR GRID---------------------------------
 
     if(interior_ind.size != 0):
     
-        print("gpu_interior before - d_F is contiguous: {}".format(d_F.flags.c_contiguous))
         # get gpu data for position now
-        d_F, d_low_x, d_high_x, d_interior_ind_x = F_dichotomy_gpu(d_F, K, "x_axis", d_interior_ind_x, W, Overlap, Nrow, Ncol)
-        d_F, d_low_y, d_high_y, d_interior_ind_y = F_dichotomy_gpu(d_F, K, "y_axis", d_interior_ind_y, W, Overlap, Nrow, Ncol)
+        d_low_x, d_high_x, d_interior_ind_x = F_dichotomy_gpu(d_F[K:K+2, :, 0,0].copy(), K, "x_axis", d_interior_ind_x, W, Overlap, Nrow, Ncol)
+        d_low_y, d_high_y, d_interior_ind_y = F_dichotomy_gpu(d_F[K:K+2, 0, :,1].copy(), K, "y_axis", d_interior_ind_y, W, Overlap, Nrow, Ncol)
             
         # get indeces surrounding the position now 
         d_x1, d_low_x = gpu_array_index(d_F[K, :Nrow[K], 0, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
@@ -1443,14 +1435,14 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_high_y.gpudata.free()
         d_tmp_ib.gpudata.free()
     
-
+        pycuda.driver.Context.synchronize()
+        
     #------------------------------SIDES-----------------------------------
-
-    # TOP
+    
     if(top_ind.size > 0):
     
         # get now position and surrounding points
-        d_F, d_low_y, d_high_y, d_top_ind = F_dichotomy_gpu(d_F, K, "y_axis", d_top_ind, W, Overlap, Nrow, Ncol)
+        d_low_y, d_high_y, d_top_ind = F_dichotomy_gpu(d_F[K:K+2, 0,:,1].copy(), K, "y_axis", d_top_ind, W, Overlap, Nrow, Ncol)
         
         # Get values to compute interpolation       
         d_y1, d_low_y = gpu_array_index(d_F[K, 0, :, 1].copy(), d_low_y, np.float32, ReturnArray = False, ReturnList = True)
@@ -1470,12 +1462,15 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
         # free some data
         d_tmp_tl.gpudata.free()
+        
+        pycuda.driver.Context.synchronize()
 
     # BOTTOM
+    #if(False):
     if(bottom_ind.size > 0):
     
         #get position data
-        d_F, d_low_y, d_high_y, d_bottom_ind = F_dichotomy_gpu(d_F, K, "y_axis", d_bottom_ind, W, Overlap, Nrow, Ncol)
+        d_low_y, d_high_y, d_bottom_ind = F_dichotomy_gpu(d_F[K:K+2, 0, :,1].copy(), K, "y_axis", d_bottom_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation
         d_y1, d_low_y = gpu_array_index(d_F[K, Nrow[K]-1, :, 1].copy(), d_low_y, np.float32, ReturnArray = False, ReturnList = True)
@@ -1495,12 +1490,15 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
         # free some data
         d_tmp_bl.gpudata.free()
+        
+        pycuda.driver.Context.synchronize()
 
     # LEFT
+    #if(False):
     if(left_ind.size > 0):
     
         # get position data
-        d_F, d_low_x, d_high_x, d_left_ind = F_dichotomy_gpu(d_F, K, "x_axis", d_left_ind, W, Overlap, Nrow, Ncol)
+        d_low_x, d_high_x, d_left_ind = F_dichotomy_gpu(d_F[K:K+2, :, 0, 0].copy(), K, "x_axis", d_left_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation       
         d_x1, d_low_x = gpu_array_index(d_F[K, :, 0, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
@@ -1520,12 +1518,15 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
         # free some data
         d_tmp_ll.gpudata.free()
+        
+        pycuda.driver.Context.synchronize()
 
     # RIGHT
+    #if(False):
     if(right_ind.size > 0):
     
         # get position data
-        d_F, d_low_x, d_high_x, d_right_ind = F_dichotomy_gpu(d_F, K, "x_axis", d_right_ind, W, Overlap, Nrow, Ncol)
+        d_low_x, d_high_x, d_right_ind = F_dichotomy_gpu(d_F[K:K+2, :, 0, 0].copy(), K, "x_axis", d_right_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation       
         d_x1, d_low_x = gpu_array_index(d_F[K, :, Ncol[K]-1, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
@@ -2424,15 +2425,18 @@ def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     return(d_div, d_u, d_v)
     
     
-def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
+def F_dichotomy_gpu(d_range, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     """Look for the position of the vectors at the previous iteration that surround the current point in the frame
     you want to validate. Returns the low and high index of the points from the previous iteration on either side of 
     the point in the current iteration that needs to be validated.
     
     Parameters
     ----------
-    d_F :  4d gpuarray
-        The main array of the WIDIM algorithm.
+    d_range :  2D gpuarray
+        The x or y locations along the grid for the current and next iteration.
+        Exmaple:
+        For side = x_axis then the input looks like d_range = d_F[K:K+2, :,0,0].copy()
+        For side = y_axis then the input looks like d_range = d_F[K:K+2, 0,:,1].copy()
 
     K : int
         the iteration you want to use to validate. Typically the previous iteration from the 
@@ -2473,16 +2477,15 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     # GPU kernel
 
     mod_f_dichotomy = SourceModule("""
-    __global__ void F_dichotomy_x(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dxa, float dxb, int Nrow, int NrowMax, int NcolMax)
+    __global__ void F_dichotomy_x(float *x, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dxa, float dxb, int Nrow, int NrowMax, int N)
     {
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        // How to go from one iteration index to the next in the F array
-        int leap = NrowMax*NcolMax*13;
+        
+        if(w_idx >= N){return;}
 
         // initial guess for low and high values
         low[w_idx] = (int)floorf((Wa/2. - Wb/2. + pos_index[w_idx]*dxa) / dxb);
-        high[w_idx] = low[w_idx] + 1*(F[(K+1)*leap + pos_index[w_idx]*NcolMax*13] != F[K*leap + low[w_idx]*NcolMax*13]);
+        high[w_idx] = low[w_idx] + 1*(x[NrowMax + pos_index[w_idx]] != x[low[w_idx]]);
 
         // if lower than lowest
         low[w_idx] = low[w_idx] * (low[w_idx] >= 0);
@@ -2493,15 +2496,14 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
         high[w_idx] = high[w_idx] + (Nrow - 1 - high[w_idx])*(high[w_idx] > Nrow - 1);
     }
 
-    __global__ void F_dichotomy_y(float *F, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dya, float dyb, int Ncol, int NrowMax, int NcolMax)
+    __global__ void F_dichotomy_y(float *y, int *low, int *high, int K, int *pos_index, float Wa, float Wb, float dya, float dyb, int Ncol, int NcolMax, int N)
     {
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
         
-        // How to go from one iteration index to the next in the F array
-        int leap = NrowMax*NcolMax*13;
+        if(w_idx >= N){return;}
 
         low[w_idx] = (int)floorf((Wa/2. - Wb/2. + pos_index[w_idx]*dya) / dyb);
-        high[w_idx] = low[w_idx] + 1*(F[(K+1)*leap + pos_index[w_idx]*13 + 1] != F[K*leap + low[w_idx]*13 + 1]);
+        high[w_idx] = low[w_idx] + 1*(y[NcolMax + pos_index[w_idx]] != y[low[w_idx]]);
 
         // if lower than lowest
         low[w_idx] = low[w_idx] * (low[w_idx] >= 0);
@@ -2517,16 +2519,12 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     Wa = np.float32(W[K+1])
     Wb = np.float32(W[K])
     K = np.int32(K)
-    print(K) 
-    print(side) 
-    print(d_pos_index)
-    print( W) 
-    print(Overlap)
-    print( Nrow)
-    print( Ncol)
+    N = np.int32(d_pos_index.size)
     
-    assert Nrow.dtype == np.int32, "Data type on Nrow is wrong. Should be int32"
-    assert Ncol.dtype == np.int32, "Data type on Ncol is wrong. Should be int32"
+    assert Nrow.dtype == np.int32, "Nrow data type is {}. Should be int32".format(Nrow.dtype)
+    assert Ncol.dtype == np.int32, "Ncol data type is {}. Should be int32".format(Ncol.dtype)
+    assert d_range.dtype == np.float32, "d_range data type is {}. Should be np.float32".format(d_F.dtype)
+    assert d_pos_index.dtype == np.int32, "d_pos_index data type is {}. Should be np.int32".format(d_pos_index.dtype)
 
     # define gpu settings
     block_size = 8
@@ -2535,34 +2533,33 @@ def F_dichotomy_gpu(d_F, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     # create GPU data
     d_low = gpuarray.zeros_like(d_pos_index, dtype = np.int32)
     d_high = gpuarray.zeros_like(d_pos_index, dtype = np.int32)
-    
-    #print(d_F[K,0,0:5, 10])
-    print("1 d_F is contiguous: {}".format(d_F.flags.c_contiguous))
 
     if(side == "x_axis"):
-    
+        assert d_pos_index[-1].get() < Nrow[K+1], "Position index for validation point is outside the grid. Not possible - all points should be on the grid."
         dxa = np.float32(Wa - Overlap[K+1])
         dxb = np.float32(Wb - Overlap[K])
     
         # get gpu kenerl
         F_dichotomy_x = mod_f_dichotomy.get_function("F_dichotomy_x")
-        F_dichotomy_x(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dxa, dxb, Nrow[K], Nrow[-1], Ncol[-1], block = (block_size, 1,1), grid = (x_blocks, 1))
+        F_dichotomy_x(d_range, d_low, d_high, K, d_pos_index, Wa, Wb, dxa, dxb, Nrow[K], Nrow[-1], N, block = (block_size, 1,1), grid = (x_blocks, 1))
         
     elif(side == "y_axis"):
-    
+        assert d_pos_index[-1].get() < Ncol[K+1], "Position index for validation point is outside the grid. Not possible - all points should be on the grid."
         dya = np.float32(Wa - Overlap[K+1])
         dyb = np.float32(Wb - Overlap[K])
     
         # get gpu kenerl
         F_dichotomy_y = mod_f_dichotomy.get_function("F_dichotomy_y")
-        F_dichotomy_y(d_F, d_low, d_high, K, d_pos_index, Wa, Wb, dya, dyb, Ncol[K], Nrow[-1], Ncol[-1], block = (block_size, 1,1), grid = (x_blocks, 1))
+        F_dichotomy_y(d_range, d_low, d_high, K, d_pos_index, Wa, Wb, dya, dyb, Ncol[K], Ncol[-1], N, block = (block_size, 1,1), grid = (x_blocks, 1))
         
     else:
         raise ValueError("Not a proper axis. Choose either x or y axis.")
+
+    # free gpu data
+    d_range.gpudata.free()
+    del(d_range)
         
-    print("2 d_F is contiguous: {}".format(d_F.flags.c_contiguous))
-    #print(d_F[K,0,0, 10])
-    return(d_F, d_low, d_high, d_pos_index)
+    return(d_low, d_high, d_pos_index)
 
 
 
