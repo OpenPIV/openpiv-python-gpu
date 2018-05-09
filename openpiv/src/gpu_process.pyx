@@ -1050,14 +1050,14 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     # define arrays used for the validation process
     # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-    cdef np.ndarray[DTYPEf_t, ndim=3] u_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
     # GPU arrays
     # define arrays to stores the displacement vector in to save displacement information
     d_shift = gpuarray.zeros([2, Nrow[-1], Ncol[-1]], dtype=DTYPEi)
+    d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
     #initialize x and y values
     for K in range(nb_iter_max):
@@ -1229,7 +1229,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 #  VALIDATION FUNCTIONS
 ################################################################################        
 
-def initiate_validation(d_F, validation_list, u_mean, v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt):
+def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt):
     """
     Initiate the full GPU version of the validation and interpolation.
 
@@ -1904,9 +1904,7 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     div_validation = mod_validation.get_function("div_validation")
     div_validation(d_val_list, d_div, Nrow, Ncol, div_tol, block = (block_size, 1, 1), grid = (x_blocks, 1))
 
-    # return the final validation list and neighbours
-    neighbours = d_neighbours.get()
-    neighbours_present = d_neighbours_present.get()
+    # return the final validation list
     val_list = d_val_list.get()
     
     # Free gpu memory   
