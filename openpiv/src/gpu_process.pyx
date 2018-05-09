@@ -244,21 +244,18 @@ class CorrelationFunction( ):
         self._normalize_intensity(d_winA, d_search_area, d_winA_norm, d_search_area_norm)
 
         # zero pad arrays
+        # need this to index arrays apparently...
         d_winA_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype = np.float32)
         d_search_area_zp = gpuarray.zeros_like(d_winA_zp)
-        d_winA_zp[:,0:self.window_size, 0:self.window_size] = d_winA_norm.copy()
-        d_search_area_zp[:,0:self.window_size, 0:self.window_size] = d_search_area_norm.copy()
-        #self._zero_pad(d_winA_norm, d_search_area_norm, d_winA_zp, d_search_area_zp)
+        #d_winA_zp[:, :end, :end] = d_winA_norm.copy()
+        #d_search_area_zp[:, :end, :end] = d_search_area_norm.copy()
+        self._zero_pad(d_winA_norm, d_search_area_norm, d_winA_zp, d_search_area_zp)
 
         # correlate Windows
         self.data = self._correlate_windows(d_winA_zp, d_search_area_zp)
 
         # get first peak of correlation function
         self.row, self.col, self.corr_max1 = self._find_peak(self.data)
-
-        # Free rest of GPU data
-        d_search_area_norm.gpudata.free()
-        d_winA_norm.gpudata.free()
         
                 
     def _IWarrange(self, d_frame_a, d_frame_b, d_winA, d_search_area, d_shift):
@@ -497,8 +494,7 @@ class CorrelationFunction( ):
                 }         
             }
         """)
-
-        
+       
         #gpu parameters
         grid_size = int(8)
         block_size = int(self.window_size / grid_size)  
@@ -1026,7 +1022,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     if validation_iter==0:
         validation_method='None'
 
-    #cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
+    cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
     
     #define the main array F that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
@@ -1064,7 +1060,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     # define arrays to store all the mean velocityat each point in each iteration
     d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-    d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    d_v_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
     #initialize x and y values
     for K in range(nb_iter_max):
@@ -1592,9 +1588,8 @@ def launch( str method, names, arg ):
     
     """
     cdef int i
-    space = [" "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "," "]
-    for i in range(len(space)):
-        print space[i]
+    for i in range(10):
+        print("\n")
     print '----------------------------------------------------------'
     print '|----->     ||   The Open Source  P article              |'
     print '| Open      ||                    I mage                 |'              
