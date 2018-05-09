@@ -246,7 +246,9 @@ class CorrelationFunction( ):
         # zero pad arrays
         d_winA_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype = np.float32)
         d_search_area_zp = gpuarray.zeros_like(d_winA_zp)
-        self._zero_pad(d_winA_norm, d_search_area_norm, d_winA_zp, d_search_area_zp)
+        d_winA_zp[:,0:self.window_size, 0:self.window_size] = d_winA_norm.copy()
+        d_search_area_zp[:,0:self.window_size, 0:self.window_size] = d_search_area_norm.copy()
+        #self._zero_pad(d_winA_norm, d_search_area_norm, d_winA_zp, d_search_area_zp)
 
         # correlate Windows
         self.data = self._correlate_windows(d_winA_zp, d_search_area_zp)
@@ -254,6 +256,9 @@ class CorrelationFunction( ):
         # get first peak of correlation function
         self.row, self.col, self.corr_max1 = self._find_peak(self.data)
 
+        # Free rest of GPU data
+        d_search_area_norm.gpudata.free()
+        d_winA_norm.gpudata.free()
         
                 
     def _IWarrange(self, d_frame_a, d_frame_b, d_winA, d_search_area, d_shift):
@@ -501,7 +506,7 @@ class CorrelationFunction( ):
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
         zero_pad(d_winA_zp, d_winA_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
-        zero_pad(d_search_area_zp, d_search_area_norm, self.nfft    , self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
+        zero_pad(d_search_area_zp, d_search_area_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size,1), grid=(grid_size,grid_size))
         
         # Free GPU memory
         d_winA_norm.gpudata.free()
@@ -977,7 +982,6 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     # initialize scikits-cuda miscilaneous library
     cu_misc.init()
     
-    
     # cast images as floats
     #TODO  changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
@@ -1053,9 +1057,12 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
-    # GPU arrays
+    #### GPU arrays###
+
     # define arrays to stores the displacement vector in to save displacement information
     d_shift = gpuarray.zeros([2, Nrow[-1], Ncol[-1]], dtype=DTYPEi)
+
+    # define arrays to store all the mean velocityat each point in each iteration
     d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     
@@ -1152,18 +1159,18 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                 # get list of places that need to be validated
                 d_F, validation_list[0:Nrow[K], 0:Ncol[K]], \
-                    u_mean[K, 0:Nrow[K], 0:Ncol[K]], \
-                    v_mean[K, 0:Nrow[K], 0:Ncol[K]],  = gpu_validation(d_F,
-                                                                       K, 
-                                                                       sig2noise[0:Nrow[K], 0:Ncol[K]], 
-                                                                       Nrow[K], 
-                                                                       Ncol[K], 
-                                                                       W[K], 
-                                                                       1.5, 
-                                                                       tolerance, 
-                                                                       div_tolerance )
+                    d_u_mean[K, 0:Nrow[K], 0:Ncol[K]], \
+                    d_v_mean[K, 0:Nrow[K], 0:Ncol[K]],  = gpu_validation(d_F,
+                                                                         K, 
+                                                                         sig2noise[0:Nrow[K], 0:Ncol[K]], 
+                                                                         Nrow[K], 
+                                                                         Ncol[K], 
+                                                                         W[K], 
+                                                                         1.5, 
+                                                                         tolerance, 
+                                                                         div_tolerance )
                 # do the validation
-                d_F = initiate_validation(d_F, validation_list, u_mean, v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
+                d_F = initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
                                  
             print "..[DONE]"
             print " "
@@ -1242,7 +1249,7 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
     validation_list: 2D array - int
         indicates which values must be validate. 1 indicates no validation needed, 0 indicated validation is needed
 
-    u_mean, v_mean: 3D array - float
+    d_u_mean, d_v_mean: 3D gpuarray - float
         mean velocity surrounding each point
 
     K: int
@@ -1261,47 +1268,46 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
     
     # check the inputs
     assert validation_list.shape == (Nrow[-1], Ncol[-1]), "Must pass the full validation list, not just the section for the iteration you are validating."
-    assert u_mean.shape == (nb_iter_max, Nrow[-1], Ncol[-1]), "Must pass the entire u_mean array, not just the section for the iteration you are validating."
-    assert v_mean.shape == (nb_iter_max, Nrow[-1], Ncol[-1]), "Must pass the entire v_mean array, not just the section for the iteration you are validating." 
+    assert d_u_mean.shape == (nb_iter_max, Nrow[-1], Ncol[-1]), "Must pass the entire d_u_mean array, not just the section for the iteration you are validating."
+    assert d_v_mean.shape == (nb_iter_max, Nrow[-1], Ncol[-1]), "Must pass the entire d_v_mean array, not just the section for the iteration you are validating." 
     
     # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
     validation_location = np.invert(validation_list.astype(bool))
     
     #first iteration, just replace with mean velocity
     if(K == 0):
-        #move validation points to the gpu
-        u_tmp = u_mean[K, validation_location].flatten()
-        v_tmp = v_mean[K, validation_location].flatten()
-        d_u_tmp = gpuarray.to_gpu(u_tmp)
-        d_v_tmp = gpuarray.to_gpu(v_tmp)
-        
         # get indeces and send them to the gpu
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
-        
+
+        #get mean velocity at validation points
+        d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
+        d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
+       
         # update the velocity values
         d_F[K,:,:,10], d_indeces = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indeces, ReturnIndeces=True)
         d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indeces)
+
         #TODO, you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
+
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 10)
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 11)
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
+
     #case if same dimensions
     elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
-        #Take mean velocity from previous iterations and move them to the gpu
-        u_tmp = u_mean[K-1, validation_location].flatten()
-        v_tmp = v_mean[K-1, validation_location].flatten()
-        d_u_tmp = gpuarray.to_gpu(u_tmp)
-        d_v_tmp = gpuarray.to_gpu(v_tmp)
-        
         # get indeces and send them to the gpu
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
+
+        #Take mean velocity from previous iterations and move them to the gpu
+        d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
+        d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
         
         # update the velocity values
         d_F[K,:,:,10], d_indeces = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indeces, ReturnIndeces=True)
@@ -1776,6 +1782,9 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     val_list : 2D array - int
         list of indeces that need to be validated. 0 indicates that the index needs to be corrected.
         1 means no correction is needed
+
+    d_u_mean, d_v_mean : 2D gpuarray
+        mean of the velocities surrounding each point in this iteration.
     """
     
     # GPU functions
@@ -1886,10 +1895,6 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     d_u_rms, d_v_rms, d_neighbours, d_neighbours_present = gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol)
     d_u_mean, d_v_mean, d_neighbours, d_neighbours_present = gpu_mean_vel(d_neighbours, d_neighbours_present, Nrow, Ncol)
     
-    # get mean velocity data
-    u_mean = d_u_mean.get()
-    v_mean = d_v_mean.get() 
-    
     # get and launch rms 
     mean_validation = mod_validation.get_function("mean_validation")
     mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, Nrow, Ncol, mean_tol, block = (block_size,1,1), grid = (x_blocks, 1))
@@ -1915,13 +1920,11 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     d_v.gpudata.free()
     d_u_rms.gpudata.free()
     d_v_rms.gpudata.free()
-    d_u_mean.gpudata.free()
-    d_v_mean.gpudata.free()
     d_div.gpudata.free()
         
     del(d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms, d_div)
         
-    return(d_F, val_list, u_mean, v_mean)
+    return(d_F, val_list, d_u_mean, d_v_mean)
 
 
 def gpu_find_neighbours(Nrow, Ncol):
