@@ -1414,12 +1414,12 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_low_y, d_high_y, d_interior_ind_y = F_dichotomy_gpu(d_F[K:K+2, 0, :,1].copy(), K, "y_axis", d_interior_ind_y, W, Overlap, Nrow, Ncol)
             
         # get indeces surrounding the position now 
-        d_x1, d_low_x = gpu_array_index(d_F[K, :Nrow[K], 0, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_x2, d_high_x = gpu_array_index(d_F[K, :Nrow[K], 0, 0].copy(), d_high_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_y1, d_low_y = gpu_array_index(d_F[K, 0, :Ncol[K], 1].copy(), d_low_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_y2, d_high_y = gpu_array_index(d_F[K, 0, :Ncol[K], 1].copy(), d_high_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_x = gpu_array_index(d_F[K+1, :Nrow[K+1], 0, 0].copy(), d_interior_ind_x, np.float32, ReturnArray = False)
-        d_y = gpu_array_index(d_F[K+1, 0, :Ncol[K+1], 1].copy(), d_interior_ind_y, np.float32, ReturnArray = False)
+        d_x1, d_low_x = gpu_array_index(d_F[K, :Nrow[K], 0, 0].copy(), d_low_x, np.float32, ReturnList = True)
+        d_x2, d_high_x = gpu_array_index(d_F[K, :Nrow[K], 0, 0].copy(), d_high_x, np.float32, ReturnList = True)
+        d_y1, d_low_y = gpu_array_index(d_F[K, 0, :Ncol[K], 1].copy(), d_low_y, np.float32, ReturnList = True)
+        d_y2, d_high_y = gpu_array_index(d_F[K, 0, :Ncol[K], 1].copy(), d_high_y, np.float32, ReturnList = True)
+        d_x = gpu_array_index(d_F[K+1, :Nrow[K+1], 0, 0].copy(), d_interior_ind_x, np.float32)
+        d_y = gpu_array_index(d_F[K+1, 0, :Ncol[K+1], 1].copy(), d_interior_ind_y, np.float32)
         
         # get indeces for the function values at each spot surrounding the validation points.
         d_f1_ind = d_low_x * Ncol[K] + d_low_y
@@ -1428,10 +1428,10 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_f4_ind = d_high_x * Ncol[K] + d_high_y
         
         # return the values of the function surrounding the validation point
-        d_f1 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f1_ind, np.float32, ReturnArray = False)
-        d_f2 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f2_ind, np.float32, ReturnArray = False)
-        d_f3 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f3_ind, np.float32, ReturnArray = False)
-        d_f4 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f4_ind, np.float32, ReturnArray = False)
+        d_f1 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f1_ind, np.float32)
+        d_f2 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f2_ind, np.float32)
+        d_f3 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f3_ind, np.float32)
+        d_f4 = gpu_array_index(d_F[K,:Nrow[K],:Ncol[K],dat].copy(), d_f4_ind, np.float32)
 
         # Do interpolation
         d_interior_bilinear = bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4)
@@ -1456,13 +1456,13 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_low_y, d_high_y, d_top_ind = F_dichotomy_gpu(d_F[K:K+2, 0,:,1].copy(), K, "y_axis", d_top_ind, W, Overlap, Nrow, Ncol)
         
         # Get values to compute interpolation       
-        d_y1, d_low_y = gpu_array_index(d_F[K, 0, :, 1].copy(), d_low_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_y2, d_high_y = gpu_array_index(d_F[K, 0, :, 1].copy(), d_high_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_y, d_top_ind = gpu_array_index(d_F[K+1, 0, :, 1].copy(), d_top_ind, np.float32, ReturnArray = False, ReturnList = True)
+        d_y1, d_low_y = gpu_array_index(d_F[K, 0, :, 1].copy(), d_low_y, np.float32, ReturnList = True)
+        d_y2, d_high_y = gpu_array_index(d_F[K, 0, :, 1].copy(), d_high_y, np.float32, ReturnList = True)
+        d_y, d_top_ind = gpu_array_index(d_F[K+1, 0, :, 1].copy(), d_top_ind, np.float32, ReturnList = True)
         
         # return the values of the function surrounding the validation point
-        d_f1 = gpu_array_index(d_F[K,0,:,dat].copy(), d_low_y, np.float32, ReturnArray = False)
-        d_f2 = gpu_array_index(d_F[K,0,:,dat].copy(), d_high_y, np.float32, ReturnArray = False)
+        d_f1 = gpu_array_index(d_F[K,0,:,dat].copy(), d_low_y, np.float32)
+        d_f2 = gpu_array_index(d_F[K,0,:,dat].copy(), d_high_y, np.float32)
 
         # do interpolation
         d_top_linear = linear_interp_gpu(d_y1, d_y2, d_y, d_f1, d_f2)
@@ -1484,13 +1484,13 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_low_y, d_high_y, d_bottom_ind = F_dichotomy_gpu(d_F[K:K+2, 0, :,1].copy(), K, "y_axis", d_bottom_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation
-        d_y1, d_low_y = gpu_array_index(d_F[K, Nrow[K]-1, :, 1].copy(), d_low_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_y2, d_high_y = gpu_array_index(d_F[K, Nrow[K]-1, :, 1].copy(), d_high_y, np.float32, ReturnArray = False, ReturnList = True)
-        d_y, d_bottom_ind = gpu_array_index(d_F[K+1, Nrow[K+1]-1, :, 1].copy(), d_bottom_ind, np.float32, ReturnArray = False, ReturnList = True)
+        d_y1, d_low_y = gpu_array_index(d_F[K, Nrow[K]-1, :, 1].copy(), d_low_y, np.float32, ReturnList = True)
+        d_y2, d_high_y = gpu_array_index(d_F[K, Nrow[K]-1, :, 1].copy(), d_high_y, np.float32, ReturnList = True)
+        d_y, d_bottom_ind = gpu_array_index(d_F[K+1, Nrow[K+1]-1, :, 1].copy(), d_bottom_ind, np.float32, ReturnList = True)
         
         # return the values of the function surrounding the validation point
-        d_f1 = gpu_array_index(d_F[K, Nrow[K]-1, :, dat].copy(), d_low_y, np.float32, ReturnArray = False)
-        d_f2 = gpu_array_index(d_F[K, Nrow[K]-1, :, dat].copy(), d_high_y, np.float32, ReturnArray = False)
+        d_f1 = gpu_array_index(d_F[K, Nrow[K]-1, :, dat].copy(), d_low_y, np.float32)
+        d_f2 = gpu_array_index(d_F[K, Nrow[K]-1, :, dat].copy(), d_high_y, np.float32)
         
         # do interpolation
         d_bottom_linear = linear_interp_gpu(d_y1, d_y2, d_y, d_f1, d_f2)
@@ -1512,13 +1512,13 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_low_x, d_high_x, d_left_ind = F_dichotomy_gpu(d_F[K:K+2, :, 0, 0].copy(), K, "x_axis", d_left_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation       
-        d_x1, d_low_x = gpu_array_index(d_F[K, :, 0, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_x2, d_high_x = gpu_array_index(d_F[K, :, 0, 0].copy(), d_high_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_x, d_left_ind = gpu_array_index(d_F[K+1, :, 0, 0].copy(), d_left_ind, np.float32, ReturnArray = False, ReturnList = True)
+        d_x1, d_low_x = gpu_array_index(d_F[K, :, 0, 0].copy(), d_low_x, np.float32, ReturnList = True)
+        d_x2, d_high_x = gpu_array_index(d_F[K, :, 0, 0].copy(), d_high_x, np.float32, ReturnList = True)
+        d_x, d_left_ind = gpu_array_index(d_F[K+1, :, 0, 0].copy(), d_left_ind, np.float32, ReturnList = True)
         
         # return the values of the function surrounding the validation point
-        d_f1 = gpu_array_index(d_F[K,:,0,dat].copy(), d_low_x, np.float32, ReturnArray = False)
-        d_f2 = gpu_array_index(d_F[K,:,0,dat].copy(), d_high_x, np.float32, ReturnArray = False)
+        d_f1 = gpu_array_index(d_F[K,:,0,dat].copy(), d_low_x, np.float32)
+        d_f2 = gpu_array_index(d_F[K,:,0,dat].copy(), d_high_x, np.float32)
         
         # do interpolation
         d_left_linear = linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2)
@@ -1540,13 +1540,13 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_low_x, d_high_x, d_right_ind = F_dichotomy_gpu(d_F[K:K+2, :, 0, 0].copy(), K, "x_axis", d_right_ind, W, Overlap, Nrow, Ncol)
 
         # Get values to compute interpolation       
-        d_x1, d_low_x = gpu_array_index(d_F[K, :, Ncol[K]-1, 0].copy(), d_low_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_x2, d_high_x = gpu_array_index(d_F[K, :, Ncol[K]-1, 0].copy(), d_high_x, np.float32, ReturnArray = False, ReturnList = True)
-        d_x, d_right_ind = gpu_array_index(d_F[K+1, :, Ncol[K+1]-1, 0].copy(), d_right_ind, np.float32, ReturnArray = False, ReturnList = True)     
+        d_x1, d_low_x = gpu_array_index(d_F[K, :, Ncol[K]-1, 0].copy(), d_low_x, np.float32, ReturnList = True)
+        d_x2, d_high_x = gpu_array_index(d_F[K, :, Ncol[K]-1, 0].copy(), d_high_x, np.float32, ReturnList = True)
+        d_x, d_right_ind = gpu_array_index(d_F[K+1, :, Ncol[K+1]-1, 0].copy(), d_right_ind, np.float32, ReturnList = True)     
         
         # return the values of the function surrounding the validation point
-        d_f1 = gpu_array_index(d_F[K, :, Ncol[K]-1, dat].copy(), d_low_x, np.float32, ReturnArray = False)
-        d_f2 = gpu_array_index(d_F[K, :, Ncol[K]-1, dat].copy(), d_high_x, np.float32, ReturnArray = False)
+        d_f1 = gpu_array_index(d_F[K, :, Ncol[K]-1, dat].copy(), d_low_x, np.float32)
+        d_f2 = gpu_array_index(d_F[K, :, Ncol[K]-1, dat].copy(), d_high_x, np.float32)
         
         # do interpolation
         d_right_linear = linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2)
@@ -2680,7 +2680,7 @@ def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
     
     
     
-def gpu_array_index(d_array, d_return_list, data_type, ReturnArray = True,  ReturnList = False):
+def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  ReturnList = False):
     """
     Allows for arbirtary index selecting with numpy arrays
     
@@ -2696,7 +2696,7 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnArray = True,  Retu
     data_type: dtype
         either int32 or float 32. determines the datatype of the returned array
         
-    ReturnArray: bool
+    ReturnInput: bool
         If true, returns the input array as well so the class handle is preserved.
     
     ReturnList: bool
@@ -2759,7 +2759,7 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnArray = True,  Retu
     else:
         raise ValueError("Unrecognized data type for this function. Use float32 or int32.")
     
-    if(ReturnArray == True):
+    if(ReturnInput == True):
         if(ReturnList == True):
             return(d_return_values, d_array, d_return_list)
         else:
