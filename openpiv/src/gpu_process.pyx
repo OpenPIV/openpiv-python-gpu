@@ -1050,6 +1050,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     # define arrays used for the validation process
     # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
+    #cdef np.ndarray[DTYPEf_t, ndim=3] u_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
+    #cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
     
@@ -1165,9 +1167,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                                          1.5, 
                                                                          tolerance, 
                                                                          div_tolerance )
+                                                                         
                 # do the validation
                 d_F = initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
-                                 
+                    
             print "..[DONE]"
             print " "
         #end of validation
@@ -1209,20 +1212,19 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print " "
 
         if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
-             gpu_floor(d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6], d_F[K, :Nrow[K], :Ncol[K], 4]) #dpx_k+1 = dx_k 
-             gpu_floor(d_F[K+1, :Nrow[K+1], :Ncol[K+1], 7], d_F[K, :Nrow[K], :Ncol[K], 5]) #dpy_k+1 = dy_k
+             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6] =  gpu_floor(d_F[K, :Nrow[K], :Ncol[K], 4].copy()) #dpx_k+1 = dx_k 
+             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 7] =  gpu_floor(d_F[K, :Nrow[K], :Ncol[K], 5].copy()) #dpy_k+1 = dy_k
         #interpolate if dimensions do not agree
         else:
             v_list = np.ones((Nrow[-1], Ncol[-1]), dtype=bool)
             #interpolate velocity onto next iterations grid. Then take the floor as the predictor for the next step 
             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 4)
             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 5)
-            gpu_floor(d_F[K+1,:,:,6], d_F[K+1,:,:,4])
-            gpu_floor(d_F[K+1,:,:,7], d_F[K+1,:,:,5])
-
+            d_F[K+1,:,:,6] =  gpu_floor(d_F[K+1,:,:,4].copy())
+            d_F[K+1,:,:,7] =  gpu_floor(d_F[K+1,:,:,5].copy())
         # delete old correlation function
         del(c)
-        
+
         print "..[DONE] -----> going to iteration ",K+1
         print " "
 
@@ -1269,14 +1271,18 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
     
     # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
     validation_location = np.invert(validation_list.astype(bool))
-    
+
     #first iteration, just replace with mean velocity
     if(K == 0):
         # get indeces and send them to the gpu
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
-
+        
         #get mean velocity at validation points
+        #u_tmp = u_mean[K, validation_location].flatten()
+        #v_tmp = v_mean[K, validation_location].flatten()
+        #d_u_tmp = gpuarray.to_gpu(u_tmp)
+        #d_v_tmp = gpuarray.to_gpu(v_tmp)     
         d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
         d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
        
@@ -1300,8 +1306,12 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         # get indeces and send them to the gpu
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
-
+        
         #Take mean velocity from previous iterations and move them to the gpu
+        #u_tmp = u_mean[K-1, validation_location].flatten()
+        #v_tmp = v_mean[K-1, validation_location].flatten()
+        #d_u_tmp = gpuarray.to_gpu(u_tmp)
+        #d_v_tmp = gpuarray.to_gpu(v_tmp) 
         d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
         d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
         
@@ -1310,7 +1320,7 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indeces)
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
-
+    
     return(d_F)
 
 
@@ -1440,7 +1450,6 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         pycuda.driver.Context.synchronize()
         
     #------------------------------SIDES-----------------------------------
-    
     if(top_ind.size > 0):
     
         # get now position and surrounding points
@@ -1588,7 +1597,7 @@ def launch( str method, names, arg ):
     
     """
     cdef int i
-    for i in range(10):
+    for i in range(3):
         print("\n")
     print '----------------------------------------------------------'
     print '|----->     ||   The Open Source  P article              |'
@@ -1906,6 +1915,8 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
 
     # return the final validation list
     val_list = d_val_list.get()
+    #u_mean = d_u_mean.get()
+    #v_mean = d_v_mean.get()
     
     # Free gpu memory   
     d_val_list.gpudata.free()
@@ -1913,6 +1924,8 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     d_neighbours.gpudata.free() 
     d_u.gpudata.free()
     d_v.gpudata.free()
+    #d_u_mean.gpudata.free()
+    #d_v_mean.gpudata.free()
     d_u_rms.gpudata.free()
     d_v_rms.gpudata.free()
     d_div.gpudata.free()
@@ -1920,7 +1933,7 @@ def gpu_validation(d_F, K, sig2noise, Nrow, Ncol, w, s2n_tol, mean_tol, div_tol 
     del(d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms, d_div)
         
     return(d_F, val_list, d_u_mean, d_v_mean)
-
+    
 
 def gpu_find_neighbours(Nrow, Ncol):
     """
@@ -2825,13 +2838,12 @@ def gpu_index_update(d_dest, d_values, d_indeces, ReturnIndeces = False):
 
 
 
-def gpu_floor(d_dest, d_src):
+def gpu_floor(d_src, ReturnInput=False):
     """
     Takes the floor of each element in the gpu array
     
     Parameters
     ----------
-    d_dest: gpuarray
     
     d_src: gpuarray
         array to take the floor of
@@ -2843,7 +2855,7 @@ def gpu_floor(d_dest, d_src):
         Same size as d_src. Contains the floored values of d_src.
         
     """
-    
+    assert type(ReturnInput) == bool, "ReturnInput is {}. Must be of type boolean".format(type(ReturnInput))
     
     mod_floor = SourceModule("""
     __global__ void floor_gpu(float *dest, float *src, int N)
@@ -2860,7 +2872,8 @@ def gpu_floor(d_dest, d_src):
     } 
     """)
     
-    assert d_dest.size == d_src.size, "Source and destination are not the same size." 
+    # create array to store data
+    d_dst = gpuarray.empty_like(d_src)
     
     # get array size for gpu
     N = np.int32(d_src.size)
@@ -2871,7 +2884,18 @@ def gpu_floor(d_dest, d_src):
     
     # get and execute kernel
     floor_gpu = mod_floor.get_function("floor_gpu")
-    floor_gpu(d_dest, d_src, N, block = (block_size, 1,1), grid = (x_blocks, 1))
+    floor_gpu(d_dst, d_src, N, block = (block_size, 1,1), grid = (x_blocks, 1))
+    
+    
+    
+    if(ReturnInput == False):
+        # free some gpu memory
+        d_src.gpudata.free()
+        return(d_dst)
+    elif(ReturnInput == True):
+        return(d_dst, d_src)
+    else:
+        raise ValueError("ReturnInput is currently {}. Must be of type boolean".format(ReturnInput))
 
 
 
