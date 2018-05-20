@@ -910,8 +910,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                     F[K,I,J,5] = F[K,I,J,10]*dt
                                 #perform interpolation using previous iteration (which is supposed to be already validated -> this prevents error propagation)
                                 elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-                                    F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-                                    F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
+                                    F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K-1,I,J, 10)
+                                    F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K-1,I,J, 11)
 
                             #add a validation with the mean and rms values. This happens as well as sig2noise vaildation
                             if validation_method == 'mean_velocity':
@@ -925,7 +925,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                         F[K,I,J,11] = mean_v
                                 elif ((F[K,I,J,10] - mean_u)/rms_u) > tolerance or ((F[K,I,J,11] - mean_v)/rms_v) > tolerance:
 
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    initiate_validation(F, Nrow, Ncol, W, Overlap, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
 
                             # Validate based on divergence of the velocity field
@@ -940,7 +940,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
                                 # if div is greater than 0.1, interpolate the value. 
                                 if div > div_tolerance:
-                                    initiate_validation(F, Nrow, Ncol, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
+                                    initiate_validation(F, Nrow, Ncol, W, Overlap, neighbours_present, neighbours, mean_u, mean_v, dt, K, I, J)
                                     (<object>mask)[I,J] = True
  
             pbar.finish()                    
@@ -984,8 +984,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     F[K+1,I,J,7] = np.floor(F[K,I,J,5]) #dpy_k+1 = dy_k
                 #interpolate if dimensions do not agree
                 else:
-                    F[K+1,I,J,6] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4))
-                    F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5))
+                    F[K+1,I,J,6] = np.floor(interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K,I,J, 4))
+                    F[K+1,I,J,7] = np.floor(interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K,I,J, 5))
 
         pbar.finish()
         print "..[DONE] -----> going to iteration ",K+1
@@ -995,6 +995,8 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
                          np.ndarray[DTYPEi_t, ndim=1] Nrow,
                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
+                         np.ndarray[DTYPEi_t, ndim=1] W,
+                         np.ndarray[DTYPEi_t, ndim=1] Overlap,
                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
                          np.ndarray[DTYPEf_t, ndim=3] neighbours,
                          float mean_u,
@@ -1044,8 +1046,8 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
         F[K,I,J,5] = F[K,I,J,10]*dt
     #case if different dimensions : interpolation using previous iteration
     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-        F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-        F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
+        F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K-1,I,J, 10)
+        F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K-1,I,J, 11)
         F[K,I,J,4] = -F[K,I,J,11]*dt
         F[K,I,J,5] = F[K,I,J,10]*dt
     #case if same dimensions
@@ -1070,6 +1072,8 @@ def initiate_validation( np.ndarray[DTYPEf_t, ndim=4] F,
 def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
                              np.ndarray[DTYPEi_t, ndim=1] Nrow,
                              np.ndarray[DTYPEi_t, ndim=1] Ncol,
+                             np.ndarray[DTYPEi_t, ndim=1] W,
+                             np.ndarray[DTYPEi_t, ndim=1] Overlap,
                              int K,
                              int I,
                              int J,
@@ -1124,7 +1128,7 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
             return F[K,0,Ncol[K]-1,dat]
         #top row no corners
         else:
-            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+            low_y, high_y = F_dichotomy(F, K, 'y_axis', J, W, Overlap, Nrow, Ncol)
             if low_y == high_y:
                 return F[K,0,low_y,dat]
             else:
@@ -1139,7 +1143,7 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
             return F[K,Nrow[K]-1,Ncol[K]-1,dat]
         #bottom row no corners
         else:
-            low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+            low_y, high_y = F_dichotomy(F, K, 'y_axis', J, W, Overlap, Nrow, Ncol)
             #print low_y, high_y
             if low_y == high_y:
                 return F[K,Nrow[K]-1,low_y,dat]
@@ -1147,22 +1151,22 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
                 return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,Nrow[K]-1,low_y,dat], F[K,Nrow[K]-1,high_y,dat])
     #left column no corners
     elif pos_now_y < lower_lim_previous_y:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
+        low_x, high_x = F_dichotomy(F, K, 'x_axis', I, W, Overlap, Nrow, Ncol)
         if low_x == high_x:
             return F[K,low_x,0,dat]
         else:
             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,0,dat], F[K,high_x,0,dat])
     #right column no corners
     elif pos_now_y > upper_lim_previous_y:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
+        low_x, high_x = F_dichotomy(F, K, 'x_axis', I, W, Overlap, Nrow, Ncol)
         if low_x == high_x:
             return F[K,low_x,Ncol[K]-1,dat]
         else:
             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,Ncol[K]-1,dat], F[K,high_x,Ncol[K]-1,dat])
     #interior grid
     else:
-        low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-        low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
+        low_x, high_x = F_dichotomy(F,K,'x_axis',I, W, Overlap, Nrow, Ncol)
+        low_y, high_y = F_dichotomy(F,K,'y_axis',J, W, Overlap, Nrow, Ncol)
         Q1[0] = F[K,low_x,0,0] 
         Q1[1] = F[K,0,low_y,1]
         Q4[0] = F[K,high_x,0,0]
@@ -1235,10 +1239,14 @@ def linear_interpolation(int x1, int x2, int x, float f1, float f2):
 
 
 
-
-
-
-def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
+def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, 
+                    int K, 
+                    str side, 
+                    int pos_index, 
+                    np.ndarray[DTYPEi_t, ndim=1] W, 
+                    np.ndarray[DTYPEi_t, ndim=1] Overlap, 
+                    np.ndarray[DTYPEi_t, ndim=1] Nrow, 
+                    np.ndarray[DTYPEi_t, ndim=1] Ncol):
     """Look for the position of the vectors at the previous iteration that surround the current point in the fram
     you want to interpolate. 
     
@@ -1250,14 +1258,20 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
     K : int
         the iteration of interest (1st index for F).
     
-    N : 1d np.ndarray
-        list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
-
     side : string
         the axis of interest : can be either 'x_axis' or 'y_axis'    
 
-    pos_now : int
-        position of the point in the frame (along the axis 'side').
+    pos_index : int
+        index of the point in the frame (along the axis 'side').
+
+    W : array - int
+        Array of window sizes
+
+    Overlap: array - int
+        Array of overlaps in number of pixels
+
+    Nrow, Ncol: array - int
+        Number of rows and columns at each iteration
     
     Returns
     -------
@@ -1268,58 +1282,46 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
         smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.                                                        
     
     """
-    #print "starting dichotomy"
+
+    cdef float Wa = float(W[K+1])
+    cdef float Wb = float(W[K])
+    cdef float da = float(Wa - Overlap[K+1])
+    cdef float db = float(Wb - Overlap[K])
     cdef int low
     cdef int high
-    cdef int minlow = 0
-    cdef int maxhigh = N[K]-1
-    cdef int searching
-    low = np.floor(maxhigh/2)
-    high = low + 1
-    searching = 1
-    if side == 'x_axis':
-        while searching:#start dichotomy
-            if pos_now == F[K,low,0,0] or (low == 0 and pos_now < F[K,low,0,0]):
-                searching = 0
-                high = low
-            elif pos_now == F[K,high,0,0] or (high == N[K]-1 and pos_now > F[K,high,0,0]):
-                searching = 0
-                low = high
-            elif pos_now > F[K,low,0,0] and pos_now < F[K,high,0,0]:
-                searching = 0
-            elif pos_now < F[K,low,0,0]:
-                maxhigh = low
-                low = np.floor((low-minlow)/2)
-                high = low + 1
-            else:
-                minlow=high
-                low = low + np.floor((maxhigh-low)/2)
-                high = low + 1
+
+    if(side == "x_axis"):
+
+        # get the lower index
+        low = int(np.floor((Wa/2. - Wb/2. + pos_index*da) / db))
+        high = low + 1*(F[K+1, pos_index, 0, 0] != F[K, low, 0,0])
+
+        # if lower than lowest
+        low = low * (low >= 0)
+        high = high * (low >= 0)
+
+        # if higher than highest
+        low = low + (Nrow[K] - 1 - low)*(high > Nrow[K] - 1)
+        high = high + (Nrow[K] - 1 - high)*(high > Nrow[K] - 1)
+
         return low, high
-    elif side == 'y_axis':
-        while searching:#start dichotomy
-            if pos_now == F[K,0,low,1] or (low == 0 and pos_now < F[K,0,low,1]):
-                searching = 0
-                high = low
-            elif pos_now == F[K,0,high,1] or (high == N[K]-1 and pos_now > F[K,0,high,1]):
-                searching = 0
-                low = high
-            elif pos_now > F[K,0,low,1] and pos_now < F[K,0,high,1]:
-                searching = 0
-            elif pos_now < F[K,0,low,1]:
-                maxhigh = low
-                low = np.floor((low-minlow)/2)
-                high = low + 1
-            else:
-                minlow=high
-                low = low + np.floor((maxhigh-low)/2)
-                high = low + 1
+
+    elif(side == "y_axis"):
+
+        low = int(np.floor((Wa/2. - Wb/2. + pos_index*da) / db))
+        high = low + 1*(F[K+1, 0, pos_index, 1] != F[K, 0, low, 1])
+
+        # if lower than lowest
+        low = low * (low >= 0)
+        high = high * (low >= 0)
+
+        # if higher than highest
+        low = low + (Ncol[K] - 1 - low)*(high > Ncol[K] - 1)
+        high = high + (Ncol[K] - 1 - high)*(high > Ncol[K] - 1)
+
         return low, high
     else:
-        raise ValueError( "no valid side for F-dichotomy!" )
-
-
-
+        raise ValueError("Not a valid axis. Must choose x_axis or y_axis.")
 
 
 
