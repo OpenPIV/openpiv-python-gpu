@@ -215,11 +215,6 @@ def find_reflexions(list_img, filename):
     imsave(filename, reflexion)
     print("done with reflexions");
     return reflexion
-            
-
-
-
-
 
 
 def find_boundaries(threshold, list_img1, list_img2, filename, picname):
@@ -254,13 +249,7 @@ def find_boundaries(threshold, list_img1, list_img2, filename, picname):
     return list_bound
 
 
-
-
-
-
-
-
-def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t' ):
+def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t', units = ["m", "m", "m/s", "m/s"] ):
     """Save flow field to an ascii file.
     
     Parameters
@@ -294,6 +283,9 @@ def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t' ):
     
     delimiter : string
         character separating columns
+
+    units : list
+        the units to put in the header of the saved file
         
     Examples
     --------
@@ -304,8 +296,11 @@ def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t' ):
     # build output array
     out = np.vstack( [m.ravel() for m in [x, y, u, v, mask] ] )
             
+    # make header for the file.
+    header = "x [{}],\t y [{}],\t u [{}],\t v [{}],\t mask".format(units[0], units[1], units[2], units[3])
+
     # save data to file.
-    np.savetxt( filename, out.T, fmt=fmt, delimiter=delimiter )
+    np.savetxt( filename, out.T, fmt=fmt, delimiter=delimiter, header=header )
 
 def display( message ):
     """Display a message to standard output.
