@@ -297,7 +297,7 @@ def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t', units = ["m",
     out = np.vstack( [m.ravel() for m in [x, y, u, v, mask] ] )
             
     # make header for the file.
-    header = "x [{}],\t y [{}],\t u [{}],\t v [{}]".format(units[0], units[1], units[2], units[3])
+    header = "x [{}],\t y [{}],\t u [{}],\t v [{}],\t mask".format(units[0], units[1], units[2], units[3])
 
     # save data to file.
     np.savetxt( filename, out.T, fmt=fmt, delimiter=delimiter, header=header )
