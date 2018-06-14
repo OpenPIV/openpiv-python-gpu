@@ -1278,11 +1278,7 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
         
-        #get mean velocity at validation points
-        #u_tmp = u_mean[K, validation_location].flatten()
-        #v_tmp = v_mean[K, validation_location].flatten()
-        #d_u_tmp = gpuarray.to_gpu(u_tmp)
-        #d_v_tmp = gpuarray.to_gpu(v_tmp)     
+        #get mean velocity at validation points  
         d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
         d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K, :,:].copy(), d_indeces, np.float32, ReturnList=True)
        
@@ -1307,17 +1303,11 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         indeces = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indeces = gpuarray.to_gpu(indeces)
         
-        #Take mean velocity from previous iterations and move them to the gpu
-        #u_tmp = u_mean[K-1, validation_location].flatten()
-        #v_tmp = v_mean[K-1, validation_location].flatten()
-        #d_u_tmp = gpuarray.to_gpu(u_tmp)
-        #d_v_tmp = gpuarray.to_gpu(v_tmp) 
-        d_u_tmp, d_indeces = gpu_array_index(d_u_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
-        d_v_tmp, d_indeces = gpu_array_index(d_v_mean[K-1, :,:].copy(), d_indeces, np.float32, ReturnList=True)
-        
-        # update the velocity values
-        d_F[K,:,:,10], d_indeces = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indeces, ReturnIndeces=True)
-        d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indeces)
+        # update the velocity values with the previous values. 
+        #This is essentiall a bilinear interpolation when the value is right on top of the other. 
+        #TODO - could replace with the mean of the previous values surrounding the point
+        d_F[K,:,:,10], d_indeces = gpu_index_update(d_F[K,:,:,10].copy(), d_F[K-1,:,:,10].copy(), d_indeces, ReturnIndeces=True)
+        d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_F[K-1,:,:,11].copy(), d_indeces)
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
     
@@ -1574,7 +1564,6 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
         d_F[K+1, Nrow[K+1]-1, Ncol[K+1]-1, dat] = d_F[K, Nrow[K]-1, Ncol[K]-1, dat]
 
     return(d_F)
-
 
 
 def launch( str method, names, arg ):

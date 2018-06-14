@@ -94,6 +94,7 @@ def display_vector_field( filename, on_img=False, image_name='None', window_size
     pl.draw()
     pl.show()
 
+
 def imread( filename, flatten=0 ):
     """Read an image file into a numpy array
     using skimage.io.imread
@@ -247,6 +248,118 @@ def find_boundaries(threshold, list_img1, list_img2, filename, picname):
     f.close()
     imsave(picname, list_bound)
     return list_bound
+
+
+def load_vectors(filename, skip = 1,  uncrt = None):
+    """
+    Loads the velocity fields / uncertainty from an OpenPIV  data output file
+    returns the data from each file in a 3D matrix
+    
+    Parameters
+    ----------
+    filename: string
+        The absolute path to the PIV data
+
+    skip: int
+        Number of header lines to skip in the data files. Defaults to 2 as that is what the save function defaults to. 
+
+    uncrt: tuple
+        Column (zero indexed) of the u and v velocity uncertainty. 
+        Default is None, which returns no uncertainty. 
+        
+    Returns
+    -------
+    x,y : 2D numpy array
+        The x and y locations of the velocity vector. Since each frame is the same,
+        only one 2D array for each is returned
+
+    u,v : 3D numpy array
+        The u amd v velocity fields for each piv file
+
+    mask : 3D array
+        Values that were masked during the validation process.
+    """
+    
+    if uncrt is None:
+        # data is in 1D arrays. Reshape to 2D arrays.
+        x, y, u, v, mask = data_unravel(filename, skip=skip)
+        
+        return(x,y,u,v,mask)
+    else:
+        x,y,u,v, mask, Ux, Uy = data_unravel(filename, skip=skip, uncrt=uncrt)
+
+
+def data_unravel(filename, maskCol=4, skip=1, uncrt=None):
+    """
+    Takes data stored as flattened arrays and turns it back into 2D arrays.
+    This is necessary for the fast bilinear spline in the image_dewarp function to work. 
+
+    Parameters
+    ----------
+    filename: string
+        name of the file piv data results are stored in
+
+    maskCol: int
+        column where the mask data is stored
+
+    uncrt: 2 component tuple
+        contains the column index of the u and v uncertainties 
+
+    Returns
+    -------
+    x,y: 2d array, float
+        coordinates of the velocity vectors
+
+    u,v: 2d array, float
+        velocity vectors
+
+    mask: 2d array, bool
+        location of the masked elements
+
+    Ux, Uy: 2d array,
+        u and v uncertainties for each vector
+    """
+
+    data = np.loadtxt(filename, skiprows = skip)
+    x_tmp = data[:,0]
+    y_tmp = data[:,1]
+    u_tmp = data[:,2]
+    v_tmp = data[:,3]
+    mask_tmp = data[:,maskCol]
+
+    if uncrt is not None:
+        Ux_tmp = data[:, uncrt[0]]
+        Uy_tmp = data[:, uncrt[1]]
+
+    # sort position inputs
+    xs = np.sort(x_tmp, axis=0)
+    ys = np.sort(y_tmp, axis=0)
+
+    # number or rows will be how many columns are the same and vise versa
+    row = int(max(np.where(xs[0] == xs)[0]) + 1)
+    col = int(max(np.where(ys[0] == ys)[0]) + 1)
+
+    assert row*col == x_tmp.size, "nrows and/or ncols is wrong"
+    assert row*col == y_tmp.size, "nrows and/or ncols is wrong"
+
+    # Reshape arrays
+    if uncrt is not None:
+        x = x_tmp.reshape(row, col)
+        y = y_tmp.reshape(row, col)
+        u = u_tmp.reshape(row, col)
+        v = v_tmp.reshape(row, col)
+        mask = mask_tmp.reshape(row, col)
+        Ux = Ux_tmp.reshape(row, col)
+        Uy = Uy_tmp.reshape(row, col)
+        
+        return x, y, u, v, mask, Ux, Uy
+    else:
+        x = x_tmp.reshape(row, col)
+        y = y_tmp.reshape(row, col)
+        u = u_tmp.reshape(row, col)
+        v = v_tmp.reshape(row, col)
+        mask = mask_tmp.reshape(row, col)
+        return x, y, u, v, mask
 
 
 def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t', units = ["m", "m", "m/s", "m/s"] ):
