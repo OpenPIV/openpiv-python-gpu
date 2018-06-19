@@ -981,7 +981,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
                     # make sure predictor is an integer
                     F[K+1,I,J,6] = np.round(F[K,I,J,4]) #dpx_k+1 = dx_k 
-                    F[K+1,I,J,7] = F[K,I,J,5] #dpy_k+1 = dy_k
+                    F[K+1,I,J,7] = np.round(F[K,I,J,5]) #dpy_k+1 = dy_k
                 #interpolate if dimensions do not agree
                 else:
                     F[K+1,I,J,6] = np.round(interpolate_surroundings(F,Nrow,Ncol,W,Overlap,K,I,J, 4))
