@@ -1212,16 +1212,16 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print " "
 
         if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
-             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6] =  gpu_floor(d_F[K, :Nrow[K], :Ncol[K], 4].copy()) #dpx_k+1 = dx_k 
-             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 7] =  gpu_floor(d_F[K, :Nrow[K], :Ncol[K], 5].copy()) #dpy_k+1 = dy_k
+             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6] =  gpu_round(d_F[K, :Nrow[K], :Ncol[K], 4].copy()) #dpx_k+1 = dx_k 
+             d_F[K+1, :Nrow[K+1], :Ncol[K+1], 7] =  gpu_round(d_F[K, :Nrow[K], :Ncol[K], 5].copy()) #dpy_k+1 = dy_k
         #interpolate if dimensions do not agree
         else:
             v_list = np.ones((Nrow[-1], Ncol[-1]), dtype=bool)
             #interpolate velocity onto next iterations grid. Then take the floor as the predictor for the next step 
             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 4)
             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 5)
-            d_F[K+1,:,:,6] =  gpu_floor(d_F[K+1,:,:,4].copy())
-            d_F[K+1,:,:,7] =  gpu_floor(d_F[K+1,:,:,5].copy())
+            d_F[K+1,:,:,6] =  gpu_round(d_F[K+1,:,:,4].copy())
+            d_F[K+1,:,:,7] =  gpu_round(d_F[K+1,:,:,5].copy())
         # delete old correlation function
         del(c)
 
@@ -1695,8 +1695,8 @@ def gpu_update(d_F, sig2noise, i_peak, j_peak, Nrow, Ncol, nfft, dt, K):
             //Index for each IW in the F array
             int F_idx = w_idx*fourth_dim;
             
-            F[F_idx + 2] = floorf(F[F_idx + 0] + F[F_idx + 6]);
-            F[F_idx + 3] = floorf(F[F_idx + 1] + F[F_idx + 7]);
+            F[F_idx + 2] = F[F_idx + 0] + F[F_idx + 6];
+            F[F_idx + 3] = F[F_idx + 1] + F[F_idx + 7];
         
             F[F_idx + 8] = i_peak[w_idx] - nfft/2;
             F[F_idx + 9] = j_peak[w_idx] - nfft/2;
@@ -2885,9 +2885,65 @@ def gpu_floor(d_src, ReturnInput=False):
     # get and execute kernel
     floor_gpu = mod_floor.get_function("floor_gpu")
     floor_gpu(d_dst, d_src, N, block = (block_size, 1,1), grid = (x_blocks, 1))
+       
+    if(ReturnInput == False):
+        # free some gpu memory
+        d_src.gpudata.free()
+        return(d_dst)
+    elif(ReturnInput == True):
+        return(d_dst, d_src)
+    else:
+        raise ValueError("ReturnInput is currently {}. Must be of type boolean".format(ReturnInput))
+        
+
+def gpu_round(d_src, ReturnInput=False):
+    """
+    Rounds of each element in the gpu array
     
+    Parameters
+    ----------
     
+    d_src: gpuarray
+        array to take the floor of
     
+    Returns
+    -------
+    
+    d_dest: gpuarray
+        Same size as d_src. Contains the floored values of d_src.
+        
+    """
+    assert type(ReturnInput) == bool, "ReturnInput is {}. Must be of type boolean".format(type(ReturnInput))
+    
+    mod_round = SourceModule("""
+    __global__ void round_gpu(float *dest, float *src, int N)
+    {
+        // dest : array to store values
+        // src : array of values to be floored
+
+        int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+        // Avoid the boundary
+        if(tid >= N){return;}
+
+        dest[tid] = roundf(src[tid]);
+    } 
+    """)
+    
+    # create array to store data
+    d_dst = gpuarray.empty_like(d_src)
+    
+    # get array size for gpu
+    N = np.int32(d_src.size)
+    
+    # define gpu parameters
+    block_size = 8
+    x_blocks = int(N//block_size + 1)
+    
+    # get and execute kernel
+    round_gpu = mod_round.get_function("round_gpu")
+    round_gpu(d_dst, d_src, N, block = (block_size, 1,1), grid = (x_blocks, 1))
+       
     if(ReturnInput == False):
         # free some gpu memory
         d_src.gpudata.free()
