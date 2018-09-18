@@ -1,5 +1,7 @@
 # openpiv-python-gpu
-GPU accelerated version of OpenPIV in Python
+GPU accelerated version of OpenPIV in Python. The algorithm and functions are mostly the same 
+as the CPU version. The main difference is that it runs much faster. The source code has been 
+augmented with CUDA, so it will only run on NVIDIA GPUs.
 
 
 ## Warning
