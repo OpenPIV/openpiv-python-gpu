@@ -11,3 +11,8 @@ Spin off multiple threads to utilize multiple GPUs
 ## Port to Python 3
 I don't think this would be that hard. Change up some print statements, get rid of the progress bar
 
+## Move GPU functions to new file
+Move some GPU functions to a new file. Makes the code cleaner and makes development/testing easier.
+
+
+
