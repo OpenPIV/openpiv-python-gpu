@@ -14,5 +14,9 @@ I don't think this would be that hard. Change up some print statements, get rid 
 ## Move GPU functions to new file
 Move some GPU functions to a new file. Makes the code cleaner and makes development/testing easier.
 
+## Check dependencies
+Need to auto install dependencies, or at least look for dependencies and then list the ones
+that are not on the system.
+
 
 
