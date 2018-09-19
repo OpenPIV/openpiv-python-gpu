@@ -17,6 +17,8 @@ Windows will be tested. If you have access to one of these platforms
 please test the code. 
 
 ## Test without installation
-You can test the code without needing to install it. To test using Google's Colaboratory
-follow the link:
-https://colab.research.google.com/drive/1FqOOwtn_VWRhVEICDCvQyUg82nj5bMYP
+You can test the code without needing to install anything locally. Included in this 
+repository is the IPython Notebook 'Openpiv_Python_Cython_GPU_demo.ipynb'. When viewing 
+the file on Github there will be a link to view the notebook with Colaboratory. Clicking
+this will load the notebook into Googles free cloud computing service and you can test
+the GPU capabilities. 
