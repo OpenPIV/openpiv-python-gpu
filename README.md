@@ -25,5 +25,5 @@ the GPU capabilities.
 
 ## Contributors
 1. OpenPIV team, https://groups.google.com/forum/#!forum/openpiv-users
-2. https://github.com/CameronDallas5000
-3. https://github.com/alexlib
+2. Cameron Dallas https://github.com/CameronDallas5000
+3. Alex Liberzon https://github.com/alexlib
