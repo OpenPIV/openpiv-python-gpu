@@ -22,3 +22,8 @@ repository is the IPython Notebook [Openpiv_Python_Cython_GPU_demo.ipynb](Openpi
 When viewing the file on Github there will be a link to view the notebook with Colaboratory. 
 Clicking this will load the notebook into Googles free cloud computing service and you can test
 the GPU capabilities. 
+
+## Contributors
+1. OpenPIV team
+2. https://github.com/CameronDallas5000
+3. https://github.com/alexlib
