@@ -24,6 +24,6 @@ Clicking this will load the notebook into Googles free cloud computing service a
 the GPU capabilities. 
 
 ## Contributors
-1. OpenPIV team
+1. OpenPIV team, https://groups.google.com/forum/#!forum/openpiv-users
 2. https://github.com/CameronDallas5000
 3. https://github.com/alexlib
