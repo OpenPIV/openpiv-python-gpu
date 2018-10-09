@@ -86,7 +86,8 @@ class gpuThread(threading.Thread):
         self.gpuid = gpuid
 
     def run(self):
-        self.dev = cuda.Device(self.gpuid)
+        # REMEMBER TO SET THIS TO # OF DEVICES INSTEAD OF HARDCODING
+        self.dev = cuda.Device(self.gpuid%N)
         self.ctx = self.dev.make_context()
         print self.ctx.get_device()
         thread_gpu(self.gpuid)
@@ -97,7 +98,7 @@ cuda.init()
 numgpus = cuda.Device.count()
 
 for i in range(numgpus):
-    print i
-    print cuda.Device(i)
+    gpu_thread = gpuThread(i)
+    gpu.start()
 
 print "\nDone Processing data."
