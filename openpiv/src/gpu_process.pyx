@@ -5,6 +5,7 @@ from pycuda.compiler import SourceModule
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
 
+import skcuda.cublas as cu_cublas
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 
@@ -20,6 +21,7 @@ from progressbar import *
 
 cimport numpy as np
 cimport cython
+
 
 DTYPEi = np.int32
 ctypedef np.int32_t DTYPEi_t
@@ -974,10 +976,10 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     ####################################################
     # INITIALIZATIONS
     ####################################################
-    
-    # initialize scikits-cuda miscilaneous library
+
+    # Initialize skcuda miscellaneous library
     cu_misc.init()
-    
+
     # cast images as floats
     #TODO  changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
