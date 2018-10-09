@@ -1,6 +1,5 @@
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
 
-import pycuda.autoinit
 from pycuda.compiler import SourceModule
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
