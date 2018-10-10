@@ -96,3 +96,8 @@ if __name__ == "__main__":
     for i in range(100):
         p = GPUMulti(i%4, i, np.load(imA_list[i]).astype(np.int32), np.load(imB_list[i]).astype(np.int32))
         p.start()
+        if i%12 == 0:
+            for process in process_list:
+                process.join()
+            process_list = []
+        process_list.append(p)
