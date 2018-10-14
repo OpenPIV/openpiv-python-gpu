@@ -12,8 +12,6 @@ import glob, os
 import numpy as np
 import time
 
-               
-
 t = time.time()
 print "\n\nStarting Code"
 
@@ -26,8 +24,9 @@ class GPUMulti(Process):
         self.frame_b = frame_b
 
     def run(self):
+        process_time = time.time()
         thread_gpu(self.number, self.index, self.frame_a, self.frame_b)
-        print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - t, self.index)
+        print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - process_time, self.index)
 
 #==================================================================
 # PARAMETERS FOR OPENPIV
@@ -100,4 +99,5 @@ if __name__ == "__main__":
             for process in process_list:
                 process.join()
             process_list = []
+            print "\nTotal running time so far: %d" % (time.time() - t)
         process_list.append(p)
