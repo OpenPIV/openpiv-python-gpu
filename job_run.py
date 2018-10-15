@@ -16,18 +16,22 @@ t = time.time()
 print "\n\nStarting Code"
 
 class GPUMulti(Process):
-    def __init__(self, number, index, frame_a, frame_b):
+    def __init__(self, number, index, frame_a_arr, frame_b_arr):
         Process.__init__(self)
         self.number = number
         self.index = index
-        self.frame_a = frame_a
-        self.frame_b = frame_b
+        self.frame_a_arr = frame_a_arr
+        self.frame_b_arr = frame_b_arr
+        self.arr_length = len(frame_a_arr)
 
-    def run(self):
-        process_time = time.time()
-        thread_gpu(self.number, self.index, self.frame_a, self.frame_b)
-        print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - process_time, self.index)
-
+    def run(self): 
+        for i in range(self.arr_length):
+            process_time = time.time()
+            frame_a = np.load(self.frame_a_arr[i]).astype(np.int32) 
+            frame_b = np.load(self.frame_b_arr[i]).astype(np.int32)    
+            thread_gpu(self.number, self.index*self.arr_length + i, frame_a, frame_b)
+            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - process_time, self.index*self.arr_length + i)
+        print "\n Process %d took %d seconds to finish %d image pairs!" % (self.number, time.time() - t, len(self.frame_a_arr))
 #==================================================================
 # PARAMETERS FOR OPENPIV
 #==================================================================
@@ -89,15 +93,13 @@ def thread_gpu(gpuid, i, frame_a, frame_b):
     np.save(out_dir + "v_{:05d}.npy".format(i), v)
 
 if __name__ == "__main__":
-    
+   
+    num_processes = 12 
     process_list = []
     
-    for i in range(100):
-        p = GPUMulti(i%4, i, np.load(imA_list[i]).astype(np.int32), np.load(imB_list[i]).astype(np.int32))
-        p.start()
-        if i%12 == 0:
-            for process in process_list:
-                process.join()
-            process_list = []
-            print "\nTotal running time so far: %d" % (time.time() - t)
+    for i in range(num_processes):
+        p = GPUMulti(i%4, i, imA_list[i*num_processes: i*num_processes + num_processes], imB_list[i*num_processes: i*num_processes + num_processes])
         process_list.append(p)
+
+    for process in process_list:
+        process.start()
