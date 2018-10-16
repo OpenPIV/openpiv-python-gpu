@@ -27,6 +27,7 @@ class GPUMulti(Process):
 
     def run(self): 
         memory_exceptions = 0
+        self.string_list = []
         for i in range(self.arr_length):
             process_time = time.time()
             try:
@@ -36,9 +37,15 @@ class GPUMulti(Process):
             except:
                 memory_exceptions += 1
     
-            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.process_num, time.time() - process_time, self.start_index + i)
-            print "\nNumber of out of memory exceptions %d" % memory_exceptions
-        print "\n Process %d took %d seconds to finish %d image pairs (Pairs %d to %d)!" % (self.process_num, time.time() - t, self.arr_length, self.start_index, self.start_index + self.arr_length-1)
+            self.string_list.append("\nProcess %d took %d seconds to finish image pair %d!" % (self.process_num, time.time() - process_time, self.start_index + i))
+            self.string_list.append("\nNumber of out of memory exceptions %d" % memory_exceptions)
+        self.string_list.append("\n Process %d took %d seconds to finish %d image pairs (Pairs %d to %d)!" % (self.process_num, time.time() - t, self.arr_length, self.start_index, self.start_index + self.arr_length-1))
+
+        self.print_string_list()
+
+    def print_string_list(self):
+        for string in self.string_list:
+            print string
 
 def thread_gpu(gpuid, i, frame_a, frame_b):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
@@ -100,22 +107,34 @@ units = ["m", "m", "m/s", "m/s" ]
 header = "x [{}],\ty [{}],\tu [{}],\tv [{}],\tmask ".format(units[0], units[1], units[2], units[3])
 N = len(imB_list)
 
-# Don't child processes to infinitely, recursively spawn new child processes.
+# Don't spawn child processes to infinitely, recursively spawn new child processes.
 if __name__ == "__main__":
    
-    num_processes = 12
-    num_images = 1000
+    num_processes = 20 
+    num_images = 1000 
 
     partitions = int(num_images/(num_processes))
-    remainder = 1 if num_images % num_processes == 0 else 0
+    if num_images % num_processes != 0:
+        partitions += 1
+    
+    print "\nPartition Size: %d" % partitions
 
     process_list = []
 
     # Iterate one extra time if there's a remainder
-    for i in range(num_processes + remainder):
+    for i in range(num_processes):
+        # If we go over array bounds, stop spawning new processes
+        if i*partitions > N:
+            break
         start_index = i*partitions
         p = GPUMulti(i%4, i, start_index, imA_list[start_index: start_index + partitions], imB_list[start_index: start_index + partitions])
         p.start()
-
-    for process in process_list:
-        process.join()
+    
+    try:
+        for process in process_list:
+            process.join()
+    except KeyboardInterrupt:
+        for process in process_list:
+            process.terminate()
+            process.join()
+    
