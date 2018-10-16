@@ -32,6 +32,33 @@ class GPUMulti(Process):
             thread_gpu(self.number, self.index*self.arr_length + i, frame_a, frame_b)
             print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - process_time, self.index*self.arr_length + i)
         print "\n Process %d took %d seconds to finish %d image pairs!" % (self.number, time.time() - t, len(self.frame_a_arr))
+
+def thread_gpu(gpuid, i, frame_a, frame_b):
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
+    import openpiv.gpu_process
+    x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.int32),
+                                                 min_window_size,
+                                                 overlap,
+                                                 coarse_factor,
+                                                 dt,
+                                                 validation_iter=validation_iter,
+                                                 nb_iter_max=nb_iter_max)
+
+    if x_scale != 1.0 or y_scale != 1.0:
+        # scale the data
+        x = x * x_scale
+        u = u * x_scale
+        y = y * y_scale
+        v = v * y_scale
+
+    # save the data
+    if i == 0:
+        np.save(out_dir + "x.npy", x)
+        np.save(out_dir + "y.npy", y)
+
+    np.save(out_dir + "u_{:05d}.npy".format(i), u)
+    np.save(out_dir + "v_{:05d}.npy".format(i), v)
+
 #==================================================================
 # PARAMETERS FOR OPENPIV
 #==================================================================
@@ -65,40 +92,19 @@ imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
 units = ["m", "m", "m/s", "m/s" ]
 header = "x [{}],\ty [{}],\tu [{}],\tv [{}],\tmask ".format(units[0], units[1], units[2], units[3])
 N = len(imB_list)
-  
-def thread_gpu(gpuid, i, frame_a, frame_b):
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
-    import openpiv.gpu_process
-    x,y,u,v,mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.int32),
-                                             min_window_size,
-                                             overlap,
-                                             coarse_factor,
-                                             dt,
-                                             validation_iter=validation_iter,
-                                             nb_iter_max = nb_iter_max)
-    
-    if x_scale != 1.0 or y_scale != 1.0: 
-        # scale the data
-        x = x*x_scale
-        u = u*x_scale
-        y = y*y_scale
-        v = v*y_scale
-    
-    # save the data
-    if i == 0:
-        np.save(out_dir + "x.npy", x)
-        np.save(out_dir + "y.npy", y)  
 
-    np.save(out_dir + "u_{:05d}.npy".format(i), u)
-    np.save(out_dir + "v_{:05d}.npy".format(i), v)
-
+# Don't child processes to infinitely, recursively spawn new child processes.
 if __name__ == "__main__":
    
-    num_processes = 12 
+    num_processes = 12
+    num_images = 1000
+
+    partitions = int(num_images/(num_processes + 1))
+
     process_list = []
     
-    for i in range(num_processes):
-        p = GPUMulti(i%4, i, imA_list[i*num_processes: i*num_processes + num_processes], imB_list[i*num_processes: i*num_processes + num_processes])
+    for i in range(0, num_images, partitions):
+        p = GPUMulti(i%4, i, imA_list[i*partitions: i*partitions + partitions], imB_list[i*partitions: i*partitions + partitions])
         process_list.append(p)
 
     for process in process_list:
