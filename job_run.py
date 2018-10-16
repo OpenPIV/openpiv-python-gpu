@@ -100,12 +100,14 @@ if __name__ == "__main__":
     num_images = 37
 
     partitions = int(num_images/(num_processes + 1))
+    remainder = 1 if num_images % num_processes == 0 else 0
 
     process_list = []
-    counter = 0
 
-    for i in range(0, num_images, partitions):
-        p = GPUMulti(counter, i, imA_list[i: i + partitions], imB_list[i: i + partitions])
+    # Iterate one extra time if there's a remainder
+    for i in range(num_processes + remainder):
+        start_index = i*partitions
+        p = GPUMulti(i%4, start_index, imA_list[start_index: start_index + partitions], imB_list[start_index: start_index + partitions])
         p.start()
 
     for process in process_list:
