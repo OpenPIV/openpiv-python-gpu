@@ -16,10 +16,10 @@ t = time.time()
 print "\n\nStarting Code"
 
 class GPUMulti(Process):
-    def __init__(self, number, index, frame_a_arr, frame_b_arr):
+    def __init__(self, gpuid, start_index, frame_a_arr, frame_b_arr):
         Process.__init__(self)
-        self.number = number
-        self.index = index
+        self.gpuid = gpuid
+        self.start_index = start_index
         self.frame_a_arr = frame_a_arr
         self.frame_b_arr = frame_b_arr
         self.arr_length = len(frame_a_arr)
@@ -29,9 +29,9 @@ class GPUMulti(Process):
             process_time = time.time()
             frame_a = np.load(self.frame_a_arr[i]).astype(np.int32) 
             frame_b = np.load(self.frame_b_arr[i]).astype(np.int32)    
-            thread_gpu(self.number, self.index*self.arr_length + i, frame_a, frame_b)
-            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.number, time.time() - process_time, self.index*self.arr_length + i)
-        print "\n Process %d took %d seconds to finish %d image pairs!" % (self.number, time.time() - t, len(self.frame_a_arr))
+            thread_gpu(self.gpuid, self.start_index + i, frame_a, frame_b)
+            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.gpuid, time.time() - process_time, self.start_index + i)
+        print "\n Process %d took %d seconds to finish %d image pairs!" % (self.gpuid, time.time() - t, len(self.frame_a_arr))
 
 def thread_gpu(gpuid, i, frame_a, frame_b):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
@@ -102,10 +102,11 @@ if __name__ == "__main__":
     partitions = int(num_images/(num_processes + 1))
 
     process_list = []
-    
+    counter = 0
+
     for i in range(0, num_images, partitions):
-        p = GPUMulti(i%4, i, imA_list[i*partitions: i*partitions + partitions], imB_list[i*partitions: i*partitions + partitions])
-        process_list.append(p)
+        p = GPUMulti(counter, i, imA_list[i: i + partitions], imB_list[i: i + partitions])
+        p.start()
 
     for process in process_list:
         process.start()
