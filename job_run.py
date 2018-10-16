@@ -97,7 +97,7 @@ N = len(imB_list)
 if __name__ == "__main__":
    
     num_processes = 12
-    num_images = 1000
+    num_images = 37
 
     partitions = int(num_images/(num_processes + 1))
 
@@ -109,4 +109,4 @@ if __name__ == "__main__":
         p.start()
 
     for process in process_list:
-        process.start()
+        process.join()
