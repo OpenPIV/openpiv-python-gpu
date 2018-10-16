@@ -16,9 +16,10 @@ t = time.time()
 print "\n\nStarting Code"
 
 class GPUMulti(Process):
-    def __init__(self, gpuid, start_index, frame_a_arr, frame_b_arr):
+    def __init__(self, gpuid, process_num, start_index, frame_a_arr, frame_b_arr):
         Process.__init__(self)
         self.gpuid = gpuid
+        self.process_num = process_num
         self.start_index = start_index
         self.frame_a_arr = frame_a_arr
         self.frame_b_arr = frame_b_arr
@@ -35,9 +36,9 @@ class GPUMulti(Process):
             except:
                 memory_exceptions += 1
     
-            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.gpuid, time.time() - process_time, self.start_index + i)
+            print "\nProcess %d took %d seconds to finish image pair %d!" % (self.process_num, time.time() - process_time, self.start_index + i)
             print "\nNumber of out of memory exceptions %d" % memory_exceptions
-        print "\n Process %d took %d seconds to finish %d image pairs (Pairs %d to %d)!" % (self.gpuid, time.time() - t, self.arr_length, self.start_index, self.start_index + self.arr_length-1)
+        print "\n Process %d took %d seconds to finish %d image pairs (Pairs %d to %d)!" % (self.process_num, time.time() - t, self.arr_length, self.start_index, self.start_index + self.arr_length-1)
 
 def thread_gpu(gpuid, i, frame_a, frame_b):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
@@ -113,7 +114,7 @@ if __name__ == "__main__":
     # Iterate one extra time if there's a remainder
     for i in range(num_processes + remainder):
         start_index = i*partitions
-        p = GPUMulti(i%4, start_index, imA_list[start_index: start_index + partitions], imB_list[start_index: start_index + partitions])
+        p = GPUMulti(i%4, i, start_index, imA_list[start_index: start_index + partitions], imB_list[start_index: start_index + partitions])
         p.start()
 
     for process in process_list:
