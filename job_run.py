@@ -6,7 +6,6 @@ Use GPU accalerated version of OpenPIV
 
 """
 
-import multiprocessing
 from multiprocessing import Process
 import glob, os
 import numpy as np
