@@ -6,6 +6,8 @@ which is what happens with python's multithreading.
 
 """
 
+from __future__ import division
+
 from multiprocessing import Process
 from glob import glob
 from time import time
@@ -13,42 +15,29 @@ from time import time
 import numpy as np
 import os
 
-CUDA_STRING = 'CUDA_VISIBLE_DEVICES'
+import glob
+import sys
 
-#==================================================================
-# PARAMETERS FOR OPENPIV
-#==================================================================
-dt = 5e-6
-min_window_size = 16
-overlap = 0.50
-coarse_factor = 2
-nb_iter_max = 3
-validation_iter = 1
-x_scale = 7.45e-6  # m/pixel
-y_scale = 7.41e-6  # m/pixel
+import matplotlib.pyplot as plt
+import scipy.interpolate as interp
 
-# path to input and output directory
-im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
-out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data/"
+if sys.version_info[0] == 3:
+    print("This system is using Python 3, but OpenPIV requires Python 2")
 
-# make sure path is correct
-if im_dir[-1] != '':
-    im_dir = im_dir + '/'
-if out_dir[-1] != '/':
-    out_dir = out_dir + '/'
+# OpenPIV requires Python 2
+if sys.version_info[0] == 2:
+    import openpiv.filters
 
-# change pattern to your filename pattern
-imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
-imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
-num_images = len(imB_list)
 
-start_time = time()
-
+# TODO -- separate the functions into separate module
 class MPGPU(Process):
 
+    # Keep all properties that belong to an individual openpiv function within the properties dict
+    # to keep the responsibilities of this class clear (multiprocessing, not keeping track of parameters)
     def __init__(self, gpuid,
                  process_num, start_index,
-                 frame_list_a, frame_list_b):
+                 frame_list_a, frame_list_b,
+                 properties):
         Process.__init__(self)
         self.gpuid = gpuid
         self.process_num = process_num
@@ -56,53 +45,37 @@ class MPGPU(Process):
         self.frame_list_a = frame_list_a
         self.frame_list_b = frame_list_b
         self.num_images = len(frame_list_a)
+        self.properties = properties
         self.exceptions = 0
 
     def run(self):
+        process_time = time()
+        out_dir = self.properties["out_dir"]
+        func = self.properties["gpu_func"]
+
         for i in range(self.num_images):
             try:
                 frame_a, frame_b = self.load_images(self.frame_list_a[i], self.frame_list_b)
-                self.widim_gpu(self.gpuid, self.start_index + i, frame_a, frame_b)
+                func(self.gpuid, self.start_index + i, frame_a, frame_b, out_dir)
             except:
-                print "\n An exception occured!"
+                print "\n An exception occurred!"
                 self.exceptions += 1
 
-        print "\nProcess %d took %d seconds to finish image pair %d!" % (self.process_num, time.time() - process_time, self.start_index + i)
+        print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
+                                                                                     time() - process_time,
+                                                                                     self.num_images,
+                                                                                     self.start_index,
+                                                                                     self.start_index + self.num_images)
         print "\nNumber of exceptions: %d" % self.exceptions
-
-    def widim_gpu(self, gpuid, start_index, frame_a, frame_b):
-        os.environ[CUDA_STRING] = str(gpuid)
-        # Import after setting device number, since gpu_process has autoinit enabled.
-        import openpiv.gpu_process
-        x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.in32),
-                                                     min_window_size,
-                                                     overlap,
-                                                     coarse_factor,
-                                                     dt,
-                                                     validation_iter=validation_iter,
-                                                     nb_inter_max=nb_iter_max)
-
-        if x_scale != 1.0 or y_scale != 1.0:
-            # scale the data
-            x = x * x_scale
-            u = u * x_scale
-            y = y * y_scale
-            v = v * y_scale
-
-        # save the data
-        if start_index == 0:
-            np.save(out_dir + "x.npy", x)
-            np.save(out_dir + "y.npy", y)
-
-        np.save(out_dir + "u_{:05}.npy".format(start_index), u[::-1, :])
-        np.save(out_dir + "v_{:05}.npy".format(start_index), v[::-1, :])
 
     @staticmethod
     def load_images(image_a, image_b):
         return np.load(image_a).astype(np.int32), np.load(image_b).astype(np.int32)
 
 
-def parallelize(num_items, num_processes, list_tuple):
+def parallelize(num_items, num_processes, list_tuple, properties):
+    # Properties contains data relevant to a particular openpiv function
+
     partitions = int(num_items/num_processes)
 
     if num_items % num_processes != 0:
@@ -119,7 +92,7 @@ def parallelize(num_items, num_processes, list_tuple):
         start_index = i*partitions
         subList_A = list_tuple(0)[start_index: start_index + partitions]
         subList_B = list_tuple(1)[start_index: start_index + partitions]
-        process = MGPU(i%4, i, start_index, subList_A, subList_B)
+        process = MPGPU(i%4, i, start_index, subList_A, subList_B, properties)
         process.start()
         process_list.append(process)
 
@@ -132,39 +105,6 @@ def parallelize(num_items, num_processes, list_tuple):
             process.terminate()
             process.join()
 
-
-if __name__ == "__main__":
-
-    # TODO make these configurable
-    num_processes = 20
-    num_images = 100 # Remove this if you want to process the entire image set
-
-    # Processing images
-    parallelize(num_images, num_processes, (imA_list, imB_list))
-
-    # Post-processing
-    # > Replace outliers
-    parallelize(num_images)
-
-# ===============================================================================
-# IMPORT MODULES
-# ===============================================================================
-
-from __future__ import division
-
-import glob
-import sys
-
-import numpy as np
-import matplotlib.pyplot as plt
-import scipy.interpolate as interp
-
-if sys.version_info[0] == 3:
-    print("This system is using Python 3, but OpenPIV requires Python 2")
-
-# OpenPIV requires Python 2
-if sys.version_info[0] == 2:
-    import openpiv.filters
 
 # ===============================================================================
 # DEFINE VARIABLES FOR DIRECTORIES
@@ -433,14 +373,87 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
         plt.colorbar()
         plt.show()
 
-    return (mask_int)
+    return mask_int
 
 
-# ===============================================================================
-# FUNCTION CALLS
-# ===============================================================================
+def widim_gpu(gpuid, start_index, frame_a, frame_b, out_dir):
+
+    # TODO -- Decouple these parameters from the functions below and pass them in
+    # ==================================================================
+    # PARAMETERS FOR OPENPIV
+    # ==================================================================
+    dt = 5e-6
+    min_window_size = 16
+    overlap = 0.50
+    coarse_factor = 2
+    nb_iter_max = 3
+    validation_iter = 1
+    x_scale = 7.45e-6  # m/pixel
+    y_scale = 7.41e-6  # m/pixel
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
+
+    # Import after setting device number, since gpu_process has autoinit enabled.
+    import openpiv.gpu_process
+    x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.in32),
+                                                 min_window_size,
+                                                 overlap,
+                                                 coarse_factor,
+                                                 dt,
+                                                 validation_iter=validation_iter,
+                                                 nb_inter_max=nb_iter_max)
+
+    if x_scale != 1.0 or y_scale != 1.0:
+        # scale the data
+        x = x * x_scale
+        u = u * x_scale
+        y = y * y_scale
+        v = v * y_scale
+
+    # save the data
+    if start_index == 0:
+        np.save(out_dir + "x.npy", x)
+        np.save(out_dir + "y.npy", y)
+
+    # Note: we're reversing u and v here only because the camera input is inverted. If the camera ever takes
+    # images in the correct orientations, we'll have to remove u[::-1, :].
+    np.save(out_dir + "u_{:05}.npy".format(start_index), u[::-1, :])
+    np.save(out_dir + "v_{:05}.npy".format(start_index), v[::-1, :])
+
 
 if __name__ == "__main__":
+
+    # path to input and output directory
+    im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
+    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data/"
+    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data/"
+
+    # make sure path is correct
+    if im_dir[-1] != '':
+        im_dir = im_dir + '/'
+    if out_dir[-1] != '/':
+        out_dir = out_dir + '/'
+
+    # change pattern to your filename pattern
+    imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
+    imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
+    num_images = len(imB_list)
+
+    # TODO make these configurable
+    num_processes = 20
+    num_images = 100  # Remove this if you want to process the entire image set
+
+    # Processing images
+    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
+    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
+
+    # Post-processing
+    # > Replace outliers
+    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
+    u_list = sorted(glob.glob(out_dir + "u*.npy"))
+    v_list = sorted(glob.glob(out_dir + "v*.npy"))
+
+    routliers_properties = {"gpu_func": replace_outliers, "out_dir": rep_dir}
+    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
 
     # Interpolate the mask onto the PIV grid
     if "mask_int" not in locals():
