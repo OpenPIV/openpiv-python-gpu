@@ -18,7 +18,7 @@ import os
 import glob
 import sys
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import scipy.interpolate as interp
 
 if sys.version_info[0] == 3:
@@ -327,8 +327,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     """
     SAVE y.npy IN THE GPU CODE SO THAT IT IS FLIPPED IN THE CORRECT ORIENTATION
     SO IT SHOULD NOT HAVE TO BE FLIPPED AGAIN HERE
-    """
-    x_r = np.load(data_dir + "x.npy")[0, :]
+    """x_r = np.load(data_dir + "x.npy")[0, :]
     y_r = np.load(data_dir + "y.npy")[::-1, 0]  # change this when GPU code is changed
 
     x_pix = np.linspace(x_r[0], x_r[-1], len(mask[0, :]))
@@ -352,15 +351,15 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
             mask_int[high:high + exp + 1, i] = 0
 
     # plot some shit
-    if plot:
-        mask_plot = mask.astype(float)
-        mask_plot[mask] = np.nan
-        mask_int_plot = mask_int.astype(float) + 10
-        mask_int_plot[mask_int] = np.nan
-        plt.pcolormesh(x_r, y_r, mask_int_plot, cmap="jet")
-        plt.pcolormesh(x_pix, y_pix, mask_plot, cmap="jet")
-        plt.colorbar()
-        plt.show()
+    # if plot:
+    #     mask_plot = mask.astype(float)
+    #     mask_plot[mask] = np.nan
+    #     mask_int_plot = mask_int.astype(float) + 10
+    #     mask_int_plot[mask_int] = np.nan
+    #     plt.pcolormesh(x_r, y_r, mask_int_plot, cmap="jet")
+    #     plt.pcolormesh(x_pix, y_pix, mask_plot, cmap="jet")
+    #     plt.colorbar()
+    #     plt.show()
 
     return mask_int
 
@@ -444,7 +443,7 @@ if __name__ == "__main__":
 
     # Interpolate the mask onto the PIV grid
     if "mask_int" not in locals():
-        mask_int = interp_mask(mask, analysis_dir + "raw_data/", exp=2)
+        mask_int = interp_mask(mask, out_dir + "/", exp=2)
 
     routliers_properties = {
         "gpu_func": replace_outliers, "out_dir": rep_dir,
