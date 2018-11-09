@@ -89,8 +89,8 @@ def parallelize(num_items, num_processes, list_tuple, properties):
         if i*partitions > num_items:
             break
         start_index = i*partitions
-        subList_A = list_tuple(0)[start_index: start_index + partitions]
-        subList_B = list_tuple(1)[start_index: start_index + partitions]
+        subList_A = list_tuple[0][start_index: start_index + partitions]
+        subList_B = list_tuple[1][start_index: start_index + partitions]
         process = MPGPU(i%4, i, start_index, subList_A, subList_B, properties)
         process.start()
         process_list.append(process)
