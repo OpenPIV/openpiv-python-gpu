@@ -53,12 +53,10 @@ class MPGPU(Process):
         func = self.properties["gpu_func"]
 
         for i in range(self.num_images):
-            try:
-                frame_a, frame_b = self.load_images(self.frame_list_a[i], self.frame_list_b)
-                func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
-            except:
-                print "\n An exception occurred!"
-                self.exceptions += 1
+            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]
+            func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
+            print "\n An exception occurred!"
+            self.exceptions += 1
 
         print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
                                                                                      time() - process_time,
@@ -292,7 +290,7 @@ def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
 
 
 # self.start_index + i, frame_a, frame_b, properties, gpuid (named)
-def replace_outliers(image_pair_num, u, v, properties):
+def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     """
     This function first loads all the output data from the output directory
     and applies the mask. All masked elements are assign NaN. A single pair of
@@ -301,9 +299,14 @@ def replace_outliers(image_pair_num, u, v, properties):
     """
 
     # TODO: just realized **kwargs is a thing, so need to change to that after.
-    output_dir = properties["output_dir"]
+    output_dir = properties["out_dir"]
     mask = properties["mask"]
     r_thresh = properties["r_thresh"]
+
+    u = np.load(u_file)
+    v = np.load(v_file)
+
+    u, v = u[::-1,:], v[::-1,:]
 
     u[mask] = np.nan
     v[mask] = np.nan
@@ -365,7 +368,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     return mask_int
 
 
-def widim_gpu(start_index, frame_a, frame_b, properties, gpuid=0):
+def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
     # TODO -- Decouple these parameters from the functions below and pass them in
     # ==================================================================
@@ -382,15 +385,18 @@ def widim_gpu(start_index, frame_a, frame_b, properties, gpuid=0):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
     out_dir = properties["out_dir"]
 
+    frame_a = np.load(frame_a_file).astype(np.int32)
+    frame_b = np.load(frame_b_file).astype(np.int32)
+
     # Import after setting device number, since gpu_process has autoinit enabled.
     import openpiv.gpu_process
-    x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.in32),
+    x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, np.ones_like(frame_a, dtype=np.int32),
                                                  min_window_size,
                                                  overlap,
                                                  coarse_factor,
                                                  dt,
                                                  validation_iter=validation_iter,
-                                                 nb_inter_max=nb_iter_max)
+                                                 nb_iter_max=nb_iter_max)
 
     if x_scale != 1.0 or y_scale != 1.0:
         # scale the data
