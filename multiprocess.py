@@ -327,7 +327,8 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     """
     SAVE y.npy IN THE GPU CODE SO THAT IT IS FLIPPED IN THE CORRECT ORIENTATION
     SO IT SHOULD NOT HAVE TO BE FLIPPED AGAIN HERE
-    """x_r = np.load(data_dir + "x.npy")[0, :]
+    """
+    x_r = np.load(data_dir + "x.npy")[0, :]
     y_r = np.load(data_dir + "y.npy")[::-1, 0]  # change this when GPU code is changed
 
     x_pix = np.linspace(x_r[0], x_r[-1], len(mask[0, :]))
