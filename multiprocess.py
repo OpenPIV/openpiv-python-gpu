@@ -28,6 +28,17 @@ if sys.version_info[0] == 3:
 if sys.version_info[0] == 2:
     import openpiv.filters
 
+import traceback
+import warnings
+import sys
+
+def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+
+    log = file if hasattr(file,'write') else sys.stderr
+    traceback.print_stack(file=log)
+    log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+warnings.showwarning = warn_with_traceback
 
 # TODO -- separate the functions into separate module
 class MPGPU(Process):
@@ -306,8 +317,6 @@ def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     u = np.load(u_file)
     v = np.load(v_file)
 
-    u, v = u[::-1,:], v[::-1,:]
-
     u[mask] = np.nan
     v[mask] = np.nan
 
@@ -332,7 +341,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     SO IT SHOULD NOT HAVE TO BE FLIPPED AGAIN HERE
     """
     x_r = np.load(data_dir + "x.npy")[0, :]
-    y_r = np.load(data_dir + "y.npy")[::-1, 0]  # change this when GPU code is changed
+    y_r = np.load(data_dir + "y.npy")
 
     x_pix = np.linspace(x_r[0], x_r[-1], len(mask[0, :]))
     y_pix = np.linspace(y_r.min(), y_r.max(), len(mask[:, 0]))
@@ -408,7 +417,7 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     # save the data
     if start_index == 0:
         np.save(out_dir + "x.npy", x)
-        np.save(out_dir + "y.npy", y)
+        np.save(out_dir + "y.npy", y[::-1, 0])
 
     # Note: we're reversing u and v here only because the camera input is inverted. If the camera ever takes
     # images in the correct orientations, we'll have to remove u[::-1, :].
@@ -436,7 +445,7 @@ if __name__ == "__main__":
 
     # TODO make these configurable
     num_processes = 20
-    num_images = 100  # Remove this if you want to process the entire image set
+    num_images = 20  # Remove this if you want to process the entire image set
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
@@ -449,11 +458,14 @@ if __name__ == "__main__":
     v_list = sorted(glob.glob(out_dir + "v*.npy"))
 
     # Interpolate the mask onto the PIV grid
-    if "mask_int" not in locals():
-        mask_int = interp_mask(mask, out_dir + "/", exp=2)
+    try:
+        if "mask_int" not in locals():
+            mask_int = interp_mask(mask, out_dir + "/", exp=2)
 
-    routliers_properties = {
-        "gpu_func": replace_outliers, "out_dir": rep_dir,
-        "mask": mask_int, "r_thresh": r_thresh
-        }
-    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+        routliers_properties = {
+            "gpu_func": replace_outliers, "out_dir": rep_dir,
+            "mask": mask_int, "r_thresh": r_thresh
+            }
+        parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+    except RuntimeWarning as rw:
+        print rw
