@@ -50,13 +50,12 @@ class MPGPU(Process):
 
     def run(self):
         process_time = time()
-        out_dir = self.properties["out_dir"]
         func = self.properties["gpu_func"]
 
         for i in range(self.num_images):
             try:
                 frame_a, frame_b = self.load_images(self.frame_list_a[i], self.frame_list_b)
-                func(self.gpuid, self.start_index + i, frame_a, frame_b, out_dir)
+                func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
             except:
                 print "\n An exception occurred!"
                 self.exceptions += 1
@@ -292,7 +291,8 @@ def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
     return (u_out, v_out)
 
 
-def replace_outliers(data_dir, output_dir, mask, r_thresh):
+# self.start_index + i, frame_a, frame_b, properties, gpuid (named)
+def replace_outliers(image_pair_num, u, v, properties):
     """
     This function first loads all the output data from the output directory
     and applies the mask. All masked elements are assign NaN. A single pair of
@@ -300,31 +300,20 @@ def replace_outliers(data_dir, output_dir, mask, r_thresh):
     outliers are identified and later replaced using openpiv.filters
     """
 
-    # load all output files
-    u_list = sorted(glob.glob(data_dir + "u*.npy"))
-    v_list = sorted(glob.glob(data_dir + "v*.npy"))
+    # TODO: just realized **kwargs is a thing, so need to change to that after.
+    output_dir = properties["output_dir"]
+    mask = properties["mask"]
+    r_thresh = properties["r_thresh"]
 
-    for i in range(len(u_list)):
-        print("processing file {} of {}".format(i, len(u_list)))
+    u[mask] = np.nan
+    v[mask] = np.nan
 
-        # load one pair of output files at a time
-        u = np.load(u_list[i])
-        v = np.load(v_list[i])
+    # call outlier_detection (which replaces the outliers)
+    u_out, v_out = outlier_detection(u, v, r_thresh, mask=mask)
 
-        # flip the data - NO NEED IF THE OUTPUT DATA IS IN THE RIGHT ORINETATION
-        # u = u[::-1,:]
-        # v = v[::-1,:]
-
-        # apply mask - MASK IS LOADED IN CORRECT ORIENTATION
-        u[mask] = np.nan
-        v[mask] = np.nan
-
-        # call outlier_detection (which replaces the outliers)
-        u_out, v_out = outlier_detection(u, v, r_thresh, mask=mask)
-
-        # save to the replacement directory
-        np.save(output_dir + "u_repout_{:05d}.npy".format(i), u_out)
-        np.save(output_dir + "v_repout_{:05d}.npy".format(i), v_out)
+    # save to the replacement directory
+    np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
+    np.save(output_dir + "v_repout_{:05d}.npy".format(image_pair_num), v_out)
 
 
 def interp_mask(mask, data_dir, exp=0, plot=False):
@@ -376,7 +365,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     return mask_int
 
 
-def widim_gpu(gpuid, start_index, frame_a, frame_b, out_dir):
+def widim_gpu(start_index, frame_a, frame_b, properties, gpuid=0):
 
     # TODO -- Decouple these parameters from the functions below and pass them in
     # ==================================================================
@@ -391,6 +380,7 @@ def widim_gpu(gpuid, start_index, frame_a, frame_b, out_dir):
     x_scale = 7.45e-6  # m/pixel
     y_scale = 7.41e-6  # m/pixel
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
+    out_dir = properties["out_dir"]
 
     # Import after setting device number, since gpu_process has autoinit enabled.
     import openpiv.gpu_process
@@ -452,12 +442,12 @@ if __name__ == "__main__":
     u_list = sorted(glob.glob(out_dir + "u*.npy"))
     v_list = sorted(glob.glob(out_dir + "v*.npy"))
 
-    routliers_properties = {"gpu_func": replace_outliers, "out_dir": rep_dir}
-    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
-
     # Interpolate the mask onto the PIV grid
     if "mask_int" not in locals():
         mask_int = interp_mask(mask, analysis_dir + "raw_data/", exp=2)
 
-    # Replace outliers
-    replace_outliers(analysis_dir + "raw_data/", rep_dir, mask_int, r_thresh)
+    routliers_properties = {
+        "gpu_func": replace_outliers, "out_dir": rep_dir,
+        "mask": mask_int, "r_thresh": r_thresh
+        }
+    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
