@@ -28,17 +28,18 @@ if sys.version_info[0] == 3:
 if sys.version_info[0] == 2:
     import openpiv.filters
 
-import traceback
-import warnings
-import sys
+#import traceback
+#import warnings
+#import sys
 
-def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+# This function just gives numpy-defined warnings a stack-trace.
+#def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
 
-    log = file if hasattr(file,'write') else sys.stderr
-    traceback.print_stack(file=log)
-    log.write(warnings.formatwarning(message, category, filename, lineno, line))
+ #   log = file if hasattr(file,'write') else sys.stderr
+  #  traceback.print_stack(file=log)
+   # log.write(warnings.formatwarning(message, category, filename, lineno, line))
 
-warnings.showwarning = warn_with_traceback
+#warnings.showwarning = warn_with_traceback
 
 # TODO -- separate the functions into separate module
 class MPGPU(Process):
@@ -65,9 +66,11 @@ class MPGPU(Process):
 
         for i in range(self.num_images):
             frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]
-            func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
-            print "\n An exception occurred!"
-            self.exceptions += 1
+            try:
+                func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
+            except:
+                print "\n An exception occurred!"
+                self.exceptions += 1
 
         print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
                                                                                      time() - process_time,
@@ -445,7 +448,7 @@ if __name__ == "__main__":
 
     # TODO make these configurable
     num_processes = 20
-    num_images = 20  # Remove this if you want to process the entire image set
+    #num_images = 20  # Remove this if you want to process the entire image set
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
@@ -458,14 +461,11 @@ if __name__ == "__main__":
     v_list = sorted(glob.glob(out_dir + "v*.npy"))
 
     # Interpolate the mask onto the PIV grid
-    try:
-        if "mask_int" not in locals():
-            mask_int = interp_mask(mask, out_dir + "/", exp=2)
+    if "mask_int" not in locals():
+        mask_int = interp_mask(mask, out_dir + "/", exp=2)
 
-        routliers_properties = {
-            "gpu_func": replace_outliers, "out_dir": rep_dir,
-            "mask": mask_int, "r_thresh": r_thresh
-            }
-        parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
-    except RuntimeWarning as rw:
-        print rw
+    routliers_properties = {
+        "gpu_func": replace_outliers, "out_dir": rep_dir,
+        "mask": mask_int, "r_thresh": r_thresh
+        }
+    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
