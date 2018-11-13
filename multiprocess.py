@@ -66,7 +66,7 @@ class MPGPU(Process):
         func = self.properties["gpu_func"]
 
         for i in range(self.num_images):
-            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]
+            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]    
             try:
                 func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
             except:
@@ -452,7 +452,7 @@ def tif_to_npy(out_dir, prefix, file_list):
 if __name__ == "__main__":
 
     # path to input and output directory
-    im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/images/"
+    im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
     out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data2/"
     rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data2/"
 
@@ -463,13 +463,13 @@ if __name__ == "__main__":
         out_dir = out_dir + '/'
 
     # change pattern to your filename pattern
-    imA_list = get_input_files(im_dir, "imA_P*.npy")
-    imB_list = get_input_files(im_dir, "imB_P*.npy")
+    imA_list = get_input_files(im_dir, "Camera_#0_*.npy")
+    imB_list = get_input_files(im_dir, "Camera_#1_*.npy")
     num_images = len(imB_list)
 
     # TODO make these configurable
     num_processes = 20
-    num_images = 20  # Remove this if you want to process the entire image set
+    #num_images = 20  # Remove this if you want to process the entire image set
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
