@@ -469,7 +469,7 @@ if __name__ == "__main__":
 
     # TODO make these configurable
     num_processes = 20
-    #num_images = 20  # Remove this if you want to process the entire image set
+    num_images = 0  # Remove this if you want to process the entire image set
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
