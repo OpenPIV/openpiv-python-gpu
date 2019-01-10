@@ -10,6 +10,7 @@ from __future__ import division
 
 from multiprocessing import Process
 from time import time
+from skimage import io
 
 import numpy as np
 import os
@@ -64,7 +65,7 @@ class MPGPU(Process):
         func = self.properties["gpu_func"]
 
         for i in range(self.num_images):
-            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]
+            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]    
             try:
                 func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
             except:
@@ -431,12 +432,32 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     np.save(out_dir + "v_{:05}.npy".format(start_index), v[::-1, :])
 
 
+def get_input_files(directory, file_name_pattern):
+    file_list = sorted(glob.glob(directory + file_name_pattern))
+    
+    # if list is empty, files could be in tif format
+    if not file_list:
+        new_file_pattern = os.path.splitext(file_name_pattern)[0] + '.tif'
+        file_list = sorted(glob.glob(directory + new_file_pattern))        
+        
+        prefix = file_name_pattern.split("*")[0]
+        tif_to_npy(directory, prefix, file_list)
+        file_list = sorted(glob.glob(directory + file_name_pattern))
+
+    return file_list
+        
+def tif_to_npy(out_dir, prefix, file_list):
+    for i in range(len(file_list)):
+        file_read = io.imread(file_list[i])
+        np.save(out_dir + prefix + "{:05}.npy".format(i), file_read)
+
+
 if __name__ == "__main__":
 
     # path to input and output directory
     im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
-    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data/"
-    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data/"
+    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data2/"
+    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data2/"
 
     # make sure path is correct
     if im_dir[-1] != '':
@@ -445,13 +466,13 @@ if __name__ == "__main__":
         out_dir = out_dir + '/'
 
     # change pattern to your filename pattern
-    imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
-    imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
+    imA_list = get_input_files(im_dir, "Camera_#0_*.npy")
+    imB_list = get_input_files(im_dir, "Camera_#1_*.npy")
     num_images = len(imB_list)
 
     # TODO make these configurable
     num_processes = 20
-    #num_images = 20  # Remove this if you want to process the entire image set
+    num_images = 0  # Remove this if you want to process the entire image set
 
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
@@ -468,8 +489,8 @@ if __name__ == "__main__":
     # Post-processing
     # > Replace outliers
     # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
-    u_list = sorted(glob.glob(out_dir + "u*.npy"))
-    v_list = sorted(glob.glob(out_dir + "v*.npy"))
+    u_list = get_input_files(out_dir, "u*.npy")
+    v_list = get_input_files(out_dir, "v*.npy")
 
     # Interpolate the mask onto the PIV grid
     if "mask_int" not in locals():
