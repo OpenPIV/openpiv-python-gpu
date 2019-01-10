@@ -9,7 +9,6 @@ which is what happens with python's multithreading.
 from __future__ import division
 
 from multiprocessing import Process
-from glob import glob
 from time import time
 from skimage import io
 
@@ -380,6 +379,10 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
 
     return mask_int
 
+# self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid
+def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
+    frame_a = np.load()
+
 
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
@@ -470,6 +473,14 @@ if __name__ == "__main__":
     # TODO make these configurable
     num_processes = 20
     num_images = 0  # Remove this if you want to process the entire image set
+
+    # Pre-processing contrast
+    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
+    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
+
+    # The images are adjusted, now refresh to include them in our lists
+    imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
+    imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
