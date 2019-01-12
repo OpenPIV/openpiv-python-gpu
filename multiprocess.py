@@ -11,6 +11,7 @@ from __future__ import division
 from multiprocessing import Process
 from time import time
 from skimage import io
+from piv_tools import contrast
 
 import numpy as np
 import os
@@ -381,7 +382,27 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
 
 # self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid
 def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
-    frame_a = np.load()
+    frame_a = np.load(frame_a_file).astype(np.int32)
+    frame_b = np.load(frame_b_file).astype(np.int32)
+
+    # FOR TESTING ONLY -- REMOVE ONCE WE FIGURE OUT WHAT'S ACCEPTABLE
+    file = open("percentages.txt", "w+")
+
+    pixels_a_old = frame_a.flatten()
+    pixels_b_old = frame_b.flatten()
+
+    # % Difference between the two images in pixel sum based on the first image
+    p_deviation = sum(abs(frame_a.flatten() - frame_b.flatten())/sum(frame_a.flatten))
+
+    frame_a = contrast(frame_a, r_low = 60, r_high = 90)
+    frame_b = contrast(frame_b, r_low = 60, r_high = 90)
+
+    # % Difference in pixel weight between the old and new image a
+    a_deviation = sum(abs(frame_a.flatten() - pixels_a_old))/sum(pixels_a_old)
+    b_deviation = sum(abs(frame_b.flatten() - pixels_b_old))/sum(pixels_b_old)
+
+    file_string = "Image number %d: P = %f, A = %f, B = %f" % (start_index, p_deviation, a_deviation, b_deviation)
+    file.write(file_string)
 
 
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
@@ -433,6 +454,8 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
 
 def get_input_files(directory, file_name_pattern):
+    # get the images (either .tif or npy), converting to npy if .tif
+
     file_list = sorted(glob.glob(directory + file_name_pattern))
     
     # if list is empty, files could be in tif format
@@ -460,7 +483,7 @@ if __name__ == "__main__":
     rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data2/"
 
     # make sure path is correct
-    if im_dir[-1] != '':
+    if im_dir[-1] != '/':
         im_dir = im_dir + '/'
     if out_dir[-1] != '/':
         out_dir = out_dir + '/'
