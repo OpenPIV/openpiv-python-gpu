@@ -67,11 +67,12 @@ class MPGPU(Process):
 
         for i in range(self.num_images):
             frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]    
-            try:
-                func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
-            except:
-                print "\n An exception occurred!"
-                self.exceptions += 1
+            #try:
+            func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
+            #except Exception as e:
+             #   print "\n An exception occurred! %s" % e
+              #  print sys.exc_info()[2].tb_lineno
+               # self.exceptions += 1
 
         print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
                                                                                      time() - process_time,
@@ -386,23 +387,26 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     frame_b = np.load(frame_b_file).astype(np.int32)
 
     # FOR TESTING ONLY -- REMOVE ONCE WE FIGURE OUT WHAT'S ACCEPTABLE
-    file = open("percentages.txt", "w+")
+    file = open("percentages.txt", "a+")
 
     pixels_a_old = frame_a.flatten()
     pixels_b_old = frame_b.flatten()
-
     # % Difference between the two images in pixel sum based on the first image
-    p_deviation = sum(abs(frame_a.flatten() - frame_b.flatten())/sum(frame_a.flatten))
+    p_deviation = np.sum(frame_a.flatten() - frame_b.flatten())/np.sum(pixels_a_old)
 
     frame_a = contrast(frame_a, r_low = 60, r_high = 90)
     frame_b = contrast(frame_b, r_low = 60, r_high = 90)
 
     # % Difference in pixel weight between the old and new image a
-    a_deviation = sum(abs(frame_a.flatten() - pixels_a_old))/sum(pixels_a_old)
-    b_deviation = sum(abs(frame_b.flatten() - pixels_b_old))/sum(pixels_b_old)
+    pixels_a_new = frame_a.flatten()
+    pixels_b_new = frame_b.flatten()
+
+    a_deviation = np.sum(pixels_a_new - pixels_a_old)/np.sum(pixels_a_new)
+    b_deviation = np.sum(pixels_b_new - pixels_b_old)/np.sum(pixels_b_new)
 
     file_string = "Image number %d: P = %f, A = %f, B = %f" % (start_index, p_deviation, a_deviation, b_deviation)
     file.write(file_string)
+    file.write('\n')
 
 
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
@@ -494,8 +498,8 @@ if __name__ == "__main__":
     num_images = len(imB_list)
 
     # TODO make these configurable
-    num_processes = 20
-    num_images = 0  # Remove this if you want to process the entire image set
+    num_processes = 20 
+    num_images = 100  # Remove this if you want to process the entire image set
 
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
