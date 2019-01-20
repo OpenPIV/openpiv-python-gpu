@@ -408,6 +408,26 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     file.write(file_string)
     file.write('\n')
 
+    #    np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
+    folder_prefix = properties['out_dir']
+
+    # Save as .tif for easy error checking (manual check via image check), .npy for further calculations
+    outname_A = os.path.splitext(os.path.basename(frame_a_file))
+    outname_B = os.path.splitext(os.path.basename(frame_b_file))
+
+    tif_path = ''.join([folder_prefix, '_tif'])
+    npy_path = ''.join([folder_prefix, '_npy'])
+
+    tif_file_A = ''.join([outname_A, '.tif'])
+    tif_file_B = ''.join([outname_B, '.tif'])
+    npy_file_A = ''.join([outname_A, '.npy'])
+    npy_file_B = ''.join([outname_B, '.npy'])
+
+    io.imsave(tif_path + tif_file_A, frame_a)
+    io.imsave(tif_path + tif_file_B, frame_b)
+    np.save(npy_path + npy_file_A, frame_a)
+    np.save(npy_path + npy_file_B, frame_b)
+
 
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
@@ -482,6 +502,7 @@ def tif_to_npy(out_dir, prefix, file_list):
 if __name__ == "__main__":
 
     # path to input and output directory
+    raw_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/raw_data/"
     im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
     out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data2/"
     rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data2/"
@@ -492,9 +513,12 @@ if __name__ == "__main__":
     if out_dir[-1] != '/':
         out_dir = out_dir + '/'
 
+    camera_zero_pattern = "Camera_#0_*.npy"
+    camera_one_pattern = "Camera_#1_*.npy"
+
     # change pattern to your filename pattern
-    imA_list = get_input_files(im_dir, "Camera_#0_*.npy")
-    imB_list = get_input_files(im_dir, "Camera_#1_*.npy")
+    imA_list = get_input_files(raw_dir, camera_zero_pattern)
+    imB_list = get_input_files(raw_dir, camera_one_pattern)
     num_images = len(imB_list)
 
     # TODO make these configurable
@@ -506,16 +530,8 @@ if __name__ == "__main__":
     parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
 
     # The images are adjusted, now refresh to include them in our lists
-    imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
-    imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
-
-    # Pre-processing contrast
-    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
-    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
-
-    # The images are adjusted, now refresh to include them in our lists
-    imA_list = sorted(glob.glob(im_dir + "Camera_#0_*.npy"))
-    imB_list = sorted(glob.glob(im_dir + "Camera_#1_*.npy"))
+    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
+    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
 
     # Processing images
     widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
