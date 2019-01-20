@@ -536,6 +536,7 @@ if __name__ == "__main__":
     parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
 
     # The images are adjusted, now refresh to include them in our lists
+    im_dir += "_npy/"
     imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
     imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
 
