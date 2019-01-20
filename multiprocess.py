@@ -412,11 +412,17 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     folder_prefix = properties['out_dir']
 
     # Save as .tif for easy error checking (manual check via image check), .npy for further calculations
-    outname_A = os.path.splitext(os.path.basename(frame_a_file))
-    outname_B = os.path.splitext(os.path.basename(frame_b_file))
+    outname_A = os.path.splitext(os.path.basename(frame_a_file))[0]
+    outname_B = os.path.splitext(os.path.basename(frame_b_file))[0]
 
-    tif_path = ''.join([folder_prefix, '_tif'])
-    npy_path = ''.join([folder_prefix, '_npy'])
+    tif_path = ''.join([folder_prefix, '_tif/'])
+    npy_path = ''.join([folder_prefix, '_npy/'])
+
+    if not os.path.exists(tif_path):
+        os.makedirs(tif_path)
+
+    if not os.path.exists(npy_path):
+        os.makedirs(npy_path)
 
     tif_file_A = ''.join([outname_A, '.tif'])
     tif_file_B = ''.join([outname_B, '.tif'])
@@ -523,7 +529,7 @@ if __name__ == "__main__":
 
     # TODO make these configurable
     num_processes = 20 
-    num_images = 100  # Remove this if you want to process the entire image set
+    num_images = 1000  # Remove this if you want to process the entire image set
 
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
