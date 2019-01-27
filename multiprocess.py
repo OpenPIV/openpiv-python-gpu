@@ -270,8 +270,8 @@ def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     u_out, v_out = outlier_detection(u, v, r_thresh, mask=mask)
 
     # verify directory exists
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     # save to the replacement directory
     np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
