@@ -1,8 +1,7 @@
 """
 
 Refactored version of job_run.py with multiprocessing.
-We use multiprocessing here because we don't want shared memory,
-which is what happens with python's multithreading.
+We use multiprocessing here because Python doesn't implement multithreading.
 
 """
 
@@ -67,12 +66,12 @@ class MPGPU(Process):
 
         for i in range(self.num_images):
             frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]    
-            #try:
-            func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
-            #except Exception as e:
-             #   print "\n An exception occurred! %s" % e
-              #  print sys.exc_info()[2].tb_lineno
-               # self.exceptions += 1
+            try:
+                func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
+            except Exception as e:
+                print "\n An exception occurred! %s" % e
+                print sys.exc_info()[2].tb_lineno
+                self.exceptions += 1
 
         print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
                                                                                      time() - process_time,
@@ -105,7 +104,7 @@ def parallelize(num_items, num_processes, list_tuple, properties):
         start_index = i*partitions
         subList_A = list_tuple[0][start_index: start_index + partitions]
         subList_B = list_tuple[1][start_index: start_index + partitions]
-        process = MPGPU(i%4, i, start_index, subList_A, subList_B, properties)
+        process = MPGPU(i % 4, i, start_index, subList_A, subList_B, properties)
         process.start()
         process_list.append(process)
 
@@ -117,64 +116,6 @@ def parallelize(num_items, num_processes, list_tuple, properties):
         for process in process_list:
             process.terminate()
             process.join()
-
-
-# ===============================================================================
-# DEFINE VARIABLES FOR DIRECTORIES
-# ===============================================================================
-
-"""
-Could directories be created in the project directory in the scratch directory 
-when the code is run based on what window size is selected? So there would only
-be two directories here for a single window size.
-
-i.e. if the minimum window size is set to 16, then the GPU code would create
-the directory "output_16" for the regular data and "replace_16" for the data 
-where the outliers are replaced
-"""
-
-out16_dir = "multi_16/"
-out32_dir = "output_32/"
-out64_dir = "output_64/"
-rep32_dir = "replace_32/"
-rep64_dir = "rep64_test/"
-# rep64_dir = "replace_64/"
-
-# ===============================================================================
-# Assign which data you want to process
-# ===============================================================================
-
-"""
-This could be made to be based on the minimum window size chosen - the analysis
-directory would be the output directory (output_XX) and the replacement 
-directory would be replace_XX. NOTE that the replacement can happen only after
-the regular output data has been processed. 
-"""
-
-analysis_dir = out64_dir
-rep_dir = rep64_dir
-
-# ===============================================================================
-# Other parameters
-# ===============================================================================
-
-"""
-The mask is created in ImageJ based on the raw images. Therefore, the mask is
-also flipped across the x-axis. Since the data output from the GPU code (in 
-output_XX) is now flipped to the correct orientation, the mask must also be 
-flipped to the correct orientation.
-
-Mask can be placed in the project directory in the scratch directory - copy from
-local machine onto soscip
-"""
-# load the mask so that it is flipped in the correct orientation
-mask = np.load("mask.npy")[::-1, :]
-
-# Some threshold value for replacing spurious vectors
-r_thresh = 2.0
-
-# Number of image pairs / files
-num_files = 5000
 
 
 # ===============================================================================
@@ -441,14 +382,14 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     # ==================================================================
     # PARAMETERS FOR OPENPIV
     # ==================================================================
-    dt = 5e-6
-    min_window_size = 16
-    overlap = 0.50
-    coarse_factor = 2
-    nb_iter_max = 3
-    validation_iter = 1
-    x_scale = 7.45e-6  # m/pixel
-    y_scale = 7.41e-6  # m/pixel
+    dt = properties["dt"]
+    min_window_size = properties["min_window_size"]
+    overlap = properties["overlap"]
+    coarse_factor = properties["coarse_factor"]
+    nb_iter_max = properties["nb_iter_max"]
+    validation_iter = properties["validation_iter"]
+    x_scale = properties["x_scale"]  # m/pixel
+    y_scale = properties["y_scale"]  # m/pixel
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
     out_dir = properties["out_dir"]
 
@@ -498,7 +439,8 @@ def get_input_files(directory, file_name_pattern):
         file_list = sorted(glob.glob(directory + file_name_pattern))
 
     return file_list
-        
+
+
 def tif_to_npy(out_dir, prefix, file_list):
     for i in range(len(file_list)):
         file_read = io.imread(file_list[i])
@@ -507,17 +449,34 @@ def tif_to_npy(out_dir, prefix, file_list):
 
 if __name__ == "__main__":
 
+    # ===============================================================================
+    # DEFINE PIV & DIRECTORY VARIABLES HERE
+    # ===============================================================================
+
+    dt = 5e-6
+    min_window_size = 16
+    overlap = 0.50
+    coarse_factor = 2
+    nb_iter_max = 3
+    validation_iter = 1
+    x_scale = 7.45e-6  # m/pixel
+    y_scale = 7.41e-6  # m/pixel
+
+    # load the mask so that it is flipped in the correct orientation
+    mask = np.load("mask.npy")[::-1, :]
+
+    # Some threshold value for replacing spurious vectors
+    r_thresh = 2.0
+
     # path to input and output directory
     raw_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/raw_data/"
     im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
-    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data2/"
-    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data2/"
+    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data"
+    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data"
 
-    # make sure path is correct
-    if im_dir[-1] != '/':
-        im_dir = im_dir + '/'
-    if out_dir[-1] != '/':
-        out_dir = out_dir + '/'
+    # make output & replacement directory paths according to window size
+    out_dir += str(min_window_size) + "/"
+    rep_dir += str(min_window_size) + "/"
 
     camera_zero_pattern = "Camera_#0_*.npy"
     camera_one_pattern = "Camera_#1_*.npy"
@@ -527,8 +486,8 @@ if __name__ == "__main__":
     imB_list = get_input_files(raw_dir, camera_one_pattern)
     num_images = len(imB_list)
 
-    # TODO make these configurable
-    num_processes = 20 
+    # TODO: do some load testing to determine max # of processes before out of memory (for ~5GB image dataset)
+    num_processes = 20
     num_images = 1000  # Remove this if you want to process the entire image set
 
     # Pre-processing contrast
@@ -541,7 +500,11 @@ if __name__ == "__main__":
     imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
 
     # Processing images
-    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir}
+    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
+                        "min_window_size": min_window_size, "overlap": overlap,
+                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
+                        "validation_iter": validation_iter, "x_scale": x_scale,
+                        "y_scale": y_scale}
     parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
 
     # Post-processing
