@@ -269,6 +269,10 @@ def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     # call outlier_detection (which replaces the outliers)
     u_out, v_out = outlier_detection(u, v, r_thresh, mask=mask)
 
+    # verify directory exists
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
     # save to the replacement directory
     np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
     np.save(output_dir + "v_repout_{:05d}.npy".format(image_pair_num), v_out)
@@ -412,6 +416,10 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
         u = u * x_scale
         y = y * y_scale
         v = v * y_scale
+
+    # verify the directory exists:
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
     # save the data
     if start_index == 0:
