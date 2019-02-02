@@ -61,13 +61,12 @@ def measure_runtime_arg(queue, function_type):
 
 def aggregate_runtime_metrics(queue, filename):
     # total_dict will look like the following after tracking elements in the queue:
-    # {'func_name': {'total_avg': <float>,
-    #                'io_avg': <float>,
-    #                'pCompute': <float>,
-    #                'pIO': <float>,
+    # {'func_name': {'total_avg/io_avg': <float>,
     #                'longest': <int>,
-    #                'total': <int>
-    #                'io': <int>}}
+    #                'total/io': <int>},
+    #  'pCompute': <float>,
+    #  'pIO': <float>
+    # }
     total_dict = {}
 
     # Toggle this to print each entry into a file, otherwise only add aggregate lines
@@ -79,12 +78,12 @@ def aggregate_runtime_metrics(queue, filename):
             el_func_name = element['func_name']
             ftype = element['func_type']
             runtime = element['func_runtime']
-
+            
             if el_func_name in total_dict:
                 current_func = total_dict[el_func_name]
                 current_func['count'] += 1
 
-                if ftype in total_dict[el_func_name][ftype]:
+                if ftype in current_func:
                     current_func[ftype] += runtime
                 else:
                     current_func[ftype] = runtime
@@ -92,37 +91,38 @@ def aggregate_runtime_metrics(queue, filename):
                 if runtime > current_func['longest']:
                     current_func['longest'] = runtime
             else:
-                total_dict[el_func_name]['count'] = 1
-                total_dict[el_func_name][ftype] = runtime
-                total_dict[el_func_name]['longest'] = runtime
+                total_dict[el_func_name] = {'count': 1, ftype: runtime, 'longest': runtime}
 
             if print_all:
                 line_string = 'Function: %s, Type: %s, Runtime: %d \n' % (el_func_name, ftype, runtime)
                 file.write(line_string)
 
+        agg = {'total_time': 0, 'io_time': 0}
+
         for key in total_dict:
             current_func = total_dict[key]
-            count = total_dict[key]['count']
-            total_time = current_func['total']
-            io_time = current_func['io']
+            count = current_func['count']
+            ftype = ''
 
-            current_func['total_avg'] = total_time/count
-            current_func['io_avg'] = io_time/count
+            if key == 'save_files':
+                ftype = 'io'
+                io_time = current_func['io']
+                current_func['io_avg'] = io_time / count
+                agg['io_time'] += io_time
+            else:  
+                ftype = 'total'
+                total_time = current_func['total']
+                current_func['total_avg'] = total_time/count
+                agg['total_time'] += total_time
 
-            current_func['pIO'] = io_time/total_time*100
-            current_func['pCompute'] = 100 - current_func['pIO']
+            line_string = 'Function: %s, Type: %s, Average: %f, Total: %f, Count: %d \n' % (key, ftype, current_func[ftype + '_avg'], total_time, count)
+            file.write(line_string)
 
-            line_string = 'Function: %s, ' \
-                          'Average Total Time: %f, ' \
-                          'Average IO Time: %f, ' \
-                          'Compute %: %f, ' \
-                          'IO %: %f, ' \
-                          'Longest Runtime: %d \n' % (key,
-                                                   current_func['total_avg'],
-                                                   current_func['io_avg'],
-                                                   current_func['pIO'],
-                                                   current_func['pCompute'],
-                                                   current_func['longest'])
+        pIO = agg['io_time']/agg['total_time']*100
+        pCompute = 100 - pIO
+
+        total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
+        file.write(total_string)
 
 
 
@@ -587,7 +587,7 @@ if __name__ == "__main__":
 
     # TODO: do some load testing to determine max # of processes before out of memory (for ~5GB image dataset)
     num_processes = 20
-    num_images = 1000  # Remove this if you want to process the entire image set
+    num_images = 20  # Remove this if you want to process the entire image set
 
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
