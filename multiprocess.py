@@ -64,7 +64,7 @@ def measure_runtime_arg(queue, function_type):
 
 
 def aggregate_runtime_metrics(queue, filename):
-    total_dict = {'total': 1, 'io': 1} # set to 1s default to prevent divide by 0's later on
+    total_dict = {'total': 0, 'io': 0}
 
     with open(filename, 'a+') as file:
         while not queue.empty():
