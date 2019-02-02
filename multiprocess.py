@@ -7,7 +7,7 @@ We use multiprocessing here because Python doesn't implement multithreading.
 
 from __future__ import division
 
-from multiprocessing import Process
+from multiprocessing import Process, Queue
 from time import time
 from skimage import io
 from piv_tools import contrast
@@ -36,6 +36,10 @@ if sys.version_info[0] == 2:
 
 # Timing decorator (function_type being I/O or compute)
 # Note: Must unpack both the dict and the value in this function
+
+# To track distribution of runtime in functions using decorators
+runtime_queue = Queue()
+
 def measure_runtime_arg(queue, function_type):
     def measure_runtime(func):
         @functools.wraps(func) # preserve introspection of wrapped function (now func.__name__ returns func_name and not 'wrap')
@@ -57,6 +61,10 @@ def measure_runtime_arg(queue, function_type):
             return res
         return wrap
     return measure_runtime
+
+# ===================================================================================================================
+# MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
+# ===================================================================================================================
 
 # TODO -- separate the functions into separate module
 class MPGPU(Process):
@@ -263,7 +271,7 @@ def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
     return (u_out, v_out)
 
 
-# self.start_index + i, frame_a, frame_b, properties, gpuid (named)
+@measure_runtime_arg(queue=runtime_queue, function_type='total')
 def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     """
     This function first loads all the output data from the output directory
@@ -286,13 +294,9 @@ def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     # call outlier_detection (which replaces the outliers)
     u_out, v_out = outlier_detection(u, v, r_thresh, mask=mask)
 
-    # verify directory exists
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
     # save to the replacement directory
-    np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
-    np.save(output_dir + "v_repout_{:05d}.npy".format(image_pair_num), v_out)
+    save_files(output_dir, "u_repout_{:05d}.npy".format(image_pair_num), u_out)
+    save_files(output_dir, "v_repout_{:05d}.npy".format(image_pair_num), v_out)
 
 
 def interp_mask(mask, data_dir, exp=0, plot=False):
@@ -343,7 +347,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
 
     return mask_int
 
-# self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid
+@measure_runtime_arg(queue=runtime_queue, function_type='total')
 def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     frame_a = np.load(frame_a_file).astype(np.int32)
     frame_b = np.load(frame_b_file).astype(np.int32)
@@ -370,7 +374,6 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     file.write(file_string)
     file.write('\n')
 
-    #    np.save(output_dir + "u_repout_{:05d}.npy".format(image_pair_num), u_out)
     folder_prefix = properties['out_dir']
 
     # Save as .tif for easy error checking (manual check via image check), .npy for further calculations
@@ -380,23 +383,18 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     tif_path = ''.join([folder_prefix, '_tif/'])
     npy_path = ''.join([folder_prefix, '_npy/'])
 
-    if not os.path.exists(tif_path):
-        os.makedirs(tif_path)
-
-    if not os.path.exists(npy_path):
-        os.makedirs(npy_path)
-
     tif_file_A = ''.join([outname_A, '.tif'])
     tif_file_B = ''.join([outname_B, '.tif'])
     npy_file_A = ''.join([outname_A, '.npy'])
     npy_file_B = ''.join([outname_B, '.npy'])
 
-    io.imsave(tif_path + tif_file_A, frame_a)
-    io.imsave(tif_path + tif_file_B, frame_b)
-    np.save(npy_path + npy_file_A, frame_a)
-    np.save(npy_path + npy_file_B, frame_b)
+    save_files(tif_path, tif_file_A, frame_a)
+    save_files(tif_path, tif_file_B, frame_b)
+    save_files(npy_path, npy_file_A, frame_a)
+    save_files(npy_path, npy_file_B, frame_b)
 
 
+@measure_runtime_arg(queue=runtime_queue, function_type='total')
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
     # TODO -- Decouple these parameters from the functions below and pass them in
@@ -445,8 +443,20 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
     # Note: we're reversing u and v here only because the camera input is inverted. If the camera ever takes
     # images in the correct orientations, we'll have to remove u[::-1, :].
-    np.save(out_dir + "u_{:05}.npy".format(start_index), u[::-1, :])
-    np.save(out_dir + "v_{:05}.npy".format(start_index), v[::-1, :])
+    save_files(out_dir, "u_{:05}.npy".format(start_index), u[::-1, :])
+    save_files(out_dir, "v_{:05}.npy".format(start_index), v[::-1, :])
+
+
+# ===================================================================================================================
+# FILE READ/SAVE UTILITY
+# ===================================================================================================================
+
+@measure_runtime_arg(queue=runtime_queue, function_type='io')
+def save_files(out_dir, file_name, file_list):
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    np.save(out_dir + file_name, file_list)
 
 
 def get_input_files(directory, file_name_pattern):
