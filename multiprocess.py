@@ -51,12 +51,8 @@ def measure_runtime_arg(queue, function_type):
             func_name = func.__name__
             func_runtime = finish_time - start_time
 
-            # Queue up to write raw data into file
-            time_string = 'Function Name: ' + func_name + " Time: " + str(func_runtime) + "s Function Type: " + function_type
-            queue.put(time_string)
-
-            # Queue dict-version for easier aggregation later
-            queue.put((function_type, func_runtime))
+            # Record relevant information: function name, function time, function type
+            queue.put({'func_name': func_name, 'func_runtime': func_runtime, 'func_type': function_type})
 
             return res
         return wrap
@@ -64,26 +60,71 @@ def measure_runtime_arg(queue, function_type):
 
 
 def aggregate_runtime_metrics(queue, filename):
-    total_dict = {'total': 0, 'io': 0}
+    # total_dict will look like the following after tracking elements in the queue:
+    # {'func_name': {'total_avg': <float>,
+    #                'io_avg': <float>,
+    #                'pCompute': <float>,
+    #                'pIO': <float>,
+    #                'longest': <int>,
+    #                'total': <int>
+    #                'io': <int>}}
+    total_dict = {}
+
+    # Toggle this to print each entry into a file, otherwise only add aggregate lines
+    print_all = False
 
     with open(filename, 'a+') as file:
         while not queue.empty():
             element = queue.get()
+            el_func_name = element['func_name']
+            ftype = element['func_type']
+            runtime = element['func_runtime']
 
-            if isinstance(element, tuple):
-                total_dict[element[0]] += element[1]
-            elif isinstance(element, str):
-                file.write(element + "\n")
+            if el_func_name in total_dict:
+                current_func = total_dict[el_func_name]
+                current_func['count'] += 1
+
+                if ftype in total_dict[el_func_name][ftype]:
+                    current_func[ftype] += runtime
+                else:
+                    current_func[ftype] = runtime
+
+                if runtime > current_func['longest']:
+                    current_func['longest'] = runtime
             else:
-                raise TypeError('Unsupported type found in multiprocess queue!')
+                total_dict[el_func_name]['count'] = 1
+                total_dict[el_func_name][ftype] = runtime
+                total_dict[el_func_name]['longest'] = runtime
 
-        percentage_io = total_dict['io']/total_dict['total']*100
-        percentage_compute = 100 - percentage_io
+            if print_all:
+                line_string = 'Function: %s, Type: %s, Runtime: %d \n' % (el_func_name, ftype, runtime)
+                file.write(line_string)
 
-        agg_string = 'Total Runtime: %d, Compute Runtime: %f, IO Runtime %f' % (total_dict['total'],
-                                                                                percentage_compute,
-                                                                                percentage_io)
-        file.write(agg_string)
+        for key in total_dict:
+            current_func = total_dict[key]
+            count = total_dict[key]['count']
+            total_time = current_func['total']
+            io_time = current_func['io']
+
+            current_func['total_avg'] = total_time/count
+            current_func['io_avg'] = io_time/count
+
+            current_func['pIO'] = io_time/total_time*100
+            current_func['pCompute'] = 100 - current_func['pIO']
+
+            line_string = 'Function: %s, ' \
+                          'Average Total Time: %f, ' \
+                          'Average IO Time: %f, ' \
+                          'Compute %: %f, ' \
+                          'IO %: %f, ' \
+                          'Longest Runtime: %d \n' % (key,
+                                                   current_func['total_avg'],
+                                                   current_func['io_avg'],
+                                                   current_func['pIO'],
+                                                   current_func['pCompute'],
+                                                   current_func['longest'])
+
+
 
 # ===================================================================================================================
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
