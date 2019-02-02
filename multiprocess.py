@@ -56,11 +56,34 @@ def measure_runtime_arg(queue, function_type):
             queue.put(time_string)
 
             # Queue dict-version for easier aggregation later
-            queue.put({function_type: func_runtime})
+            queue.put((function_type, func_runtime))
 
             return res
         return wrap
     return measure_runtime
+
+
+def aggregate_runtime_metrics(queue, filename):
+    total_dict = {'total': 1, 'io': 1} # set to 1s default to prevent divide by 0's later on
+
+    with open(filename, 'a+') as file:
+        while not queue.empty():
+            element = queue.get()
+
+            if isinstance(element, tuple):
+                total_dict[element[0]] += element[1]
+            elif isinstance(element, str):
+                file.write(element + "\n")
+            else:
+                raise TypeError('Unsupported type found in multiprocess queue!')
+
+        percentage_io = total_dict['io']/total_dict['total']*100
+        percentage_compute = 100 - percentage_io
+
+        agg_string = 'Total Runtime: %d, Compute Runtime: %f, IO Runtime %f' % (total_dict['total'],
+                                                                                percentage_compute,
+                                                                                percentage_io)
+        file.write(agg_string)
 
 # ===================================================================================================================
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
@@ -448,7 +471,7 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 
 
 # ===================================================================================================================
-# FILE READ/SAVE UTILITY
+# FILE READ/SAVE UTILITY & MISC
 # ===================================================================================================================
 
 @measure_runtime_arg(queue=runtime_queue, function_type='io')
@@ -557,3 +580,5 @@ if __name__ == "__main__":
         "mask": mask_int, "r_thresh": r_thresh
         }
     parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+
+    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
