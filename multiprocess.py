@@ -14,6 +14,7 @@ from piv_tools import contrast
 
 import numpy as np
 import os
+import functools
 
 import glob
 import sys
@@ -28,18 +29,34 @@ if sys.version_info[0] == 3:
 if sys.version_info[0] == 2:
     import openpiv.filters
 
-#import traceback
-#import warnings
-#import sys
+# ===================================================================================================================
+# WARNING: File read/close is UNSAFE in multiprocessing applications because multiple
+# threads are accessing &/or writing to the same file. Please remember to use a queue if doing file I/O concurrently
+# ===================================================================================================================
 
-# This function just gives numpy-defined warnings a stack-trace.
-#def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+# Timing decorator (function_type being I/O or compute)
+# Note: Must unpack both the dict and the value in this function
+def measure_runtime_arg(queue, function_type):
+    def measure_runtime(func):
+        @functools.wraps(func) # preserve introspection of wrapped function (now func.__name__ returns func_name and not 'wrap')
+        def wrap(*args, **kwargs):
+            start_time = time()
+            res = func(*args, **kwargs)
+            finish_time = time()
 
- #   log = file if hasattr(file,'write') else sys.stderr
-  #  traceback.print_stack(file=log)
-   # log.write(warnings.formatwarning(message, category, filename, lineno, line))
+            func_name = func.__name__
+            func_runtime = finish_time - start_time
 
-#warnings.showwarning = warn_with_traceback
+            # Queue up to write raw data into file
+            time_string = 'Function Name: ' + func_name + " Time: " + str(func_runtime) + "s Function Type: " + function_type
+            queue.put(time_string)
+
+            # Queue dict-version for easier aggregation later
+            queue.put({function_type: func_runtime})
+
+            return res
+        return wrap
+    return measure_runtime
 
 # TODO -- separate the functions into separate module
 class MPGPU(Process):
