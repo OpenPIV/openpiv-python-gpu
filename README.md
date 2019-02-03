@@ -1,5 +1,5 @@
 
-https://zenodo.org/badge/148214993.svg
+[![DOI](https://zenodo.org/badge/148214993.svg)](https://zenodo.org/badge/latestdoi/148214993)
 
 # OpenPIV Python version with GPU support
 GPU accelerated version of OpenPIV in Python. The algorithm and functions are mostly the same 
