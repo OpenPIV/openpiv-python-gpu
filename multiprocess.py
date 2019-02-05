@@ -11,6 +11,7 @@ from multiprocessing import Process, Queue
 from time import time
 from skimage import io
 from piv_tools import contrast
+from datetime import datetime
 
 import numpy as np
 import os
@@ -39,6 +40,7 @@ if sys.version_info[0] == 2:
 
 # To track distribution of runtime in functions using decorators
 runtime_queue = Queue()
+
 
 def measure_runtime_arg(queue, function_type):
     def measure_runtime(func):
@@ -73,6 +75,13 @@ def aggregate_runtime_metrics(queue, filename):
     print_all = False
 
     with open(filename, 'a+') as file:
+        # Leave a timestamp & ASCII section header
+        section_header = "========================================\n" + \
+                         str(datetime.utcnow()) + \
+                         "\n========================================"
+
+        file.write(section_header)
+
         while not queue.empty():
             element = queue.get()
             el_func_name = element['func_name']
@@ -545,6 +554,47 @@ def tif_to_npy(out_dir, prefix, file_list):
         file_read = io.imread(file_list[i])
         np.save(out_dir + prefix + "{:05}.npy".format(i), file_read)
 
+# ===================================================================================================================
+# SCRIPTING FUNCTIONS
+# ===================================================================================================================
+
+
+def process_images(im_dir, out_dir, rep_dir, imA_list, imB_list, ):
+    # Pre-processing contrast
+    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
+    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
+
+    # The images are adjusted, now refresh to include them in our lists
+    im_dir += "_npy/"
+    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
+    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
+
+    # Processing images
+    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
+                        "min_window_size": min_window_size, "overlap": overlap,
+                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
+                        "validation_iter": validation_iter, "x_scale": x_scale,
+                        "y_scale": y_scale}
+    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
+
+    # Post-processing
+    # > Replace outliers
+    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
+    u_list = get_input_files(out_dir, "u*.npy")
+    v_list = get_input_files(out_dir, "v*.npy")
+
+    # Interpolate the mask onto the PIV grid
+    if "mask_int" not in locals():
+        mask_int = interp_mask(mask, out_dir + "/", exp=2)
+
+    routliers_properties = {
+        "gpu_func": replace_outliers, "out_dir": rep_dir,
+        "mask": mask_int, "r_thresh": r_thresh
+        }
+    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+
+    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
+
 
 if __name__ == "__main__":
 
@@ -589,37 +639,4 @@ if __name__ == "__main__":
     num_processes = 20
     num_images = 20  # Remove this if you want to process the entire image set
 
-    # Pre-processing contrast
-    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
-    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
 
-    # The images are adjusted, now refresh to include them in our lists
-    im_dir += "_npy/"
-    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
-    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
-
-    # Processing images
-    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
-                        "min_window_size": min_window_size, "overlap": overlap,
-                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
-                        "validation_iter": validation_iter, "x_scale": x_scale,
-                        "y_scale": y_scale}
-    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
-
-    # Post-processing
-    # > Replace outliers
-    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
-    u_list = get_input_files(out_dir, "u*.npy")
-    v_list = get_input_files(out_dir, "v*.npy")
-
-    # Interpolate the mask onto the PIV grid
-    if "mask_int" not in locals():
-        mask_int = interp_mask(mask, out_dir + "/", exp=2)
-
-    routliers_properties = {
-        "gpu_func": replace_outliers, "out_dir": rep_dir,
-        "mask": mask_int, "r_thresh": r_thresh
-        }
-    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
-
-    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
