@@ -558,46 +558,7 @@ def tif_to_npy(out_dir, prefix, file_list):
 # SCRIPTING FUNCTIONS
 # ===================================================================================================================
 
-
-def process_images(im_dir, out_dir, rep_dir, imA_list, imB_list, ):
-    # Pre-processing contrast
-    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
-    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
-
-    # The images are adjusted, now refresh to include them in our lists
-    im_dir += "_npy/"
-    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
-    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
-
-    # Processing images
-    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
-                        "min_window_size": min_window_size, "overlap": overlap,
-                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
-                        "validation_iter": validation_iter, "x_scale": x_scale,
-                        "y_scale": y_scale}
-    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
-
-    # Post-processing
-    # > Replace outliers
-    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
-    u_list = get_input_files(out_dir, "u*.npy")
-    v_list = get_input_files(out_dir, "v*.npy")
-
-    # Interpolate the mask onto the PIV grid
-    if "mask_int" not in locals():
-        mask_int = interp_mask(mask, out_dir + "/", exp=2)
-
-    routliers_properties = {
-        "gpu_func": replace_outliers, "out_dir": rep_dir,
-        "mask": mask_int, "r_thresh": r_thresh
-        }
-    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
-
-    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
-
-
-if __name__ == "__main__":
-
+def process_images(num_images, num_processes):
     # ===============================================================================
     # DEFINE PIV & DIRECTORY VARIABLES HERE
     # ===============================================================================
@@ -635,8 +596,85 @@ if __name__ == "__main__":
     imB_list = get_input_files(raw_dir, camera_one_pattern)
     num_images = len(imB_list)
 
-    # TODO: do some load testing to determine max # of processes before out of memory (for ~5GB image dataset)
-    num_processes = 20
-    num_images = 20  # Remove this if you want to process the entire image set
+    # Pre-processing contrast
+    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
+    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
+
+    # The images are adjusted, now refresh to include them in our lists
+    im_dir += "_npy/"
+    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
+    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
+
+    # Processing images
+    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
+                        "min_window_size": min_window_size, "overlap": overlap,
+                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
+                        "validation_iter": validation_iter, "x_scale": x_scale,
+                        "y_scale": y_scale}
+    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
+
+    # Post-processing
+    # > Replace outliers
+    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
+    u_list = get_input_files(out_dir, "u*.npy")
+    v_list = get_input_files(out_dir, "v*.npy")
+
+    # Interpolate the mask onto the PIV grid
+    if "mask_int" not in locals():
+        mask_int = interp_mask(mask, out_dir + "/", exp=2)
+
+    routliers_properties = {
+        "gpu_func": replace_outliers, "out_dir": rep_dir,
+        "mask": mask_int, "r_thresh": r_thresh
+        }
+    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+
+    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
 
 
+'''
+Writes to 'runtime_metrics.txt'.
+Measures the runtime by varying number of images processed
+'''
+def test_with_image_set_length():
+    # Add line to queue to show which test
+    image_set_length_string = '\n\n\nResults from varying image set size: \n'
+    runtime_queue.put(image_set_length_string)
+
+    # Number of images to test (assuming the total set of images > 1000)
+    set_length_list = [20, 50, 100, 200, 500, 1000]
+
+    for el in set_length_list:
+        process_images(el, 20)
+
+
+'''
+Writes to 'runtime_metrics.txt'.
+Measures the runtime by varying number of processes used
+'''
+def test_with_num_processes():
+    # Add line to queue to show which test
+    num_processes_string = '\n\n\nResults from varying number of processes: \n'
+    runtime_queue.put(num_processes_string)
+
+    # Number of processes to test (assuming 20 is the maximum for OOM issues)
+    number_processes_list = [1, 2, 5, 10, 20]
+
+    for el in number_processes_list:
+        process_images(100, el)
+
+
+def file_cleanup(file_names):
+    for s in file_names:
+        # Delete, regardless of extension (in case we have .csv, .xls, etc. in the future)
+        for f in glob.glob(s+'.*'):
+            os.remove(f)
+
+if __name__ == "__main__":
+    # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
+    file_names = ['percentages', 'runtime_metrics']
+    file_cleanup(file_names)
+
+    # Run tests
+    test_with_image_set_length()
+    test_with_num_processes()
