@@ -594,7 +594,6 @@ def process_images(num_images, num_processes):
     # change pattern to your filename pattern
     imA_list = get_input_files(raw_dir, camera_zero_pattern)
     imB_list = get_input_files(raw_dir, camera_one_pattern)
-    num_images = len(imB_list)
 
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
