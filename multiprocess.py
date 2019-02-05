@@ -78,12 +78,17 @@ def aggregate_runtime_metrics(queue, filename):
         # Leave a timestamp & ASCII section header
         section_header = "========================================\n" + \
                          str(datetime.utcnow()) + \
-                         "\n========================================"
+                         "\n========================================\n"
 
         file.write(section_header)
 
         while not queue.empty():
             element = queue.get()
+            
+            if (isinstance(element, str)):
+                file.write(element)
+                continue
+
             el_func_name = element['func_name']
             ftype = element['func_type']
             runtime = element['func_runtime']
@@ -124,7 +129,7 @@ def aggregate_runtime_metrics(queue, filename):
                 current_func['total_avg'] = total_time/count
                 agg['total_time'] += total_time
 
-            line_string = 'Function: %s, Type: %s, Average: %f, Total: %f, Count: %d \n' % (key, ftype, current_func[ftype + '_avg'], total_time, count)
+            line_string = 'Function: %-25s, Type: %-15s, Average: %-10f, Total: %-10f, Count: %-5d \n' % (key, ftype, current_func[ftype + '_avg'], total_time, count)
             file.write(line_string)
 
         pIO = agg['io_time']/agg['total_time']*100
@@ -641,9 +646,10 @@ def test_with_image_set_length():
     runtime_queue.put(image_set_length_string)
 
     # Number of images to test (assuming the total set of images > 1000)
-    set_length_list = [20, 50, 100, 200, 500, 1000]
+    set_length_list = [100, 200, 500]
 
     for el in set_length_list:
+        runtime_queue.put('\n***** Num Images: %-5f *****\n' % el)
         process_images(el, 20)
 
 
@@ -657,9 +663,10 @@ def test_with_num_processes():
     runtime_queue.put(num_processes_string)
 
     # Number of processes to test (assuming 20 is the maximum for OOM issues)
-    number_processes_list = [1, 2, 5, 10, 20]
+    number_processes_list = [5, 10, 20]
 
     for el in number_processes_list:
+        runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
         process_images(100, el)
 
 
@@ -671,7 +678,7 @@ def file_cleanup(file_names):
 
 if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = ['percentages', 'runtime_metrics']
+    file_names = []
     file_cleanup(file_names)
 
     # Run tests
