@@ -135,14 +135,14 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
                 agg['total_time'] += total
 
             average_per_process = current_func[ftype + '_avg']
-            average_per_image = current_func[ftype + '_time']/num_images
+            average_per_image = total/num_images # This metric doesn't mean much if there's more than 1 process
             average_per_process_per_image = average_per_process/num_images
 
             line_string = 'Function: %-25s, ' \
                           'Type: %-15s, ' \
                           'Average Per Process: %-10f, ' \
-                          'Average Per Image: %-10f' \
-                          'Average PPPI: %-10f' \ 
+                          'Average Per Image: %-10f,' \
+                          'Average PPPI: %-10f,' \
                           'Longest: %-5f \n' \
                           % (key, ftype,
                              average_per_process,
@@ -163,9 +163,9 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
 
-        with open(filename + '_obj', 'a+') as obj_file:
+        with open('runtime_metric_obj.txt', 'a+') as obj_file:
             # note: when using shell to access this data, use json.load
-            json.dumps(obj_file)
+            json.dump(summary, obj_file)
 
 
 # ===================================================================================================================
@@ -717,13 +717,15 @@ def test_multi_correlation(image_sizes, window_sizes):
                 for process in process_list:
                     process.terminate()
                     process.join()
-
-            t_row.append((time() - start)/10)
-
+            
+            print (time() - start)/50
+            t_row.append((time() - start)/50)
+    
         t[str(image_sizes[i])] = t_row
 
-    with open('multi_correlation.txt', 'a+') as file:
-        json.dumps(file)
+    with open('correlation.txt', 'a+') as file:
+        json.dump(t, file)
+
 
 def fake_process_images(images, window_sizes, i, j, gpuid):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
@@ -731,9 +733,10 @@ def fake_process_images(images, window_sizes, i, j, gpuid):
     # Imports for testing performance (after setting device number)
     from test_util.gpuFFT import fft_gpu
     from test_util.IWarrange import IWarrange_gpu
-
-    win_A, win_B = IWarrange_gpu(images[i], images[i], window_sizes[j], window_sizes[j] / 2)
-    corr_gpu = fft_gpu(win_A, win_B)
+    
+    for x in range(5):
+        win_A, win_B = IWarrange_gpu(images[i], images[i], window_sizes[j], window_sizes[j] / 2)
+        corr_gpu = fft_gpu(win_A, win_B)
 
 def file_cleanup(file_names):
     for s in file_names:
@@ -743,10 +746,12 @@ def file_cleanup(file_names):
 
 if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = ['percentages', 'runtime_metrics']
+    file_names = ['percentages', 'runtime_metrics', 'correlation.txt']
     file_cleanup(file_names)
 
     # Run tests
     test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
-    test_with_image_set_length([20, 50, 100, 200, 500])
-    test_with_num_processes([1, 2, 5, 10, 20])
+    test_with_image_set_length([10, 20, 50, 100, 200, 500])
+    test_with_num_processes([10, 20])
+    test_challenge_set([64, 32, 16, 8])
+    test_uncertainty_set([64, 32, 16, 8])
