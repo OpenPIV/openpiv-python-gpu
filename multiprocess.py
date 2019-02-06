@@ -62,7 +62,7 @@ def measure_runtime_arg(queue, function_type):
     return measure_runtime
 
 
-def aggregate_runtime_metrics(queue, filename):
+def aggregate_runtime_metrics(queue, num_processes, filename):
     # total_dict will look like the following after tracking elements in the queue:
     # {'func_name': {'total_avg/io_avg': <float>,
     #                'longest': <int>,
@@ -71,7 +71,6 @@ def aggregate_runtime_metrics(queue, filename):
     #  'pIO': <float>
     # }
     total_dict = {}
-    qlength = queue.qsize()
     # Toggle this to print each entry into a file, otherwise only add aggregate lines
     print_all = False
 
@@ -96,7 +95,6 @@ def aggregate_runtime_metrics(queue, filename):
             
             if el_func_name in total_dict:
                 current_func = total_dict[el_func_name]
-                current_func['count'] += 1
 
                 if ftype in current_func:
                     current_func[ftype] += runtime
@@ -106,7 +104,7 @@ def aggregate_runtime_metrics(queue, filename):
                 if runtime > current_func['longest']:
                     current_func['longest'] = runtime
             else:
-                total_dict[el_func_name] = {'count': 1, ftype: runtime, 'longest': runtime}
+                total_dict[el_func_name] = {ftype: runtime, 'longest': runtime}
 
             if print_all:
                 line_string = 'Function: %s, Type: %s, Runtime: %d \n' % (el_func_name, ftype, runtime)
@@ -116,26 +114,24 @@ def aggregate_runtime_metrics(queue, filename):
 
         for key in total_dict:
             current_func = total_dict[key]
-            count = current_func['count']
             longest = current_func['longest']
 
             if key == 'save_files':
                 ftype = 'io'
                 total = current_func['io']
-                current_func['io_avg'] = total / count
+                current_func['io_avg'] = total / (num_processes*8)
                 agg['io_time'] += total
             else:  
                 ftype = 'total'
                 total = current_func['total']
-                current_func['total_avg'] = total / count
+                current_func['total_avg'] = total / num_processes
                 agg['total_time'] += total
 
             line_string = 'Function: %-25s, ' \
                           'Type: %-15s, ' \
                           'Average: %-10f, ' \
                           'Total: %-15f, ' \
-                          'Count: %-5d ' \
-                          'Longest: %-5f \n' % (key, ftype, current_func[ftype + '_avg'], total, count, longest)
+                          'Longest: %-5f \n' % (key, ftype, current_func[ftype + '_avg'], total, longest)
             file.write(line_string)
 
         pIO = agg['io_time']/agg['total_time']*100
@@ -143,8 +139,6 @@ def aggregate_runtime_metrics(queue, filename):
 
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
-
-    print('##########################' + str(qlength))
 
 
 # ===================================================================================================================
@@ -199,9 +193,6 @@ def parallelize(num_items, num_processes, list_tuple, properties):
     # Properties contains data relevant to a particular openpiv function
 
     partitions = int(num_items/num_processes)
-
-    if num_items % num_processes != 0:
-        partitions += 1
 
     print "\n Partitions Size: %d" % partitions
 
@@ -640,7 +631,7 @@ def process_images(num_images, num_processes):
         }
     parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
 
-    aggregate_runtime_metrics(runtime_queue, 'runtime_metrics.txt')
+    aggregate_runtime_metrics(runtime_queue, num_processes, 'runtime_metrics.txt')
 
 
 '''
@@ -653,7 +644,7 @@ def test_with_image_set_length():
     runtime_queue.put(image_set_length_string)
 
     # Number of images to test (assuming the total set of images > 1000)
-    set_length_list = [100, 200, 500]
+    set_length_list = [20, 50, 100, 200, 500]
 
     for el in set_length_list:
         runtime_queue.put('\n***** Num Images: %-5f *****\n' % el)
@@ -670,12 +661,12 @@ def test_with_num_processes():
     runtime_queue.put(num_processes_string)
 
     # Number of processes to test (assuming 20 is the maximum for OOM issues)
-    #number_processes_list = [1, 2, 5, 10, 20]
-    number_processes_list = [10, 20]
+    number_processes_list = [1, 2, 5, 10, 20]
+    #number_processes_list = [10, 20]
 
     for el in number_processes_list:
         runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
-        process_images(20, el)
+        process_images(100, el)
 
 
 def file_cleanup(file_names):
@@ -686,9 +677,9 @@ def file_cleanup(file_names):
 
 if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = ['percentages', 'untime_metrics']
+    file_names = ['percentages', 'runtime_metrics']
     file_cleanup(file_names)
 
     # Run tests
-    # test_with_image_set_length()
+    test_with_image_set_length()
     test_with_num_processes()
