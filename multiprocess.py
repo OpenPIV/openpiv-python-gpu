@@ -18,6 +18,7 @@ from datetime import datetime
 import numpy as np
 import os
 import functools
+import json
 
 import glob
 import sys
@@ -62,7 +63,10 @@ def measure_runtime_arg(queue, function_type):
     return measure_runtime
 
 
-def aggregate_runtime_metrics(queue, num_processes, filename):
+def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
+    # In: multiprocess queue, number of images, number of processes, file to write to
+    # Out: summary object for possible use in plots/graphs/figures
+
     # total_dict will look like the following after tracking elements in the queue:
     # {'func_name': {'total_avg/io_avg': <float>,
     #                'longest': <int>,
@@ -112,6 +116,9 @@ def aggregate_runtime_metrics(queue, num_processes, filename):
 
         agg = {'total_time': 0, 'io_time': 0}
 
+        # Dump raw data into separate file to be post-processed for graphs after interpretation
+        summary = {}
+
         for key in total_dict:
             current_func = total_dict[key]
             longest = current_func['longest']
@@ -127,18 +134,38 @@ def aggregate_runtime_metrics(queue, num_processes, filename):
                 current_func['total_avg'] = total / num_processes
                 agg['total_time'] += total
 
+            average_per_process = current_func[ftype + '_avg']
+            average_per_image = current_func[ftype + '_time']/num_images
+            average_per_process_per_image = average_per_process/num_images
+
             line_string = 'Function: %-25s, ' \
                           'Type: %-15s, ' \
-                          'Average: %-10f, ' \
-                          'Total: %-15f, ' \
-                          'Longest: %-5f \n' % (key, ftype, current_func[ftype + '_avg'], total, longest)
+                          'Average Per Process: %-10f, ' \
+                          'Average Per Image: %-10f' \
+                          'Average PPPI: %-10f' \ 
+                          'Longest: %-5f \n' \
+                          % (key, ftype,
+                             average_per_process,
+                             average_per_image,
+                             average_per_process_per_image,
+                             longest)
             file.write(line_string)
+
+            summary[key] = {'type': ftype,
+                            'APP': average_per_process,
+                            'API': average_per_image,
+                            'APPPI': average_per_process_per_image,
+                            'longest': longest}
 
         pIO = agg['io_time']/agg['total_time']*100
         pCompute = 100 - pIO
 
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
+
+        with open(filename + '_obj', 'a+') as obj_file:
+            # note: when using shell to access this data, use json.load
+            json.dumps(obj_file)
 
 
 # ===================================================================================================================
@@ -631,20 +658,17 @@ def process_images(num_images, num_processes):
         }
     parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
 
-    aggregate_runtime_metrics(runtime_queue, num_processes, 'runtime_metrics.txt')
+    aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
 
 
 '''
 Writes to 'runtime_metrics.txt'.
 Measures the runtime by varying number of images processed
 '''
-def test_with_image_set_length():
+def test_with_image_set_length(set_length_list):
     # Add line to queue to show which test
     image_set_length_string = '\n\n\nResults from varying image set size: \n'
     runtime_queue.put(image_set_length_string)
-
-    # Number of images to test (assuming the total set of images > 1000)
-    set_length_list = [20, 50, 100, 200, 500]
 
     for el in set_length_list:
         runtime_queue.put('\n***** Num Images: %-5f *****\n' % el)
@@ -655,19 +679,61 @@ def test_with_image_set_length():
 Writes to 'runtime_metrics.txt'.
 Measures the runtime by varying number of processes used
 '''
-def test_with_num_processes():
+def test_with_num_processes(number_processes_list):
     # Add line to queue to show which test
     num_processes_string = '\n\n\nResults from varying number of processes: \n'
     runtime_queue.put(num_processes_string)
-
-    # Number of processes to test (assuming 20 is the maximum for OOM issues)
-    number_processes_list = [1, 2, 5, 10, 20]
-    #number_processes_list = [10, 20]
 
     for el in number_processes_list:
         runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
         process_images(100, el)
 
+
+def test_multi_correlation(image_sizes, window_sizes):
+    images = []
+
+    for size in image_sizes:
+        images.append(np.random.randn(size, size).astype(np.float32))
+
+    # Use object here (going to dump into json)
+    t = {}
+
+    for i in range(len(images)):
+        t_row = []
+        for j in range(len(window_sizes)):
+            start = time()
+            for k in range(10):
+                # Doing simple version of multiprocessing, since our class expects files and not np.arrays directly
+                process_list = []
+                p = Process(target=fake_process_images, args=(images, window_sizes, i, j, k%4))
+                p.start()
+                process_list.append(p)
+
+            # Cleanup
+            try:
+                for process in process_list:
+                    process.join()
+            except KeyboardInterrupt:
+                for process in process_list:
+                    process.terminate()
+                    process.join()
+
+            t_row.append((time() - start)/10)
+
+        t[str(image_sizes[i])] = t_row
+
+    with open('multi_correlation.txt', 'a+') as file:
+        json.dumps(file)
+
+def fake_process_images(images, window_sizes, i, j, gpuid):
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
+
+    # Imports for testing performance (after setting device number)
+    from test_util.gpuFFT import fft_gpu
+    from test_util.IWarrange import IWarrange_gpu
+
+    win_A, win_B = IWarrange_gpu(images[i], images[i], window_sizes[j], window_sizes[j] / 2)
+    corr_gpu = fft_gpu(win_A, win_B)
 
 def file_cleanup(file_names):
     for s in file_names:
@@ -681,5 +747,6 @@ if __name__ == "__main__":
     file_cleanup(file_names)
 
     # Run tests
-    test_with_image_set_length()
-    test_with_num_processes()
+    test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
+    test_with_image_set_length([20, 50, 100, 200, 500])
+    test_with_num_processes([1, 2, 5, 10, 20])
