@@ -70,7 +70,7 @@ def aggregate_runtime_metrics(queue, filename):
     #  'pIO': <float>
     # }
     total_dict = {}
-
+    qlength = queue.qsize()
     # Toggle this to print each entry into a file, otherwise only add aggregate lines
     print_all = False
 
@@ -85,7 +85,7 @@ def aggregate_runtime_metrics(queue, filename):
         while not queue.empty():
             element = queue.get()
             
-            if (isinstance(element, str)):
+            if isinstance(element, str):
                 file.write(element)
                 continue
 
@@ -116,20 +116,25 @@ def aggregate_runtime_metrics(queue, filename):
         for key in total_dict:
             current_func = total_dict[key]
             count = current_func['count']
-            ftype = ''
+            longest = current_func['longest']
 
             if key == 'save_files':
                 ftype = 'io'
-                io_time = current_func['io']
-                current_func['io_avg'] = io_time / count
-                agg['io_time'] += io_time
+                total = current_func['io']
+                current_func['io_avg'] = total / count
+                agg['io_time'] += total
             else:  
                 ftype = 'total'
-                total_time = current_func['total']
-                current_func['total_avg'] = total_time/count
-                agg['total_time'] += total_time
+                total = current_func['total']
+                current_func['total_avg'] = total / count
+                agg['total_time'] += total
 
-            line_string = 'Function: %-25s, Type: %-15s, Average: %-10f, Total: %-10f, Count: %-5d \n' % (key, ftype, current_func[ftype + '_avg'], total_time, count)
+            line_string = 'Function: %-25s, ' \
+                          'Type: %-15s, ' \
+                          'Average: %-10f, ' \
+                          'Total: %-15f, ' \
+                          'Count: %-5d ' \
+                          'Longest: %-5d \n' % (key, ftype, current_func[ftype + '_avg'], total, count, longest)
             file.write(line_string)
 
         pIO = agg['io_time']/agg['total_time']*100
@@ -138,6 +143,7 @@ def aggregate_runtime_metrics(queue, filename):
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
 
+    print('##########################' + str(qlength))
 
 
 # ===================================================================================================================
@@ -663,7 +669,7 @@ def test_with_num_processes():
     runtime_queue.put(num_processes_string)
 
     # Number of processes to test (assuming 20 is the maximum for OOM issues)
-    number_processes_list = [5, 10, 20]
+    number_processes_list = [20]
 
     for el in number_processes_list:
         runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
@@ -682,5 +688,5 @@ if __name__ == "__main__":
     file_cleanup(file_names)
 
     # Run tests
-    test_with_image_set_length()
+    # test_with_image_set_length()
     test_with_num_processes()
