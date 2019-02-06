@@ -7,11 +7,13 @@ We use multiprocessing here because Python doesn't implement multithreading.
 
 from __future__ import division
 
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Manager
 from time import time
 from skimage import io
 from piv_tools import contrast
 from datetime import datetime
+
+# TODO: We should really only import functions/classes that we need instead of using wildcard
 
 import numpy as np
 import os
@@ -39,8 +41,8 @@ if sys.version_info[0] == 2:
 # Note: Must unpack both the dict and the value in this function
 
 # To track distribution of runtime in functions using decorators
-runtime_queue = Queue()
-counter = 0
+manager = Manager()
+runtime_queue = manager.Queue()
 
 def measure_runtime_arg(queue, function_type):
     def measure_runtime(func):
@@ -55,7 +57,6 @@ def measure_runtime_arg(queue, function_type):
 
             # Record relevant information: function name, function time, function type
             queue.put({'func_name': func_name, 'func_runtime': func_runtime, 'func_type': function_type})
-            counter += 1
             return res
         return wrap
     return measure_runtime
