@@ -40,7 +40,7 @@ if sys.version_info[0] == 2:
 
 # To track distribution of runtime in functions using decorators
 runtime_queue = Queue()
-
+counter = 0
 
 def measure_runtime_arg(queue, function_type):
     def measure_runtime(func):
@@ -55,7 +55,7 @@ def measure_runtime_arg(queue, function_type):
 
             # Record relevant information: function name, function time, function type
             queue.put({'func_name': func_name, 'func_runtime': func_runtime, 'func_type': function_type})
-
+            counter += 1
             return res
         return wrap
     return measure_runtime
@@ -134,7 +134,7 @@ def aggregate_runtime_metrics(queue, filename):
                           'Average: %-10f, ' \
                           'Total: %-15f, ' \
                           'Count: %-5d ' \
-                          'Longest: %-5d \n' % (key, ftype, current_func[ftype + '_avg'], total, count, longest)
+                          'Longest: %-5f \n' % (key, ftype, current_func[ftype + '_avg'], total, count, longest)
             file.write(line_string)
 
         pIO = agg['io_time']/agg['total_time']*100
@@ -669,11 +669,12 @@ def test_with_num_processes():
     runtime_queue.put(num_processes_string)
 
     # Number of processes to test (assuming 20 is the maximum for OOM issues)
-    number_processes_list = [20]
+    #number_processes_list = [1, 2, 5, 10, 20]
+    number_processes_list = [10, 20]
 
     for el in number_processes_list:
         runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
-        process_images(100, el)
+        process_images(20, el)
 
 
 def file_cleanup(file_names):
@@ -684,7 +685,7 @@ def file_cleanup(file_names):
 
 if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = []
+    file_names = ['percentages', 'untime_metrics']
     file_cleanup(file_names)
 
     # Run tests
