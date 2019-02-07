@@ -163,9 +163,10 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
 
-        with open('runtime_metric_obj.txt', 'a+') as obj_file:
+        with open('runtime_metric_obj.json', 'a+') as obj_file:
             # note: when using shell to access this data, use json.load
             json.dump(summary, obj_file)
+            obj_file.write('\n') # so we can parse line by line later
 
 
 # ===================================================================================================================
@@ -746,12 +747,12 @@ def file_cleanup(file_names):
 
 if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = ['percentages', 'runtime_metrics', 'correlation.txt']
+    file_names = []
     file_cleanup(file_names)
 
     # Run tests
-    test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
-    test_with_image_set_length([10, 20, 50, 100, 200, 500])
+    #test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
+    test_with_image_set_length([20, 30, 40, 50, 60, 70, 100])
     test_with_num_processes([10, 20])
-    test_challenge_set([64, 32, 16, 8])
-    test_uncertainty_set([64, 32, 16, 8])
+    #test_challenge_set([64, 32, 16, 8])
+    #test_uncertainty_set([64, 32, 16, 8])
