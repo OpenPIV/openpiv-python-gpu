@@ -589,6 +589,7 @@ def tif_to_npy(out_dir, prefix, file_list):
 # SCRIPTING FUNCTIONS
 # ===================================================================================================================
 
+
 def process_images(num_images, num_processes):
     # ===============================================================================
     # DEFINE PIV & DIRECTORY VARIABLES HERE
@@ -690,6 +691,52 @@ def test_with_num_processes(number_processes_list):
         process_images(100, el)
 
 
+'''
+Writes to 'runtime_metrics.txt'.
+Varies runtime by window size, takes the c
+'''
+def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 8)):
+    dt = 5e-6
+    overlap = 0.50
+    coarse_factor = 2
+    nb_iter_max = 3
+    validation_iter = 1
+    x_scale = 7.45e-6  # m/pixel
+    y_scale = 7.41e-6  # m/pixel
+
+    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data"
+    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data"
+
+    imA_list = get_input_files(im_dir, file_pattern[0])
+    imB_list = get_input_files(im_dir, file_pattern[1])
+
+    if file_pattern[0] == file_pattern[1]:
+        # same file pattern, means images are implictly pairs by index
+        del imA_list[1::2] # delete odd entries
+        del imB_list[0::2] # delete even entries
+
+    num_images = len(imB_list)
+
+    num_processes = 20
+
+    for min_window_size in window_sizes:
+        window_size_string  = '\n\n\nResults from %s set, with window size %d: \n' % (set_name, min_window_size)
+        runtime_queue.put(window_size_string)
+        # make output & replacement directory paths according to window size
+        out_dir += str(min_window_size) + "/"
+        rep_dir += str(min_window_size) + "/"
+
+        # Processing images
+        widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
+                            "min_window_size": min_window_size, "overlap": overlap,
+                            "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
+                            "validation_iter": validation_iter, "x_scale": x_scale,
+                            "y_scale": y_scale}
+        parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
+
+    aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
+
+
 def test_multi_correlation(image_sizes, window_sizes):
     images = []
 
@@ -754,5 +801,6 @@ if __name__ == "__main__":
     #test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
     test_with_image_set_length([20, 30, 40, 50, 60, 70, 100])
     test_with_num_processes([10, 20])
-    #test_challenge_set([64, 32, 16, 8])
-    #test_uncertainty_set([64, 32, 16, 8])
+
+    test_external_set('/scratch/p/psulliva/cdallas/2nd_PIV_challenge_data/Case_A/images/', 'challenge', ('A*a.npy', 'A*b.npy'))
+    test_external_set('/scratch/p/psulliva/cdallas/UQ_database/F001/images/', 'uncertainty', ('adj_*_data.txt', 'adj_*_data.txt'))
