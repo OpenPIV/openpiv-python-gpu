@@ -19,12 +19,30 @@ Development is currently done on a Linux/Mac OSX environment, but as soon as pos
 Windows will be tested. If you have access to one of these platforms
 please test the code. 
 
+
 ## Test without installation
 You can test the code without needing to install anything locally. Included in this 
 repository is the IPython Notebook [Openpiv_Python_Cython_GPU_demo.ipynb](Openpiv_Python_Cython_GPU_demo.ipynb). 
 When viewing the file on Github there will be a link to view the notebook with Colaboratory. 
 Clicking this will load the notebook into Googles free cloud computing service and you can test
 the GPU capabilities. 
+
+
+## Install From Source
+
+Make sure you have installed all the dependancies (numpy, matplotlib, scipy, cython, skcuda, pycuda).
+The GPU version will only install if it detecs both skcuda and pycuda. Otherwise, only the CPU version will be installed. 
+
+Clone the repository from Github onto your computer
+
+  git clone https://github.com/OpenPIV/openpiv-python-gpu.git
+
+Compile the cython and CUDA code (this can take a while)
+
+  python setup.py build_ext --inplace
+  
+After this the GPU functions should be good to go. You will likely need to add the openpiv directory to the PYTHONPATH to be able to import the functions. 
+  
 
 ## Contributors
 1. OpenPIV team, https://groups.google.com/forum/#!forum/openpiv-users
