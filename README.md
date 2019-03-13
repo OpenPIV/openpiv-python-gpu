@@ -30,8 +30,8 @@ the GPU capabilities.
 
 ## Install From Source
 
-Make sure you have installed all the dependancies (numpy, matplotlib, scipy, cython, skcuda, pycuda).
-The GPU version will only install if it detecs both skcuda and pycuda. Otherwise, only the CPU version will be installed. 
+Make sure you have installed all the dependancies (`numpy, matplotlib, scipy, cython, skcuda, pycuda`).
+The GPU version will only install if it detects both `skcuda` and `pycuda`. Otherwise, only the CPU version will be installed. 
 
 Clone the repository from Github onto your computer:
 
