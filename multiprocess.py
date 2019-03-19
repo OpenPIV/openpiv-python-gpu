@@ -572,18 +572,16 @@ def get_input_files(directory, file_name_pattern):
     if not file_list:
         new_file_pattern = os.path.splitext(file_name_pattern)[0] + '.tif'
         file_list = sorted(glob.glob(directory + new_file_pattern))        
-        
-        prefix = file_name_pattern.split("*")[0]
-        tif_to_npy(directory, prefix, file_list)
+        tif_to_npy(directory, file_name_pattern, file_list)
         file_list = sorted(glob.glob(directory + file_name_pattern))
 
     return file_list
 
 
-def tif_to_npy(out_dir, prefix, file_list):
+def tif_to_npy(out_dir, pattern, file_list):
     for i in range(len(file_list)):
         file_read = io.imread(file_list[i])
-        np.save(out_dir + prefix + "{:05}.npy".format(i), file_read)
+        np.save(os.path.splitext(file_list[i])[0] + '.npy', file_read)
 
 # ===================================================================================================================
 # SCRIPTING FUNCTIONS
@@ -611,22 +609,22 @@ def process_images(num_images, num_processes):
     r_thresh = 2.0
 
     # path to input and output directory
-    raw_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/raw_data/"
-    im_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/PIV_Cont_Output/"
-    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data"
-    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data"
+    raw_dir = "/scratch/p/psulliva/chouvinc/marks_piv_data/"
+    im_dir = "/scratch/p/psulliva/chouvinc/danalysis/im/"
+    out_dir = "/scratch/p/psulliva/chouvinc/danalysis/output_data"
+    rep_dir = "/scratch/p/psulliva/chouvinc/danalysis/replaced_data"
 
     # make output & replacement directory paths according to window size
     out_dir += str(min_window_size) + "/"
     rep_dir += str(min_window_size) + "/"
 
-    camera_zero_pattern = "Camera_#0_*.npy"
-    camera_one_pattern = "Camera_#1_*.npy"
+    camera_zero_pattern = "C*_a.npy"
+    camera_one_pattern = "C*_b.npy"
 
     # change pattern to your filename pattern
     imA_list = get_input_files(raw_dir, camera_zero_pattern)
     imB_list = get_input_files(raw_dir, camera_one_pattern)
-
+    
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
     parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
@@ -651,16 +649,16 @@ def process_images(num_images, num_processes):
     v_list = get_input_files(out_dir, "v*.npy")
 
     # Interpolate the mask onto the PIV grid
-    if "mask_int" not in locals():
-        mask_int = interp_mask(mask, out_dir + "/", exp=2)
+    #if "mask_int" not in locals():
+     #   mask_int = interp_mask(mask, out_dir, exp=2)
 
-    routliers_properties = {
-        "gpu_func": replace_outliers, "out_dir": rep_dir,
-        "mask": mask_int, "r_thresh": r_thresh
-        }
-    parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+    #routliers_properties = {
+     #   "gpu_func": replace_outliers, "out_dir": rep_dir,
+      #  "mask": mask_int, "r_thresh": r_thresh
+       # }
+   # parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
 
-    aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
+    #aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
 
 
 '''
@@ -716,8 +714,7 @@ def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 
         del imB_list[0::2] # delete even entries
 
     num_images = len(imB_list)
-
-    num_processes = 20
+    num_processes = 10
 
     for min_window_size in window_sizes:
         window_size_string  = '\n\n\nResults from %s set, with window size %d: \n' % (set_name, min_window_size)
@@ -733,8 +730,7 @@ def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 
                             "validation_iter": validation_iter, "x_scale": x_scale,
                             "y_scale": y_scale}
         parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
-
-    aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
+        aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'external_set_metrics.txt')
 
 
 def test_multi_correlation(image_sizes, window_sizes):
@@ -796,11 +792,13 @@ if __name__ == "__main__":
     # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
     file_names = []
     file_cleanup(file_names)
-
+    
     # Run tests
     #test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
-    test_with_image_set_length([20, 30, 40, 50, 60, 70, 100])
-    test_with_num_processes([10, 20])
+    #test_with_image_set_length([200, 300, 500])
+    #test_with_num_processes([10, 20])
 
-    test_external_set('/scratch/p/psulliva/cdallas/2nd_PIV_challenge_data/Case_A/images/', 'challenge', ('A*a.npy', 'A*b.npy'))
-    test_external_set('/scratch/p/psulliva/cdallas/UQ_database/F001/images/', 'uncertainty', ('adj_*_data.txt', 'adj_*_data.txt'))
+    process_images(500,20)
+    #test_external_set('/scratch/p/psulliva/chouvinc/marks_piv_data/', 'markspivdata', ('C*_a.npy', 'C*_b.npy'))
+    #test_external_set('/scratch/p/psulliva/cdallas/2nd_PIV_challenge_data/Case_A/images/', 'challenge', ('*a.npy', '*b.npy'))
+    #test_external_set('/scratch/p/psulliva/cdallas/UQ_database/F001/images/', 'uncertainty', ('adj_*.npy', 'adj_*.npy'))
