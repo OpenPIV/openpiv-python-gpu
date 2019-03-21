@@ -12,6 +12,7 @@ from time import time
 from skimage import io
 from piv_tools import contrast
 from datetime import datetime
+from PIL import Image
 
 # TODO: We should really only import functions/classes that we need instead of using wildcard
 
@@ -559,8 +560,13 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 def save_files(out_dir, file_name, file_list):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
-
-    np.save(out_dir + file_name, file_list)
+    
+    file_ext = os.path.splitext(file_name)[1]
+    if file_ext == '.tif':
+        im = Image.fromarray(file_list)
+        im.save(out_dir + file_name)
+    else:
+        np.save(out_dir + file_name, file_list)
 
 
 def get_input_files(directory, file_name_pattern):
@@ -610,9 +616,9 @@ def process_images(num_images, num_processes):
 
     # path to input and output directory
     raw_dir = "/scratch/p/psulliva/chouvinc/marks_piv_data/"
-    im_dir = "/scratch/p/psulliva/chouvinc/danalysis/im/"
-    out_dir = "/scratch/p/psulliva/chouvinc/danalysis/output_data"
-    rep_dir = "/scratch/p/psulliva/chouvinc/danalysis/replaced_data"
+    im_dir = "/scratch/p/psulliva/chouvinc/danalysis2/im/"
+    out_dir = "/scratch/p/psulliva/chouvinc/danalysis2/output_data"
+    rep_dir = "/scratch/p/psulliva/chouvinc/danalysis2/replaced_data"
 
     # make output & replacement directory paths according to window size
     out_dir += str(min_window_size) + "/"
@@ -798,7 +804,7 @@ if __name__ == "__main__":
     #test_with_image_set_length([200, 300, 500])
     #test_with_num_processes([10, 20])
 
-    process_images(500,20)
+    process_images(20,20)
     #test_external_set('/scratch/p/psulliva/chouvinc/marks_piv_data/', 'markspivdata', ('C*_a.npy', 'C*_b.npy'))
     #test_external_set('/scratch/p/psulliva/cdallas/2nd_PIV_challenge_data/Case_A/images/', 'challenge', ('*a.npy', '*b.npy'))
     #test_external_set('/scratch/p/psulliva/cdallas/UQ_database/F001/images/', 'uncertainty', ('adj_*.npy', 'adj_*.npy'))
