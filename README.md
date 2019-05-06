@@ -42,6 +42,10 @@ Compile the cython and CUDA code (this can take a while):
     python setup.py build_ext --inplace
   
 After this the GPU functions should be good to go. You will likely need to add the openpiv directory to the PYTHONPATH to be able to import the functions. 
+
+## How to cite this work
+
+Dallas CA, Wu M, Chou VP, Liberzon A, Sullivan PE. GPU Accelerated Open Source Particle Image Velocimetry Software for High Performance Computing Systems. ASME. J. Fluids Eng. 2019;():. [doi:10.1115/1.4043422](http://fluidsengineering.asmedigitalcollection.asme.org/article.aspx?articleid=2730543).
   
 
 ## Contributors
