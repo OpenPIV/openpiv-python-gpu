@@ -1,4 +1,4 @@
-import os
+from os import path
 
 from setuptools import setup, find_packages
 from setuptools.extension import Extension
@@ -11,39 +11,38 @@ GPU_SUPPORT = False
 try:
     import pycuda
     import skcuda
+
     print("GPU support found. Will build GPU extensions.")
     GPU_SUPPORT = True
 except ImportError:
     print("No GPU support found. Continuing install.")
     pass
 
-
 extensions = [
-    Extension("openpiv.process",["./openpiv/process.pyx"],include_dirs = [numpy.get_include()]),
-    Extension("openpiv.lib",["./openpiv/lib.pyx"], include_dirs = [numpy.get_include()])
-    ]
+    Extension("openpiv.process", ["./openpiv/process.pyx"], include_dirs=[numpy.get_include()]),
+    Extension("openpiv.lib", ["./openpiv/lib.pyx"], include_dirs=[numpy.get_include()])
+]
 
-if(GPU_SUPPORT == True):
-    gpu_module = Extension(    name         = "openpiv.gpu_process",
-                            sources      = ["openpiv/src/gpu_process.pyx"],
-                            include_dirs = [numpy.get_include()],
-                       )
+if GPU_SUPPORT == True:
+    gpu_module = Extension(name="openpiv.gpu_process",
+                           sources=["openpiv/src/gpu_process.pyx"],
+                           include_dirs=[numpy.get_include()],
+                           )
     extensions.append(gpu_module)
 
-extensions = cythonize(extensions,include_path = [numpy.get_include()])
+extensions = cythonize(extensions, include_path=[numpy.get_include()])
 
 # read the contents of your README file
-from os import path
 this_directory = path.abspath(path.dirname(__file__))
-#with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
+# with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 with open(path.join(this_directory, 'README.md')) as f:
     long_description = f.read()
 
 setup(
-    name = "OpenPIV",
-    version ='0.21.9',
-    cmdclass = {'build_ext': build_ext},
-    ext_modules = extensions,
+    name="OpenPIV",
+    version='0.21.9',
+    cmdclass={'build_ext': build_ext},
+    ext_modules=extensions,
     packages=find_packages(),
     include_package_data=True,
     setup_requires=[
@@ -60,7 +59,7 @@ setup(
         'progressbar2',
         'scipy',
     ],
-    classifiers = [
+    classifiers=[
         # PyPI-specific version type. The number specified here is a magic constant
         # with no relation to this application's version numbering scheme. *sigh*
         'Development Status :: 4 - Beta',
