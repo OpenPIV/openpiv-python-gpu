@@ -25,7 +25,6 @@ from numpy.fft import rfft2, irfft2
 from numpy import ma
 from scipy.signal import convolve2d
 from numpy import log
-import matplotlib.pyplot as plt
 
 
 
@@ -63,12 +62,11 @@ def get_coordinates(image_size, window_size, overlap):
     field_shape = get_field_shape(image_size, window_size, overlap)
 
     # compute grid coordinates of the interrogation window centers
-    x = np.arange(field_shape[1]) * (window_size -
-                                     overlap) + (window_size - 1) / 2.0
-    y = np.arange(field_shape[0]) * (window_size -
-                                     overlap) + (window_size - 1) / 2.0
+    # compute grid coordinates of the interrogation window centers
+    x = np.arange( field_shape[1] )*(window_size-overlap) + window_size/2.0
+    y = np.arange( field_shape[0] )*(window_size-overlap) + window_size/2.0
 
-    return np.meshgrid(x, y[::-1])
+    return np.meshgrid(x, y)
 
 
 def get_field_shape(image_size, window_size, overlap):
@@ -276,7 +274,6 @@ def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
     except IndexError:
         subp_peak_position = default_peak_position
         
-
     return subp_peak_position[0] - default_peak_position[0], subp_peak_position[1] - default_peak_position[1]
 
 
@@ -286,7 +283,7 @@ def sig2noise_ratio(corr, sig2noise_method='peak2peak', width=2):
 
     The signal to noise ratio is computed from the correlation map with
     one of two available method. It is a measure of the quality of the
-    matching between to interogation windows.
+    matching between to interrogation windows.
 
     Parameters
     ----------
@@ -344,7 +341,7 @@ def sig2noise_ratio(corr, sig2noise_method='peak2peak', width=2):
     return sig2noise
 
 
-def correlate_windows(window_a, window_b, corr_method='fft', nfftx=None, nffty=None):
+def correlate_windows(window_a, window_b, corr_method='fft', nfftx=0, nffty=0):
     """Compute correlation function between two interrogation windows.
 
     The correlation function can be computed by using the correlation
@@ -387,9 +384,9 @@ def correlate_windows(window_a, window_b, corr_method='fft', nfftx=None, nffty=N
     
     if corr_method == 'fft':
         window_b = np.conj(window_b[::-1, ::-1])
-        if nfftx is None:
+        if nfftx == 0:
             nfftx = nextpower2(window_b.shape[0] + window_a.shape[0])  
-        if nffty is None:
+        if nffty  == 0:
             nffty = nextpower2(window_b.shape[1] + window_a.shape[1]) 
         
         f2a = rfft2(normalize_intensity(window_a), s=(nfftx, nffty))
@@ -427,12 +424,12 @@ def extended_search_area_piv(
         window_size, 
         overlap=0, 
         dt=1.0,
-        search_area_size=None, 
+        search_area_size=0, 
         corr_method='fft',
         subpixel_method='gaussian', 
         sig2noise_method=None,
         width=2, 
-        nfftx=None, nffty=None):
+        nfftx=0, nffty=0):
     """Standard PIV cross-correlation algorithm, with an option for 
     extended area search that increased dynamic range. The search region
     in the second frame is larger than the interrogation window size in the 
@@ -514,7 +511,7 @@ def extended_search_area_piv(
     
     # check the inputs for validity
     
-    if search_area_size is None:
+    if search_area_size == 0:
         search_area_size = window_size
     
     if overlap >= window_size:
@@ -528,11 +525,8 @@ def extended_search_area_piv(
         raise ValueError('window size cannot be larger than the image')
         
     # get field shape
-    n_rows, n_cols = get_field_shape(frame_a.shape, search_area_size, overlap )
-            
-    u = np.zeros((n_rows, n_cols))
-    v = np.zeros((n_rows, n_cols))
-    sig2noise = np.zeros((n_rows, n_cols)) 
+    n_rows, n_cols = get_field_shape((frame_a.shape[0], frame_a.shape[1]), 
+                                     window_size, overlap )
 
     u, v = np.zeros((n_rows, n_cols)), np.zeros((n_rows, n_cols))
     
@@ -584,11 +578,11 @@ def extended_search_area_piv(
                 row, col = find_subpixel_peak_position(corr, 
                                                         subpixel_method=subpixel_method)
                                 
-                row -=  (search_area_size + window_size - 1)//2
-                col -=  (search_area_size + window_size - 1)//2
+                row -= (search_area_size + window_size - 1)//2
+                col -= (search_area_size + window_size - 1)//2
     
                 # get displacements, apply coordinate system definition
-                u[k,m],v[k,m] = -col, row
+                u[k,m],v[k,m] = -col, row 
                 
                 # get signal to noise ratio
                 if sig2noise_method is not None:
