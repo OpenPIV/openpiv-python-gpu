@@ -11,16 +11,16 @@ I will try to continue work on this code that was started by the OpenPIV team an
 The requirements for the process.py module are OpenPIV (GPU version) and the standard Python scientific libraries (SciPy, Matplotlib, etc.).
 The PIV analysis on velocity fields are not dependent on OpenPIV, however.
 
-OpenPIV depends on CUDA, which may be difficult to install. In addition to the instructions at https://github.com/OpenPIV/openpiv-python-gpu, the procedure below might help with installing OpenPIV.
+OpenPIV requires CUDA, which may be difficult to install. In addition to the instructions at https://github.com/OpenPIV/openpiv-python-gpu, the procedure below might help with installing OpenPIV.
 
 ### 0. Nvidia drivers:
-Update to the latest drivers.
+Update to the latest supported drivers.
 
 https://www.nvidia.com/Download/index.aspx
 
 ### 1. CUDA toolkit:
 
-Download from Nvidia website:
+Download CUDA from Nvidia website:
 
 https://developer.nvidia.com/cuda-downloads
 
@@ -28,20 +28,18 @@ If installing on Windows, Visual Studio C++ compiler needs to be installed befor
 
 https://visualstudio.microsoft.com/vs/features/cplusplus/
 
-If installing on Linux, CUDA needs to be added to path:
-
-    export PATH=/usr/local/cuda-10.2/bin:/usr/local/cuda-10.2/NsightCompute-2019.1${PATH:+:${PATH}}
-
-Check that the CUDA compiler is callable (Linux):
-
-    $ nvcc -V
-
-For more info, see the Nvidia website:
+If installing on Linux, follow the instructions for Linux at:
 
 https://docs.nvidia.com/cuda/
 
+Ensure that the post-installation instructions are followed and test the install before proceeding to then next step.
+
+Ensure that CUDA is compiled and on the PATH:
+
+	nvcc -V
+
 ### 2. scikit-CUDA:
-Install scikit-CUDA, which should install PyCUDA as well. If this throws errors, the CUDA compiler was probably not installed properly, or was not added to the path.
+Install scikit-CUDA, which should install PyCUDA as well. If this throws errors, CUDA cwas probably not installed properly in the step above.
         
     pip install scikit-cuda
 

@@ -25,7 +25,7 @@ extensions = [
 
 if GPU_SUPPORT == True:
     gpu_module = Extension(name="openpiv.gpu_process",
-                           sources=["openpiv/src/gpu_process.pyx"],
+                           sources=["openpiv/gpu_process.pyx"],
                            include_dirs=[numpy.get_include()],
                            )
     extensions.append(gpu_module)
