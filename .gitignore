@@ -1,6 +1,7 @@
 openpiv/docs/sphinx-docs/downloads/tutorial-part1
 *.m
 openpiv/src/process.c
+openpiv/src/gpu_process.c
 openpiv/src/lib.c
 *.jvc
 *.pyc
@@ -9,29 +10,7 @@ build/
 /setup.cfg
 openpiv/lib.so
 openpiv/process.so
-mark_data/Camera 1-120.tif
-mark_data/Camera 1-120.tif.png
-mark_data/Camera 1-121.tif
-mark_data/Camera 1-122.tif
-mark_data/Camera 1-123.tif
-mark_data/Camera 1-124.tif
-mark_data/Camera 1-125.tif
-mark_data/Camera 1-126.tif
-mark_data/Camera 1-127.tif
-mark_data/Camera 1-128.tif
-mark_data/Camera 1-129.tif
-mark_data/Camera 1-130.tif
-mark_data/neg.tif
-mark_data/tutorial-part1.py
-mark_result/Camera 1-120.tif.png
-mark_result/Camera 1-121.tif.png
-mark_result/Camera 1-122.tif.png
-mark_result/Camera 1-123.tif.png
-mark_result/Camera 1-124.tif.png
-mark_result/Camera 1-125.tif.png
-mark_result/Camera 1-126.tif.png
-mark_result/Camera 1-127.tif.png
-mark_result/Camera 1-128.tif.png
+openpiv/gpu_process.so
 openpiv-python-mark-data-checkpoint.ipynb
 openpiv-python-tutorial-part1-checkpoint.ipynb
 dist
