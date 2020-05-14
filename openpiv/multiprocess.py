@@ -5,16 +5,12 @@ We use multiprocessing here because Python doesn't implement multithreading.
 
 """
 
-from __future__ import division
-
 from multiprocessing import Process, Manager
 from time import time
 from skimage import io
 from piv_tools import contrast
 from datetime import datetime
 from PIL import Image
-
-# TODO: We should really only import functions/classes that we need instead of using wildcard
 
 import numpy as np
 import os
@@ -24,15 +20,9 @@ import json
 import glob
 import sys
 
-# import matplotlib.pyplot as plt
 import scipy.interpolate as interp
 
-if sys.version_info[0] == 3:
-    print("This system is using Python 3, but OpenPIV requires Python 2")
-
-# OpenPIV requires Python 2
-if sys.version_info[0] == 2:
-    import openpiv.filters
+import openpiv.filters
 
 # ===================================================================================================================
 # WARNING: File read/close is UNSAFE in multiprocessing applications because multiple
@@ -46,9 +36,11 @@ if sys.version_info[0] == 2:
 manager = Manager()
 runtime_queue = manager.Queue()
 
+
 def measure_runtime_arg(queue, function_type):
     def measure_runtime(func):
-        @functools.wraps(func) # preserve introspection of wrapped function (now func.__name__ returns func_name and not 'wrap')
+        @functools.wraps(
+            func)  # preserve introspection of wrapped function (now func.__name__ returns func_name and not 'wrap')
         def wrap(*args, **kwargs):
             start_time = time()
             res = func(*args, **kwargs)
@@ -60,7 +52,9 @@ def measure_runtime_arg(queue, function_type):
             # Record relevant information: function name, function time, function type
             queue.put({'func_name': func_name, 'func_runtime': func_runtime, 'func_type': function_type})
             return res
+
         return wrap
+
     return measure_runtime
 
 
@@ -89,7 +83,7 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
 
         while not queue.empty():
             element = queue.get()
-            
+
             if isinstance(element, str):
                 file.write(element)
                 continue
@@ -97,7 +91,7 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
             el_func_name = element['func_name']
             ftype = element['func_type']
             runtime = element['func_runtime']
-            
+
             if el_func_name in total_dict:
                 current_func = total_dict[el_func_name]
 
@@ -127,17 +121,17 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
             if key == 'save_files':
                 ftype = 'io'
                 total = current_func['io']
-                current_func['io_avg'] = total / (num_processes*8)
+                current_func['io_avg'] = total / (num_processes * 8)
                 agg['io_time'] += total
-            else:  
+            else:
                 ftype = 'total'
                 total = current_func['total']
                 current_func['total_avg'] = total / num_processes
                 agg['total_time'] += total
 
             average_per_process = current_func[ftype + '_avg']
-            average_per_image = total/num_images # This metric doesn't mean much if there's more than 1 process
-            average_per_process_per_image = average_per_process/num_images
+            average_per_image = total / num_images  # This metric doesn't mean much if there's more than 1 process
+            average_per_process_per_image = average_per_process / num_images
 
             line_string = 'Function: %-25s, ' \
                           'Type: %-15s, ' \
@@ -158,23 +152,22 @@ def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
                             'APPPI': average_per_process_per_image,
                             'longest': longest}
 
-        pIO = agg['io_time']/agg['total_time']*100
+        pIO = agg['io_time'] / agg['total_time'] * 100
         pCompute = 100 - pIO
 
         total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
         file.write(total_string)
 
-        with open('runtime_metric_obj.json', 'a+') as obj_file:
+        with open('../runtime_metric_obj.json', 'a+') as obj_file:
             # note: when using shell to access this data, use json.load
             json.dump(summary, obj_file)
-            obj_file.write('\n') # so we can parse line by line later
+            obj_file.write('\n')  # so we can parse line by line later
 
 
 # ===================================================================================================================
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
 # ===================================================================================================================
 
-# TODO -- separate the functions into separate module
 class MPGPU(Process):
 
     # Keep all properties that belong to an individual openpiv function within the properties dict
@@ -198,20 +191,20 @@ class MPGPU(Process):
         func = self.properties["gpu_func"]
 
         for i in range(self.num_images):
-            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]    
+            frame_a, frame_b = self.frame_list_a[i], self.frame_list_b[i]
             try:
                 func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
             except Exception as e:
-                print "\n An exception occurred! %s" % e
-                print sys.exc_info()[2].tb_lineno
+                print("\n An exception occurred! %s" % e)
+                print(sys.exc_info()[2].tb_lineno)
                 self.exceptions += 1
 
-        print "\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
+        print("\nProcess %d took %d seconds to finish %d image pairs (%d to %d)!" % (self.process_num,
                                                                                      time() - process_time,
                                                                                      self.num_images,
                                                                                      self.start_index,
-                                                                                     self.start_index + self.num_images)
-        print "\nNumber of exceptions: %d" % self.exceptions
+                                                                                     self.start_index + self.num_images))
+        print("\nNumber of exceptions: %d" % self.exceptions)
 
     @staticmethod
     def load_images(image_a, image_b):
@@ -221,17 +214,17 @@ class MPGPU(Process):
 def parallelize(num_items, num_processes, list_tuple, properties):
     # Properties contains data relevant to a particular openpiv function
 
-    partitions = int(num_items/num_processes)
+    partitions = int(num_items / num_processes)
 
-    print "\n Partitions Size: %d" % partitions
+    print("\n Partitions Size: %d" % partitions)
 
     process_list = []
 
     for i in range(num_items):
         # If we go over array bounds, stop spawning new processes
-        if i*partitions > num_items:
+        if i * partitions > num_items:
             break
-        start_index = i*partitions
+        start_index = i * partitions
         subList_A = list_tuple[0][start_index: start_index + partitions]
         subList_B = list_tuple[1][start_index: start_index + partitions]
         process = MPGPU(i % 4, i, start_index, subList_A, subList_B, properties)
@@ -365,15 +358,15 @@ def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
         u_out[mask] = 0.0
         v_out[mask] = 0.0
 
-    print("Number of u outliers: {}".format(np.sum(np.isnan(u_out))))
-    print("Percentage: {}".format(np.sum(np.isnan(u_out)) / u.size * 100))
-    print("Number of v outliers: {}".format(np.sum(np.isnan(v_out))))
-    print("Percentage: {}".format(np.sum(np.isnan(v_out)) / v.size * 100))
+    print(("Number of u outliers: {}".format(np.sum(np.isnan(u_out)))))
+    print(("Percentage: {}".format(np.sum(np.isnan(u_out)) / u.size * 100)))
+    print(("Number of v outliers: {}".format(np.sum(np.isnan(v_out)))))
+    print(("Percentage: {}".format(np.sum(np.isnan(v_out)) / v.size * 100)))
 
     print("Replacing Outliers")
     u_out, v_out = openpiv.filters.replace_outliers(u_out, v_out)
 
-    return (u_out, v_out)
+    return u_out, v_out
 
 
 @measure_runtime_arg(queue=runtime_queue, function_type='total')
@@ -439,18 +432,8 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
             mask_int[low - exp:low, i] = 0
             mask_int[high:high + exp + 1, i] = 0
 
-    # plot some shit
-    # if plot:
-    #     mask_plot = mask.astype(float)
-    #     mask_plot[mask] = np.nan
-    #     mask_int_plot = mask_int.astype(float) + 10
-    #     mask_int_plot[mask_int] = np.nan
-    #     plt.pcolormesh(x_r, y_r, mask_int_plot, cmap="jet")
-    #     plt.pcolormesh(x_pix, y_pix, mask_plot, cmap="jet")
-    #     plt.colorbar()
-    #     plt.show()
-
     return mask_int
+
 
 @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
@@ -463,17 +446,17 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
     pixels_a_old = frame_a.flatten()
     pixels_b_old = frame_b.flatten()
     # % Difference between the two images in pixel sum based on the first image
-    p_deviation = np.sum(frame_a.flatten() - frame_b.flatten())/np.sum(pixels_a_old)
+    p_deviation = np.sum(frame_a.flatten() - frame_b.flatten()) / np.sum(pixels_a_old)
 
-    frame_a = contrast(frame_a, r_low = 60, r_high = 90)
-    frame_b = contrast(frame_b, r_low = 60, r_high = 90)
+    frame_a = contrast(frame_a, r_low=60, r_high=90)
+    frame_b = contrast(frame_b, r_low=60, r_high=90)
 
     # % Difference in pixel weight between the old and new image a
     pixels_a_new = frame_a.flatten()
     pixels_b_new = frame_b.flatten()
 
-    a_deviation = np.sum(pixels_a_new - pixels_a_old)/np.sum(pixels_a_new)
-    b_deviation = np.sum(pixels_b_new - pixels_b_old)/np.sum(pixels_b_new)
+    a_deviation = np.sum(pixels_a_new - pixels_a_old) / np.sum(pixels_a_new)
+    b_deviation = np.sum(pixels_b_new - pixels_b_old) / np.sum(pixels_b_new)
 
     file_string = "Image number %d: P = %f, A = %f, B = %f" % (start_index, p_deviation, a_deviation, b_deviation)
     file.write(file_string)
@@ -501,7 +484,6 @@ def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=
 
 @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
-
     # TODO -- Decouple these parameters from the functions below and pass them in
     # ==================================================================
     # PARAMETERS FOR OPENPIV
@@ -560,7 +542,7 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 def save_files(out_dir, file_name, file_list):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
-    
+
     file_ext = os.path.splitext(file_name)[1]
     if file_ext == '.tif':
         im = Image.fromarray(file_list)
@@ -573,11 +555,11 @@ def get_input_files(directory, file_name_pattern):
     # get the images (either .tif or npy), converting to npy if .tif
 
     file_list = sorted(glob.glob(directory + file_name_pattern))
-    
+
     # if list is empty, files could be in tif format
     if not file_list:
         new_file_pattern = os.path.splitext(file_name_pattern)[0] + '.tif'
-        file_list = sorted(glob.glob(directory + new_file_pattern))        
+        file_list = sorted(glob.glob(directory + new_file_pattern))
         tif_to_npy(directory, file_name_pattern, file_list)
         file_list = sorted(glob.glob(directory + file_name_pattern))
 
@@ -588,6 +570,7 @@ def tif_to_npy(out_dir, pattern, file_list):
     for i in range(len(file_list)):
         file_read = io.imread(file_list[i])
         np.save(os.path.splitext(file_list[i])[0] + '.npy', file_read)
+
 
 # ===================================================================================================================
 # SCRIPTING FUNCTIONS
@@ -609,7 +592,7 @@ def process_images(num_images, num_processes):
     y_scale = 7.41e-6  # m/pixel
 
     # load the mask so that it is flipped in the correct orientation
-    mask = np.load("mask.npy")[::-1, :]
+    mask = np.load("../mask.npy")[::-1, :]
 
     # Some threshold value for replacing spurious vectors
     r_thresh = 2.0
@@ -630,7 +613,7 @@ def process_images(num_images, num_processes):
     # change pattern to your filename pattern
     imA_list = get_input_files(raw_dir, camera_zero_pattern)
     imB_list = get_input_files(raw_dir, camera_one_pattern)
-    
+
     # Pre-processing contrast
     contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
     parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
@@ -655,22 +638,26 @@ def process_images(num_images, num_processes):
     v_list = get_input_files(out_dir, "v*.npy")
 
     # Interpolate the mask onto the PIV grid
-    #if "mask_int" not in locals():
-     #   mask_int = interp_mask(mask, out_dir, exp=2)
+    # if "mask_int" not in locals():
+    #   mask_int = interp_mask(mask, out_dir, exp=2)
 
-    #routliers_properties = {
-     #   "gpu_func": replace_outliers, "out_dir": rep_dir,
-      #  "mask": mask_int, "r_thresh": r_thresh
-       # }
-   # parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+    # routliers_properties = {
+    #   "gpu_func": replace_outliers, "out_dir": rep_dir,
+    #  "mask": mask_int, "r_thresh": r_thresh
+    # }
 
-    #aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
+
+# parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
+
+# aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
 
 
 '''
 Writes to 'runtime_metrics.txt'.
 Measures the runtime by varying number of images processed
 '''
+
+
 def test_with_image_set_length(set_length_list):
     # Add line to queue to show which test
     image_set_length_string = '\n\n\nResults from varying image set size: \n'
@@ -685,6 +672,8 @@ def test_with_image_set_length(set_length_list):
 Writes to 'runtime_metrics.txt'.
 Measures the runtime by varying number of processes used
 '''
+
+
 def test_with_num_processes(number_processes_list):
     # Add line to queue to show which test
     num_processes_string = '\n\n\nResults from varying number of processes: \n'
@@ -699,6 +688,8 @@ def test_with_num_processes(number_processes_list):
 Writes to 'runtime_metrics.txt'.
 Varies runtime by window size, takes the c
 '''
+
+
 def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 8)):
     dt = 5e-6
     overlap = 0.50
@@ -716,14 +707,14 @@ def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 
 
     if file_pattern[0] == file_pattern[1]:
         # same file pattern, means images are implictly pairs by index
-        del imA_list[1::2] # delete odd entries
-        del imB_list[0::2] # delete even entries
+        del imA_list[1::2]  # delete odd entries
+        del imB_list[0::2]  # delete even entries
 
     num_images = len(imB_list)
     num_processes = 10
 
     for min_window_size in window_sizes:
-        window_size_string  = '\n\n\nResults from %s set, with window size %d: \n' % (set_name, min_window_size)
+        window_size_string = '\n\n\nResults from %s set, with window size %d: \n' % (set_name, min_window_size)
         runtime_queue.put(window_size_string)
         # make output & replacement directory paths according to window size
         out_dir += str(min_window_size) + "/"
@@ -755,7 +746,7 @@ def test_multi_correlation(image_sizes, window_sizes):
             for k in range(10):
                 # Doing simple version of multiprocessing, since our class expects files and not np.arrays directly
                 process_list = []
-                p = Process(target=fake_process_images, args=(images, window_sizes, i, j, k%4))
+                p = Process(target=fake_process_images, args=(images, window_sizes, i, j, k % 4))
                 p.start()
                 process_list.append(p)
 
@@ -767,10 +758,10 @@ def test_multi_correlation(image_sizes, window_sizes):
                 for process in process_list:
                     process.terminate()
                     process.join()
-            
-            print (time() - start)/50
-            t_row.append((time() - start)/50)
-    
+
+            print((time() - start) / 50)
+            t_row.append((time() - start) / 50)
+
         t[str(image_sizes[i])] = t_row
 
     with open('correlation.txt', 'a+') as file:
@@ -783,28 +774,14 @@ def fake_process_images(images, window_sizes, i, j, gpuid):
     # Imports for testing performance (after setting device number)
     from test_util.gpuFFT import fft_gpu
     from test_util.IWarrange import IWarrange_gpu
-    
+
     for x in range(5):
         win_A, win_B = IWarrange_gpu(images[i], images[i], window_sizes[j], window_sizes[j] / 2)
         corr_gpu = fft_gpu(win_A, win_B)
 
+
 def file_cleanup(file_names):
     for s in file_names:
         # Delete, regardless of extension (in case we have .csv, .xls, etc. in the future)
-        for f in glob.glob(s+'.*'):
+        for f in glob.glob(s + '.*'):
             os.remove(f)
-
-if __name__ == "__main__":
-    # Cleanup files from previous runs to keep files small (comment out to keep results after multiple runs)
-    file_names = []
-    file_cleanup(file_names)
-    
-    # Run tests
-    #test_multi_correlation([512, 1024, 2048, 2560], [64, 32, 16, 8])
-    #test_with_image_set_length([200, 300, 500])
-    #test_with_num_processes([10, 20])
-
-    process_images(20,20)
-    #test_external_set('/scratch/p/psulliva/chouvinc/marks_piv_data/', 'markspivdata', ('C*_a.npy', 'C*_b.npy'))
-    #test_external_set('/scratch/p/psulliva/cdallas/2nd_PIV_challenge_data/Case_A/images/', 'challenge', ('*a.npy', '*b.npy'))
-    #test_external_set('/scratch/p/psulliva/cdallas/UQ_database/F001/images/', 'uncertainty', ('adj_*.npy', 'adj_*.npy'))
