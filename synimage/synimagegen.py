@@ -185,8 +185,8 @@ def create_synimage_parameters(input_data, x_bound, y_bound, image_size, path='N
     margin = ((x_bound[1] - x_bound[0]) * 0.2, (y_bound[1] - y_bound[0]) * 0.2)
     num_of_par = int(image_size[0] * image_size[1] * den)
     num_of_lost_pairs = num_of_par * (per_loss_pairs / 100)
-    x_1 = np.random.uniform(x_bound[0] - margin, x_bound[1] + margin, num_of_par)
-    y_1 = np.random.uniform(y_bound[0] - margin, y_bound[1] + margin, num_of_par)
+    x_1 = np.random.uniform(x_bound[0] - margin[0], x_bound[0] + margin, num_of_par)
+    y_1 = np.random.uniform(y_bound[0] - margin[1], y_bound[1] + margin, num_of_par)
     par_diam1 = np.random.normal(par_diam_mean, par_diam_std, num_of_par)
     particleCenters = np.random.uniform(size=num_of_par) - 0.5
     par_int1 = np.exp(-particleCenters ** 2 / (2 * par_int_std ** 2))
@@ -210,8 +210,8 @@ def create_synimage_parameters(input_data, x_bound, y_bound, image_size, path='N
             if -0.4 > particleCenters[i] or 0.4 < particleCenters[i]:
                 per_to_lose = 1 - (0.5 - np.abs(particleCenters[i])) / 0.1
                 if np.random.uniform() < min(per_loss_pairs / 10, 1) * per_to_lose:
-                    x_2[i] = np.random.uniform(x_bound[0] - margin, x_bound[1] + margin)
-                    y_2[i] = np.random.uniform(y_bound[0] - margin, y_bound[1] + margin)
+                    x_2[i] = np.random.uniform(x_bound[0] - margin[0], x_bound[1] + margin[0])
+                    y_2[i] = np.random.uniform(y_bound[0] - margin[1], y_bound[1] + margin[1])
                     par_diam2[i] = np.random.normal(par_diam_mean, par_diam_std)
                     par_int2[i] = np.exp(-(np.random.uniform() - 0.5) ** 2 / (2 * par_int_std ** 2))
                     cpl += 1
