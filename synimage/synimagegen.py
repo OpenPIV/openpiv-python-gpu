@@ -1,6 +1,3 @@
-"""This module contains a pure python implementation of the basic
-cross-correlation algorithm for PIV image processing."""
-
 __licence_ = """
 Copyright (C) 2011  www.openpiv.net
 
@@ -30,74 +27,30 @@ from PIL import Image
 
 
 class continuous_flow_field:
-    def __init__(self, data, inter=False):
-        '''
+    def __init__(self, data):
+        """
         Checks if the continous flow should be created from a set of data points
         if so it interpolates them for a continuous flow field
-        '''
-        self.inter = inter
-        if inter:
-            self.f_U = scipy.interpolate.interp2d(data[:, 0], data[:, 1], data[:, 2])
-            self.f_V = scipy.interpolate.interp2d(data[:, 0], data[:, 1], data[:, 3])
+        """
 
-    '''
-    Defining a synthetic flow field
-    '''
-
-    # def f_U(self, x, y):
-    #     # example for synthetic U velocity
-    #     u = 2.5 + 0.5 * np.sin((x ** 2 + y ** 2) / 0.01)
-    #     return u
-    #
-    # def f_V(self, x, y):
-    #     # example for synthetic V velocity
-    #     v = 0.5 + 0.1 * np.cos((x ** 2 + y ** 2) / 0.01)
-    #     return v
+        self.f_U = scipy.interpolate.interp2d(data[0, :, 0], data[:, 0, 1], data[:, :, 2])
+        self.f_V = scipy.interpolate.interp2d(data[0, :, 0], data[:, 0, 1], data[:, :, 3])
 
     def get_U_V(self, x, y):
         # return the U and V velocity at a certain position
-        if self.inter:
-            return self.f_U(x, y)[0], self.f_V(x, y)[0]
-        else:
-            return self.f_U(x, y), self.f_V(x, y)
-
-    # def create_syn_quiver(self, number_of_grid_points, path=None):
-    #     # return and save a synthetic flow map
-    #     X, Y = np.meshgrid(np.linspace(0, 1, number_of_grid_points), np.linspace(0, 1, number_of_grid_points))
-    #     U = np.zeros(X.shape)
-    #     V = np.zeros(Y.shape)
-    #     for r in range(X.shape[0]):
-    #         for c in range(X.shape[1]):
-    #             u, v = self.get_U_V(X[r, c], Y[r, c])
-    #             U[r, c] = u
-    #             V[r, c] = v
-    #
-    #     m = np.sqrt(np.power(U, 2) + np.power(V, 2))
-    #     fig = pl.quiver(X, Y, U, V, m, clim=[1.5, m.max()], scale=100, width=0.002, headwidth=6, minshaft=2)
-    #     cb = pl.colorbar(fig)
-    #     cb.set_clim(vmin=1.5, vmax=m.max())
-    #
-    #     if not path:
-    #         pl.savefig('syn_quiver.png', dpi=400)
-    #         pl.close()
-    #     else:
-    #         pl.savefig(path + 'syn_quiver.png', dpi=400)
-    #         pl.close()
-    #
-    #     return X, Y, U, V
+        return self.f_U(x, y), self.f_V(x, y)
 
 
-def create_synimage_parameters(input_data, x_bound, y_bound, image_size, path='None', inter=False, den=0.008,
+def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
                                per_loss_pairs=2, par_diam_mean=15 ** (1.0 / 2), par_diam_std=1.5, par_int_std=0.25,
                                dt=0.1):
     """Creates the synthetic image with the synthetic image parameters
 
     Parameters
     ----------
-    input_data: None or numpy array
+    data: None or numpy array
         If you have data from which to genrate the flow feild the synthetic image.
         It should be passed on as a numpy array with columns being (X grid position,Y grid position,U velocity at (X,Y) grid point,V velocity at (X,Y) grid point)
-        Else, pass None and define a synthetic flow field in continuous_flow_field class.
 
     x_bound,y_bound: list/tuple of floats
         The boundries of interest in the synthetic flow field.
@@ -162,23 +115,7 @@ def create_synimage_parameters(input_data, x_bound, y_bound, image_size, path='N
 
     # Data processing
 
-    if not path == 'None':
-        f = open(path, 'r')
-        data = f.readlines()
-        f.close()
-        data = [line.split('\t') for line in data]
-        data = np.array(data).astype(float)
-        data = np.array([line for line in data.tolist() if
-                         1.2 * x_bound[1] >= line[1] >= 0.8 * x_bound[0] and 1.2 * y_bound[1] >= line[2] >= 0.8 *
-                         y_bound[0]])
-
-    else:
-        data = input_data
-
-    if inter:
-        cff = continuous_flow_field(data, inter=True)
-    else:
-        cff = continuous_flow_field(None)
+    cff = continuous_flow_field(data)
 
     # Creating syn particles
 
@@ -264,10 +201,10 @@ def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MA
         The X and Y positions of the particles, created by create_synimage_parameters().
 
     PARTICLE_DIAMETERS, PARTICLE_MAX_INTENSITIES: numpy array
-		The intensities and diameters of the particles, created by create_synimage_parameters().
-	
-	BIT_DEPTH: int
-		The bit depth of the desired output image.
+        The intensities and diameters of the particles, created by create_synimage_parameters().
+
+    BIT_DEPTH: int
+        The bit depth of the desired output image.
 
     Returns
     -------
