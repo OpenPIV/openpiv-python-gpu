@@ -122,7 +122,7 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
     margin = ((x_bound[1] - x_bound[0]) * 0.2, (y_bound[1] - y_bound[0]) * 0.2)
     num_of_par = int(image_size[0] * image_size[1] * den)
     num_of_lost_pairs = num_of_par * (per_loss_pairs / 100)
-    x_1 = np.random.uniform(x_bound[0] - margin[0], x_bound[0] + margin[0], num_of_par)
+    x_1 = np.random.uniform(x_bound[0] - margin[0], x_bound[1] + margin[0], num_of_par)
     y_1 = np.random.uniform(y_bound[0] - margin[1], y_bound[1] + margin[1], num_of_par)
     par_diam1 = np.random.normal(par_diam_mean, par_diam_std, num_of_par)
     particleCenters = np.random.uniform(size=num_of_par) - 0.5
