@@ -1,5 +1,4 @@
 """This module is dedicated to advanced algorithms for PIV image analysis."""
-from __future__ import division
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import rfft2,irfft2,fftshift
@@ -20,7 +19,7 @@ DTYPEf = np.float64
 ctypedef np.float64_t DTYPEf_t
 
 
-def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a, 
+def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                               np.ndarray[DTYPEi_t, ndim=2] frame_b,
                               int window_size,
                               int overlap=0,
@@ -32,126 +31,126 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                               int nfftx=0,
                               int nffty=0):
     """
-    The implementation of the one-step direct correlation with different 
+    The implementation of the one-step direct correlation with different
     size of the interrogation window and the search area. The increased
     size of the search areas cope with the problem of loss of pairs due
     to in-plane motion, allowing for a smaller interrogation window size,
     without increasing the number of outlier vectors.
-    
+
     See:
-    
+
     Particle-Imaging Techniques for Experimental Fluid Mechanics
 
     Annual Review of Fluid Mechanics
     Vol. 23: 261-304 (Volume publication date January 1991)
-    DOI: 10.1146/annurev.fl.23.010191.001401    
-    
+    DOI: 10.1146/annurev.fl.23.010191.001401
+
     Parameters
     ----------
     frame_a : 2d np.ndarray, dtype=np.int32
-        an two dimensions array of integers containing grey levels of 
+        an two dimensions array of integers containing grey levels of
         the first frame.
-        
+
     frame_b : 2d np.ndarray, dtype=np.int32
-        an two dimensions array of integers containing grey levels of 
+        an two dimensions array of integers containing grey levels of
         the second frame.
-        
+
     window_size : int
         the size of the (square) interrogation window.
-        
+
     overlap : int
         the number of pixels by which two adjacent windows overlap.
-        
+
     dt : float
         the time delay separating the two frames.
-    
+
     search_area_size : int
         the size of the (square) interrogation window from the second frame
-    
+
     subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak: 
-         'centroid' [replaces default if correlation map is negative], 
-         'gaussian' [default if correlation map is positive], 
+         one of the following methods to estimate subpixel location of the peak:
+         'centroid' [replaces default if correlation map is negative],
+         'gaussian' [default if correlation map is positive],
          'parabolic'.
-    
-    sig2noise_method : string 
+
+    sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-        
+
     width : int
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-        
+
     nfftx   : int
-        the size of the 2D FFT in x-direction, 
+        the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended]
-        
+
     nffty   : int
-        the size of the 2D FFT in y-direction, 
+        the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended]
 
-    
+
     Returns
     -------
     u : 2d np.ndarray
         a two dimensional array containing the u velocity component,
         in pixels/seconds.
-        
+
     v : 2d np.ndarray
         a two dimensional array containing the v velocity component,
         in pixels/seconds.
-        
+
     sig2noise : 2d np.ndarray, optional
         a two dimensional array containing the signal to noise ratio
         from the cross correlation function. This array is returned if
         sig2noise_method is not None.
-        
+
     Examples
     --------
-    
+
     >>> u, v = openpiv.process.extended_search_area_piv( frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
     """
-                      
+
     # check the inputs for validity
-    
+
     if search_area_size == 0:
         search_area_size = window_size
-    
+
     if overlap >= window_size:
         raise ValueError('Overlap has to be smaller than the window_size')
-    
+
     if search_area_size < window_size:
         raise ValueError('Search size cannot be smaller than the window_size')
-    
-        
+
+
     if (window_size > frame_a.shape[0]) or (window_size > frame_a.shape[1]):
         raise ValueError('window size cannot be larger than the image')
-                                
+
 
     cdef int i, j, k, l, I, J
-    
+
     # subpixel peak location
     cdef float i_peak, j_peak
-    
+
     # signal to noise ratio
     cdef float s2n
-    
+
     # shape of the resulting flow field
     cdef int n_cols, n_rows
-    
+
     # get field shape
     n_rows, n_cols = get_field_shape( (frame_a.shape[0], frame_a.shape[1]), window_size, overlap )
-    
+
     # define arrays
     cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([window_size, window_size], dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=2] search_area = np.zeros([search_area_size, search_area_size], dtype=DTYPEi)
     cdef np.ndarray[DTYPEf_t, ndim=2] corr = np.zeros([search_area_size, search_area_size], dtype=DTYPEf)
-        
+
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_rows, n_cols], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([n_rows, n_cols], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_rows, n_cols], dtype=DTYPEf)
-    
+
     # loop over the interrogation windows
     # i, j are the row, column indices of the top left corner
     I = 0
@@ -163,11 +162,11 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             for k in range( window_size ):
                 for l in range( window_size ):
                     window_a[k,l] = frame_a[i+k, j+l]
-                    
+
             # get search area using frame b
             for k in range( search_area_size ):
                 for l in range( search_area_size ):
-                    
+
                     # fill with zeros if we are out of the borders
                     if i+window_size/2-search_area_size//2+k < 0 or \
                         i+window_size//2-search_area_size//2+k >= frame_b.shape[0]:
@@ -178,19 +177,19 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                     else:
                         search_area[k,l] = frame_b[ i+window_size//2-search_area_size//2+k,
                             j+window_size//2-search_area_size//2+l ]
-                        
-            # compute correlation map 
+
+            # compute correlation map
             if any(window_a.flatten()):
                 corr = correlate_windows( search_area, window_a, nfftx=nfftx, nffty=nffty )
                 c = CorrelationFunction( corr )
-            
+
                 # find subpixel approximation of the peak center
                 i_peak, j_peak = c.subpixel_peak_position( subpixel_method )
-            
+
                 # velocities
                 v[I,J] = -( (i_peak - corr.shape[0]/2) - (search_area_size-window_size)/2 ) / dt
                 u[I,J] =  ( (j_peak - corr.shape[0]/2) - (search_area_size-window_size)/2 ) / dt
-            
+
                 # compute signal to noise ratio
                 if sig2noise_method:
                     sig2noise[I,J] = c.sig2noise_ratio( sig2noise_method, width )
@@ -200,10 +199,10 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 # compute signal to noise ratio
                 if sig2noise_method:
                     sig2noise[I,J] = np.inf
-                
+
             # go to next vector
             J = J + 1
-                
+
         # go to next vector
         I = I + 1
 
@@ -211,59 +210,59 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         return u, v, sig2noise
     else:
         return u, v
-    
+
 class CorrelationFunction( ):
     def __init__ ( self, corr ):
         """A class representing a cross correlation function.
-        
+
         Parameters
         ----------
         corr : 2d np.ndarray
             the correlation function array
-        
+
         """
         self.data = corr
         self.shape = self.data.shape
-        
+
         # get first peak
         self.peak1, self.corr_max1 = self._find_peak( self.data )
-        
+
     def _find_peak ( self, array ):
-        """Find row and column indices of the highest peak in an array."""    
+        """Find row and column indices of the highest peak in an array."""
         ind = array.argmax()
-        s = array.shape[1] 
-        
-        i = ind // s 
+        s = array.shape[1]
+
+        i = ind // s
         j = ind %  s
-        
+
         return  (i, j),  array.max()
-        
+
     def _find_second_peak ( self, width ):
         """
         Find the value of the second largest peak.
-        
-        The second largest peak is the height of the peak in 
-        the region outside a ``width * width`` submatrix around 
+
+        The second largest peak is the height of the peak in
+        the region outside a ``width * width`` submatrix around
         the first correlation peak.
-        
+
         Parameters
         ----------
         width : int
-            the half size of the region around the first correlation 
+            the half size of the region around the first correlation
             peak to ignore for finding the second peak.
-              
+
         Returns
         -------
         i, j : two elements tuple
             the row, column index of the second correlation peak.
-            
+
         corr_max2 : int
             the value of the second correlation peak.
-        
-        """ 
+
+        """
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
-        
+
         # set width x width square submatrix around the first correlation peak as masked.
         # Before check if we are not too close to the boundaries, otherwise we have negative indices
         iini = max(0, self.peak1[0]-width)
@@ -272,154 +271,154 @@ class CorrelationFunction( ):
         jfin = min(self.peak1[1]+width+1, self.data.shape[1])
         tmp[ iini:ifin, jini:jfin ] = ma.masked
         peak, corr_max2 = self._find_peak( tmp )
-        
-        return peak, corr_max2  
-            
+
+        return peak, corr_max2
+
     def subpixel_peak_position( self, method='gaussian' ):
         """
         Find subpixel approximation of the correlation peak.
-        
+
         This function returns a subpixels approximation of the correlation
-        peak by using one of the several methods available. 
-        
+        peak by using one of the several methods available.
+
         Parameters
-        ----------            
+        ----------
         method : string
-             one of the following methods to estimate subpixel location of the peak: 
-             'centroid' [replaces default if correlation map is negative], 
-             'gaussian' [default if correlation map is positive], 
+             one of the following methods to estimate subpixel location of the peak:
+             'centroid' [replaces default if correlation map is negative],
+             'gaussian' [default if correlation map is positive],
              'parabolic'.
-             
+
         Returns
         -------
         subp_peak_position : two elements tuple
             the fractional row and column indices for the sub-pixel
             approximation of the correlation peak.
         """
-    
+
         # the peak and its neighbours: left, right, down, up
         try:
             c  = self.data[self.peak1[0]  , self.peak1[1]  ]
             cl = self.data[self.peak1[0]-1, self.peak1[1]  ]
             cr = self.data[self.peak1[0]+1, self.peak1[1]  ]
-            cd = self.data[self.peak1[0]  , self.peak1[1]-1] 
+            cd = self.data[self.peak1[0]  , self.peak1[1]-1]
             cu = self.data[self.peak1[0]  , self.peak1[1]+1]
         except IndexError:
-            # if the peak is near the border do not 
+            # if the peak is near the border do not
             # do subpixel approximation
             return self.peak1
-            
+
         # if all zero or some is NaN, don't do sub-pixel search:
         tmp = np.array([c,cl,cr,cd,cu])
         if np.any( np.isnan(tmp) ) or np.all ( tmp == 0 ):
             return self.peak1
-            
-        # if correlation is negative near the peak, fall back 
+
+        # if correlation is negative near the peak, fall back
         # to a centroid approximation
         if np.any ( tmp  < 0 ) and method == 'gaussian':
             method = 'centroid'
-        
+
         # choose method
         if method == 'centroid':
             subp_peak_position = (((self.peak1[0]-1)*cl+self.peak1[0]*c+(self.peak1[0]+1)*cr)/(cl+c+cr),
                                 ((self.peak1[1]-1)*cd+self.peak1[1]*c+(self.peak1[1]+1)*cu)/(cd+c+cu))
-    
+
         elif method == 'gaussian':
             subp_peak_position = (self.peak1[0] + ( (np.log(cl)-np.log(cr) )/( 2*np.log(cl) - 4*np.log(c) + 2*np.log(cr) )),
-                                self.peak1[1] + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) ))) 
-    
+                                self.peak1[1] + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) )))
+
         elif method == 'parabolic':
             subp_peak_position = (self.peak1[0] +  (cl-cr)/(2*cl-4*c+2*cr),
-                                    self.peak1[1] +  (cd-cu)/(2*cd-4*c+2*cu)) 
+                                    self.peak1[1] +  (cd-cu)/(2*cd-4*c+2*cu))
         else:
             raise ValueError( "method not understood. Can be 'gaussian', 'centroid', 'parabolic'." )
-        
+
         return subp_peak_position
-        
+
     def sig2noise_ratio( self, method='peak2peak', width=2 ):
         """Computes the signal to noise ratio.
-        
+
         The signal to noise ratio is computed from the correlation map with
-        one of two available method. It is a measure of the quality of the 
+        one of two available method. It is a measure of the quality of the
         matching between two interogation windows.
-        
+
         Parameters
         ----------
         sig2noise_method: string
-            the method for evaluating the signal to noise ratio value from 
+            the method for evaluating the signal to noise ratio value from
             the correlation map. Can be `peak2peak`, `peak2mean` or None
             if no evaluation should be made.
-            
+
         width : int, optional
             the half size of the region around the first
             correlation peak to ignore for finding the second
             peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-            
+
         Returns
         -------
-        sig2noise : float 
+        sig2noise : float
             the signal to noise ratio from the correlation map.
-            
+
         """
 
         # if the image is lacking particles, totally black it will correlate to very low value, but not zero
         # return zero, since we have no signal.
         if self.corr_max1 <  1e-3:
             return 0.0
-            
+
         # if the first peak is on the borders, the correlation map is wrong
         # return zero, since we have no signal.
         if ( 0 in self.peak1 or self.data.shape[0] in self.peak1 or self.data.shape[1] in self.peak1):
             return 0.0
-        
+
         # now compute signal to noise ratio
         if method == 'peak2peak':
             # find second peak height
             peak2, corr_max2 = self._find_second_peak( width=width )
-            
+
         elif method == 'peak2mean':
             # find mean of the correlation map
             corr_max2 = self.data.mean()
-            
+
         else:
             raise ValueError('wrong sig2noise_method')
-    
+
         # avoid dividing by zero
         try:
             sig2noise = self.corr_max1/corr_max2
         except ValueError:
-            sig2noise = np.inf    
-            
+            sig2noise = np.inf
+
         return sig2noise
 
 def get_coordinates( image_size, window_size, overlap ):
     """Compute the x, y coordinates of the centers of the interrogation windows.
-    
+
     Parameters
     ----------
     image_size: two elements tuple
         a two dimensional tuple for the pixel size of the image
-        first element is number of rows, second element is 
+        first element is number of rows, second element is
         the number of columns.
-        
+
     window_size: int
         the size of the interrogation windows.
-        
+
     overlap: int
         the number of pixel by which two adjacent interrogation
         windows overlap.
-        
-        
+
+
     Returns
     -------
     x : 2d np.ndarray
-        a two dimensional array containing the x coordinates of the 
+        a two dimensional array containing the x coordinates of the
         interrogation window centers, in pixels.
-        
+
     y : 2d np.ndarray
-        a two dimensional array containing the y coordinates of the 
+        a two dimensional array containing the y coordinates of the
         interrogation window centers, in pixels.
-        
+
     """
 
     # get shape of the resulting flow field
@@ -428,74 +427,74 @@ def get_coordinates( image_size, window_size, overlap ):
     # compute grid coordinates of the interrogation window centers
     x = np.arange( field_shape[1] )*(window_size-overlap) + window_size/2.0
     y = np.arange( field_shape[0] )*(window_size-overlap) + window_size/2.0
-    
+
     return np.meshgrid(x,y)
 
 def get_field_shape ( image_size, window_size, overlap ):
     """Compute the shape of the resulting flow field.
-    
+
     Given the image size, the interrogation window size and
-    the overlap size, it is possible to calculate the number 
+    the overlap size, it is possible to calculate the number
     of rows and columns of the resulting flow field.
-    
+
     Parameters
     ----------
     image_size: two elements tuple
         a two dimensional tuple for the pixel size of the image
-        first element is number of rows, second element is 
+        first element is number of rows, second element is
         the number of columns.
-        
+
     window_size: int
         the size of the interrogation window.
-        
+
     overlap: int
         the number of pixel by which two adjacent interrogation
         windows overlap.
-        
-        
+
+
     Returns
     -------
     field_shape : two elements tuple
         the shape of the resulting flow field
     """
-    
-    return ( (image_size[0] - window_size)//(window_size-overlap)+1, 
+
+    return ( (image_size[0] - window_size)//(window_size-overlap)+1,
              (image_size[1] - window_size)//(window_size-overlap)+1 )
 
 def correlate_windows( window_a, window_b, corr_method = 'fft', int nfftx = 0, int nffty = 0 ):
     """Compute correlation function between two interrogation windows.
-    
-    The correlation function can be computed by using the correlation 
+
+    The correlation function can be computed by using the correlation
     theorem to speed up the computation.
-    
+
     Parameters
     ----------
     window_a : 2d np.ndarray
         a two dimensions array for the first interrogation window.
-        
+
     window_b : 2d np.ndarray
         a two dimensions array for the second interrogation window.
-        
+
     corr_method   : string
         one of the two methods currently implemented: 'fft' or 'direct'.
         Default is 'fft', which is much faster.
-        
+
     nfftx   : int
-        the size of the 2D FFT in x-direction, 
+        the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended].
-        
+
     nffty   : int
-        the size of the 2D FFT in y-direction, 
+        the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended].
-        
-        
+
+
     Returns
     -------
     corr : 2d np.ndarray
         a two dimensions array for the correlation function.
-    
+
     """
-    
+
     if corr_method == 'fft':
         if nfftx == 0:
             nfftx = 2*window_a.shape[0]
@@ -511,17 +510,17 @@ def correlate_windows( window_a, window_b, corr_method = 'fft', int nfftx = 0, i
 
 def normalize_intensity( window ):
     """Normalize interrogation window by removing the mean value.
-    
+
     Parameters
     ----------
     window :  2d np.ndarray
         the interrogation window array
-        
+
     Returns
     -------
     window :  2d np.ndarray
         the interrogation window array, with mean value equal to zero.
-    
+
     """
     return window - window.mean()
 
@@ -533,7 +532,7 @@ def normalize_intensity( window ):
 
 
 ##################################################################
-def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a, 
+def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
            np.ndarray[DTYPEi_t, ndim=2] frame_b,
            np.ndarray[DTYPEi_t, ndim=2] mark,
            int min_window_size,
@@ -553,7 +552,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
            int nffty=0):
     """
     Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
-    This is an iterative  method to cope with  the lost of pairs due to particles 
+    This is an iterative  method to cope with  the lost of pairs due to particles
     motion and get rid of the limitation in velocity range due to the window size.
     The possibility of window size coarsening is implemented.
     Example : minimum window size of 16*16 pixels and coarse_level of 2 gives a 1st
@@ -568,97 +567,97 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     Reference:
         F. Scarano & M. L. Riethmuller, Iterative multigrid approach in PIV image processing with discrete window offset, Experiments in Fluids 26 (1999) 513-523
-    
+
     Parameters
     ----------
     frame_a : 2d np.ndarray, dtype=np.int32
-        an two dimensions array of integers containing grey levels of 
+        an two dimensions array of integers containing grey levels of
         the first frame.
-        
+
     frame_b : 2d np.ndarray, dtype=np.int32
-        an two dimensions array of integers containing grey levels of 
+        an two dimensions array of integers containing grey levels of
         the second frame.
-        
+
     mark : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
 
     min_window_size : int
         the size of the minimum (final) (square) interrogation window.
-        
+
     overlap_ratio : float
         the ratio of overlap between two windows (between 0 and 1).
-        
+
     dt : float
         the time delay separating the two frames.
-    
+
     validation_method : string
         the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
-    
+
     trust_1st_iter : int = 0 or 1
         0 if the first iteration need to be validated. With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
-     
+
     validation_iter : int
         number of iterations per validation cycle.
-       
+
     tolerance : float
         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-    
+
     nb_iter_max : int
         global number of iterations.
-       
+
     subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak: 
-         'centroid' [replaces default if correlation map is negative], 
-         'gaussian' [default if correlation map is positive], 
+         one of the following methods to estimate subpixel location of the peak:
+         'centroid' [replaces default if correlation map is negative],
+         'gaussian' [default if correlation map is positive],
          'parabolic'.
-    
-    sig2noise_method : string 
+
+    sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-        
+
     sig2noise_threshold : float, recommended to use 1.5
         defines a threshold of a local outlier vector that is below the signal-to-noise threshold,
         see the sig2noise_method above for better understanding of this value.
-        
+
     width : int
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-        
+
     nfftx   : int
-        the size of the 2D FFT in x-direction, 
+        the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended]
-        
+
     nffty   : int
-        the size of the 2D FFT in y-direction, 
+        the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended]
 
-    
+
     Returns
     -------
 
     x : 2d np.ndarray
         a two dimensional array containing the x-axis component of the interpolations locations.
-        
+
     y : 2d np.ndarray
         a two dimensional array containing the y-axis component of the interpolations locations.
-        
+
     u : 2d np.ndarray
         a two dimensional array containing the u velocity component,
         in pixels/seconds.
-        
+
     v : 2d np.ndarray
         a two dimensional array containing the v velocity component,
         in pixels/seconds.
-        
+
     mask : 2d np.ndarray
         a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
-        
+
     Example
     --------
-    
-    >>> x,y,u,v, mask = openpiv.process.WiDIM( frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25, 
-      coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, 
+
+    >>> x,y,u,v, mask = openpiv.process.WiDIM( frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25,
+      coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7,
       nb_iter_max=4, sig2noise_method='peak2peak', sig2noise_threshold = 1.5)
 
     --------------------------------------
@@ -672,18 +671,18 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             --3rd index (J) is column  --> length (effectively used) is Ncol[K]
                 --4th index represent the type of data stored at this point:
                             | 0 --> x         |
-                            | 1 --> y         | 
+                            | 1 --> y         |
                             | 2 --> xb        |
-                            | 3 --> yb        | 
+                            | 3 --> yb        |
                             | 4 --> dx        |
-                            | 5 --> dy        | 
+                            | 5 --> dy        |
                             | 6 --> dpx       |
-                            | 7 --> dpy       | 
+                            | 7 --> dpy       |
                             | 8 --> dcx       |
-                            | 9 --> dcy       | 
+                            | 9 --> dcy       |
                             | 10 --> u        |
-                            | 11 --> v        | 
-                            | 12 --> si2noise | 
+                            | 11 --> v        |
+                            | 12 --> si2noise |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -763,7 +762,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         for I in range(Nrow[K]):#run through interpolations locations
             # pbar.update(100*I/Nrow[K])#progress update
             for J in range(Ncol[K]):
-                
+
                 #compute xb, yb:
                 F[K,I,J,2]=np.floor(F[K,I,J,0]+F[K,I,J,6])#xb=xa+dpx
                 F[K,I,J,3]=np.floor(F[K,I,J,1]+F[K,I,J,7])#yb=yb+dpy
@@ -814,7 +813,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #validation of the velocity vectors with 3*3 filtering
         if K==0 and trust_1st_iter:#1st iteration can generally be trust if it follows the 1/4 rule
             print("no validation : trusting 1st iteration")
-        else: 
+        else:
             print("Starting validation..")
             for I in range(Nrow[nb_iter_max-1]):#init mask to False
                 for J in range(Ncol[nb_iter_max-1]):
@@ -827,7 +826,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 # pbar = ProgressBar(widgets=widgets, maxval=100)
                 # pbar.start()
                 for I in range(Nrow[K]):#run through locations
-                    # pbar.update(100*I/Nrow[K])                    
+                    # pbar.update(100*I/Nrow[K])
                     for J in range(Ncol[K]):
                         neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
                         for L in range(3):#get the velocity of the neighbours in a 2*3*3 array
@@ -889,7 +888,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
                                                 (<object>mask)[I,J]=True
                                                 F[K,I,J,4] = -F[K,I,J,11]*dt
                                                 F[K,I,J,5] = F[K,I,J,10]*dt
-            # pbar.finish()                    
+            # pbar.finish()
             print("..[DONE]")
             print(" ")
         #end of validation
@@ -920,7 +919,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             # pbar.update(100*I/Nrow[K+1])
             for J in range(Ncol[K+1]):
                 if Nrow[K+1]==Nrow[K] and Ncol[K+1]==Ncol[K]:
-                    F[K+1,I,J,6] = F[K,I,J,4]#dpx_k+1 = dx_k 
+                    F[K+1,I,J,6] = F[K,I,J,4]#dpx_k+1 = dx_k
                     F[K+1,I,J,7] = F[K,I,J,5]#dpy_k+1 = dy_k
                 else:#interpolate if dimensions do not agree
                     F[K+1,I,J,6] = interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4)
@@ -938,7 +937,7 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
                              int J,
                              int dat):
     """Perform interpolation of between to iterations of the F 4d-array for a specific location I,J and the data type dat.
-    
+
     Parameters
     ----------
     F :  4d np.ndarray
@@ -946,23 +945,23 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
 
     Nrow : 1d np.ndarray
         list of the numbers of row for each iteration K
-       
+
     Ncol : 1d np.ndarray
         list of the numbers of column for each iteration K
-    
+
     K : int
         the iteration that contains the valid data. K+1 will be the iteration at which the interpolation is needed.
-    
+
     I,J : int
         indices of the point that need interpolation (in iteration K+1)
-    
+
     dat : int
         the index of the data to interpolate.
-    
+
     Returns
     -------
     the interpolated data (type float)
-    
+
     """
     #interpolate data dat from previous iteration
     cdef float lower_lim_previous_x = F[K,0,0,0]
@@ -1011,7 +1010,7 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
     else:#interior grid
         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
         low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-        Q1[0] = F[K,low_x,0,0] 
+        Q1[0] = F[K,low_x,0,0]
         Q1[1] = F[K,0,low_y,1]
         Q4[0] = F[K,high_x,0,0]
         Q4[1] = F[K,0,high_y,1]
@@ -1026,24 +1025,24 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
 
 
 def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
-    """Perform a bilinear interpolation between 4 points 
-    
+    """Perform a bilinear interpolation between 4 points
+
     Parameters
     ----------
     x1,x2,y1,y2 :  int
-        x-axis and y-axis locations of the 4 points. (ie. location in the frame) 
+        x-axis and y-axis locations of the 4 points. (ie. location in the frame)
         (Note that the x axis is vertical and pointing down while the y-axis is horizontal)
 
     x,y : int
         locations of the target point for the interpolation (in the frame)
-       
+
     f1,f2,f3,f4 : float
         value at each point : f1=f(x1,y1), f2=f(x1,y2), f3=f(x2, y1), f4=f(x2,y2)
-       
+
     Returns
     -------
     the interpolated data (type float)
-    
+
     """
     if x1 == x2:
         if y1 == y2:
@@ -1060,23 +1059,23 @@ def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f
 
 
 def linear_interpolation(int x1, int x2, int x, int f1, int f2):
-    """Perform a linear interpolation between 2 points 
-    
+    """Perform a linear interpolation between 2 points
+
     Parameters
     ----------
     x1,x2 :  int
-        locations of the 2 points. (along any axis) 
+        locations of the 2 points. (along any axis)
 
     x : int
         locations of the target point for the interpolation (along the same axis as x1 and x2)
-       
+
     f1,f2 : float
         value at each point : f1=f(x1), f2=f(x2)
-       
+
     Returns
     -------
     the interpolated data (type float)
-    
+
     """
     return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
 
@@ -1088,7 +1087,7 @@ def linear_interpolation(int x1, int x2, int x, int f1, int f2):
 
 def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
     """Look for the position at the iteration K of the points surrounding a given point in the frame.
-    
+
     Parameters
     ----------
     F :  4d np.ndarray
@@ -1096,24 +1095,24 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
 
     K : int
         the iteration of interest (1st index for F).
-    
+
     N : 1d np.ndarray
         list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
 
     side : string
-        the axis of interest : can be either 'x_axis' or 'y_axis'    
+        the axis of interest : can be either 'x_axis' or 'y_axis'
 
     pos_now : int
         position of the point in the frame (along the axis 'side').
-    
+
     Returns
     -------
     low : int
-        largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.    
+        largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.
 
     high : int
-        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.                                                        
-    
+        smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.
+
     """
     #print "starting dichotomy"
     cdef int low
@@ -1173,16 +1172,16 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
 
 def define_windows( int size ):
     """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
-    
+
     Parameters
     ----------
     size : int
         size of the two windows
-       
+
     Returns
     -------
     window_a, window_b : two 2d np.ndarray of zero (integer)
-    
+
     """
     cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([size, size], dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=2] window_b = np.zeros([size, size], dtype=DTYPEi)
@@ -1195,20 +1194,20 @@ def define_windows( int size ):
 
 def find_neighbours(int I, int J, int Imax, int Jmax):
     """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
-    
+
     Parameters
     ----------
     I,J : int
         indices of the point of interest
-       
+
     Imax,Jmax : int
         max indices for the neighbours (ie. (size of the array) - 1)
-       
+
     Returns
     -------
-    neighbours : 2d np.ndarray of size 3*3 
+    neighbours : 2d np.ndarray of size 3*3
         containing value 1 if neighbour is present, 0 if not. Value is 0 at the center (corresponds to point I,J).
-    
+
     """
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours = np.zeros([3,3], dtype=DTYPEi)
     cdef int k,l
@@ -1243,7 +1242,7 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
 
 def sumsquare_array(arr1):
     """Compute the sum of the square of the elements of a given array or list
-    
+
     Parameters
     ----------
     arr1 : array or list of any size
@@ -1252,10 +1251,10 @@ def sumsquare_array(arr1):
     -------
     result : float
         = sum( arr1_i * arr1_i)
-    
+
     """
     cdef float result
-    cdef I, J    
+    cdef I, J
     result = 0
     for I in range(arr1.shape[0]):
         for J in range(arr1.shape[1]):
@@ -1269,7 +1268,7 @@ def sumsquare_array(arr1):
 
 def launch( str method, names, arg ):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
-    
+
     Parameters
     ----------
     method : string
@@ -1282,16 +1281,16 @@ def launch( str method, names, arg ):
 
     Returns
     -------
-    StartTime : float 
+    StartTime : float
         the current time --> can be used to print the execution time of the programm at the end.
-    
+
     """
     print( '----------------------------------------------------------')
     print('|----->     ||   The Open Source  P article              |')
-    print('| Open      ||                    I mage                 |')              
-    print('|     PIV   ||                    V elocimetry  Toolbox  |')                                                  
-    print('|     <-----||   www.openpiv.net          version 1.0    |')                
-    print('----------------------------------------------------------') 
+    print('| Open      ||                    I mage                 |')
+    print('|     PIV   ||                    V elocimetry  Toolbox  |')
+    print('|     <-----||   www.openpiv.net          version 1.0    |')
+    print('----------------------------------------------------------')
     print(" ")
     print("Algorithm : ", method)
     print(" ")
@@ -1311,20 +1310,13 @@ def launch( str method, names, arg ):
 
 def end( float startTime ):
     """A function that prints the time since startTime. Used to end nicely a programm
-    
+
     Parameters
     ----------
     startTime : float
         a time
-    
+
     """
     print("-------------------------------------------------------------")
     print("[DONE] ..after ", (time.time() - startTime), "seconds ")
     print("-------------------------------------------------------------")
-    
-
-
-
-
-
-
