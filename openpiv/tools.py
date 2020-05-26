@@ -560,7 +560,7 @@ def load_vectors(filename, skip=1, uncrt=None):
         # data is in 1D arrays. Reshape to 2D arrays.
         x, y, u, v, mask = data_unravel(filename, skip=skip)
 
-        return (x, y, u, v, mask)
+        return x, y, u, v, mask
     else:
         x, y, u, v, mask, Ux, Uy = data_unravel(filename, skip=skip, uncrt=uncrt)
 
