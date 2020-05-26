@@ -24,9 +24,11 @@ Download CUDA from Nvidia website:
 
 https://developer.nvidia.com/cuda-downloads
 
-If installing on Windows, Visual Studio C++ compiler needs to be installed before CUDA. It can be downloaded from:
+If installing on Windows, Visual Studio C++ compiler with CLI support needs to be installed before CUDA. It can be downloaded from:
 
-https://visualstudio.microsoft.com/vs/features/cplusplus/
+https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+Ensure that cl.exe is on your Windows PATH
 
 If installing on Linux, follow the instructions for Linux at:
 
