@@ -1,4 +1,7 @@
 """This module is dedicated to advanced algorithms for PIV image analysis."""
+
+#cython: language_level=3
+
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import rfft2,irfft2,fftshift
@@ -19,7 +22,7 @@ DTYPEf = np.float64
 ctypedef np.float64_t DTYPEf_t
 
 
-def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
+def extended_search_area_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
                               np.ndarray[DTYPEi_t, ndim=2] frame_b,
                               int window_size,
                               int overlap=0,
@@ -211,7 +214,7 @@ def extended_search_area_piv( np.ndarray[DTYPEi_t, ndim=2] frame_a,
     else:
         return u, v
 
-class CorrelationFunction( ):
+class CorrelationFunction():
     def __init__ ( self, corr ):
         """A class representing a cross correlation function.
 
@@ -335,7 +338,7 @@ class CorrelationFunction( ):
 
         return subp_peak_position
 
-    def sig2noise_ratio( self, method='peak2peak', width=2 ):
+    def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal to noise ratio.
 
         The signal to noise ratio is computed from the correlation map with
@@ -368,7 +371,7 @@ class CorrelationFunction( ):
 
         # if the first peak is on the borders, the correlation map is wrong
         # return zero, since we have no signal.
-        if ( 0 in self.peak1 or self.data.shape[0] in self.peak1 or self.data.shape[1] in self.peak1):
+        if 0 in self.peak1 or self.data.shape[0] in self.peak1 or self.data.shape[1] in self.peak1:
             return 0.0
 
         # now compute signal to noise ratio
@@ -391,7 +394,7 @@ class CorrelationFunction( ):
 
         return sig2noise
 
-def get_coordinates( image_size, window_size, overlap ):
+def get_coordinates(image_size, window_size, overlap):
     """Compute the x, y coordinates of the centers of the interrogation windows.
 
     Parameters
@@ -532,7 +535,7 @@ def normalize_intensity( window ):
 
 
 ##################################################################
-def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
+def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
            np.ndarray[DTYPEi_t, ndim=2] frame_b,
            np.ndarray[DTYPEi_t, ndim=2] mark,
            int min_window_size,
@@ -1085,7 +1088,7 @@ def linear_interpolation(int x1, int x2, int x, int f1, int f2):
 
 
 
-def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
+def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
     """Look for the position at the iteration K of the points surrounding a given point in the frame.
 
     Parameters
@@ -1170,7 +1173,7 @@ def F_dichotomy( np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndi
 
 
 
-def define_windows( int size ):
+def define_windows(int size):
     """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
 
     Parameters
@@ -1266,7 +1269,7 @@ def sumsquare_array(arr1):
 
 
 
-def launch( str method, names, arg ):
+def launch(str method, names, arg):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
 
     Parameters
@@ -1308,7 +1311,7 @@ def launch( str method, names, arg ):
 
 
 
-def end( float startTime ):
+def end(float startTime):
     """A function that prints the time since startTime. Used to end nicely a programm
 
     Parameters

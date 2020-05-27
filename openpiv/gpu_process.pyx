@@ -1,6 +1,6 @@
-#cython: language_level=3
-
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
+
+#cython: language_level=3
 
 from pycuda.compiler import SourceModule
 import pycuda.gpuarray as gpuarray
@@ -9,7 +9,7 @@ import pycuda.driver as drv
 import skcuda.cublas as cu_cublas
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
-#
+
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import rfft2,irfft2,fftshift
