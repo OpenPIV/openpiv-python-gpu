@@ -30,7 +30,7 @@ if GPU_SUPPORT == True:
                            )
     extensions.append(gpu_module)
 
-extensions = cythonize(extensions, include_path=[numpy.get_include()])
+extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_directives={'language_level': "3"})
 
 # read the contents of your README file
 this_directory = path.abspath(path.dirname(__file__))
