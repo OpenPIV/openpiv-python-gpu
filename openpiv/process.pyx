@@ -1,6 +1,6 @@
-"""This module is dedicated to advanced algorithms for PIV image analysis."""
-
 #cython: language_level=3
+
+"""This module is dedicated to advanced algorithms for PIV image analysis."""
 
 import numpy as np
 import numpy.ma as ma
