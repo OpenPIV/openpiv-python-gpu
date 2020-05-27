@@ -178,10 +178,10 @@ def gpu_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     if sig2noise_method is not None:
         sig2noise = c.sig2noise_ratio(method = sig2noise_method)
-        del(c)
+        del c
         return u,v, sig2noise
     else:
-        del(c)
+        del c
         return u, v
 
 
@@ -560,7 +560,7 @@ class CorrelationFunction:
         # delete classes for the plan for free any associated memory
         del(plan_forward, plan_inverse)
 
-        return(corr)
+        return corr
 
 
     def _find_peak(self, array):
@@ -589,7 +589,7 @@ class CorrelationFunction:
         row = ind // s
         col = ind % s
 
-        return(row, col, maximum)
+        return row, col, maximum
 
 
     def _find_second_peak ( self, width ):
@@ -695,7 +695,7 @@ class CorrelationFunction:
         row_sp = row_c + ( (np.log(cl)-np.log(cr) )/( 2*np.log(cl) - 4*np.log(c) + 2*np.log(cr) + SMALL ))*non_zero
         col_sp = col_c + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) + SMALL))*non_zero
 
-        return(row_sp, col_sp)
+        return row_sp, col_sp
 
 
     def sig2noise_ratio( self, method='peak2peak', width=2 ):
@@ -764,12 +764,7 @@ class CorrelationFunction:
         return self.n_rows, self.n_cols
 
 
-
-
-
-
-
-def get_field_shape ( image_size, window_size, overlap ):
+def get_field_shape (image_size, window_size, overlap):
     """Compute the shape of the resulting flow field.
 
     Given the image size, the interrogation window size and
@@ -801,17 +796,8 @@ def get_field_shape ( image_size, window_size, overlap ):
              (image_size[1] - window_size)//(window_size-overlap)+1 )
 
 
-
-
-
-
-
-
-
-
-
 ##################################################################
-def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
+def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
            np.ndarray[DTYPEi_t, ndim=2] frame_b,
            np.ndarray[DTYPEi_t, ndim=2] mark,
            int min_window_size,
@@ -1224,7 +1210,7 @@ def WiDIM( np.ndarray[DTYPEi_t, ndim=2] frame_a,
             d_F[K+1,:,:,6] =  gpu_round(d_F[K+1,:,:,4].copy())
             d_F[K+1,:,:,7] =  gpu_round(d_F[K+1,:,:,5].copy())
         # delete old correlation function
-        del(c)
+        del c
 
         print("..[DONE] -----> going to iteration ",K+1)
         print(" ")
@@ -1292,14 +1278,14 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
 
     #case if different dimensions : interpolation using previous iteration
-    elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
+    elif K > 0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 10)
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 11)
         d_F[K,:,:,4] = -d_F[K,:,:,11].copy()*dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy()*dt
 
     #case if same dimensions
-    elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
+    elif K > 0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
         # get indices and send them to the gpu
         indices = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
         d_indices = gpuarray.to_gpu(indices)
@@ -1497,7 +1483,7 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
     # LEFT
     #if(False):
-    if(left_ind.size > 0):
+    if left_ind.size > 0:
 
         # get position data
         d_low_x, d_high_x, d_left_ind = F_dichotomy_gpu(d_F[K:K+2, :, 0, 0].copy(), K, "x_axis", d_left_ind, W, Overlap, Nrow, Ncol)
@@ -1552,22 +1538,22 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
     # ----------------------------CORNERS-----------------------------------
     #top left
-    if(v_list[0,0] == 1):
+    if v_list[0, 0] == 1:
         d_F[K+1, 0, 0, dat] = d_F[K, 0, 0, dat]
     #top right
-    if(v_list[0,Ncol[K+1]-1] == 1):
+    if v_list[0, Ncol[K + 1] - 1] == 1:
         d_F[K+1, 0, int(Ncol[K+1]-1), dat] = d_F[K, 0, int(Ncol[K]-1), dat]
     #bottom left
-    if(v_list[Nrow[K+1]-1, 0] == 1):
+    if v_list[Nrow[K + 1] - 1, 0] == 1:
         d_F[K+1, int(Nrow[K+1]-1), 0, dat] = d_F[K, int(Nrow[K]-1), 0, dat]
     #bottom right
-    if(v_list[Nrow[K+1]-1, Ncol[K+1]-1] == 1):
+    if v_list[Nrow[K + 1] - 1, Ncol[K + 1] - 1] == 1:
         d_F[K+1, int(Nrow[K+1]-1), int(Ncol[K+1]-1), dat] = d_F[K, int(Nrow[K]-1), int(Ncol[K]-1), dat]
 
-    return(d_F)
+    return d_F
 
 
-def launch( str method, names, arg ):
+def launch(str method, names, arg):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
 
     Parameters
@@ -1624,9 +1610,6 @@ def end( float startTime ):
     print("-------------------------------------------------------------")
     print("[DONE] ..after ", (time.time() - startTime), "seconds ")
     print("-------------------------------------------------------------")
-
-
-
 
 
 ################################################################################
@@ -2329,7 +2312,6 @@ def gpu_rms(d_neighbours, d_neighbours_present, Nrow, Ncol):
     return d_u_rms, d_v_rms, d_neighbours, d_neighbours_present
 
 
-
 def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     """
     Calculates the divergence at each point in a velocity field.
@@ -2562,7 +2544,6 @@ def F_dichotomy_gpu(d_range, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     return d_low, d_high, d_pos_index
 
 
-
 def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4):
     """
     """
@@ -2631,7 +2612,6 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
     return d_f
 
 
-
 def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
 
 
@@ -2667,7 +2647,6 @@ def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
     d_f2.gpudata.free()
 
     return d_f
-
 
 
 def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  ReturnList = False):
@@ -2764,7 +2743,6 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  Ret
             return d_return_values
 
 
-
 def gpu_index_update(d_dest, d_values, d_indeces, ReturnIndices = False):
     """
     Allows for arbirtary index selecting with numpy arrays
@@ -2825,7 +2803,6 @@ def gpu_index_update(d_dest, d_values, d_indeces, ReturnIndices = False):
     else:
         d_indeces.gpudata.free()
         return d_dest
-
 
 
 def gpu_floor(d_src, ReturnInput=False):
@@ -2944,9 +2921,6 @@ def gpu_round(d_src, ReturnInput=False):
         raise ValueError("ReturnInput is currently {}. Must be of type boolean".format(ReturnInput))
 
 
-
-
-
 ################################################################################
 #  OLD/DEPRECIATED FUNCTIONS
 ################################################################################
@@ -3059,10 +3033,6 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
             raise ValueError( "cannot perform interpolation, a problem occured" )
 
 
-
-
-
-
 def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
     """Perform a bilinear interpolation between 4 points
 
@@ -3094,9 +3064,6 @@ def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f
         return (f1*(x2-x)*(y2-y)+f2*(x2-x)*(y-y1)+f3*(x-x1)*(y2-y)+f4*(x-x1)*(y-y1))/(np.float(x2-x1)*np.float(y2-y1))
 
 
-
-
-
 def linear_interpolation(int x1, int x2, int x, float f1, float f2):
     """Perform a linear interpolation between 2 points
 
@@ -3117,11 +3084,6 @@ def linear_interpolation(int x1, int x2, int x, float f1, float f2):
 
     """
     return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
-
-
-
-
-
 
 
 def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
@@ -3205,8 +3167,6 @@ def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim
         raise ValueError( "no valid side for F-dichotomy!" )
 
 
-
-
 def find_neighbours(int I, int J, int Imax, int Jmax):
     """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
 
@@ -3247,8 +3207,6 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
         neighbours[1,2]=0
         neighbours[2,2]=0
     return neighbours
-
-
 
 
 def old_initiate_validation(np.ndarray[DTYPEf_t, ndim=4] F,
@@ -3344,8 +3302,6 @@ def define_windows(int size):
     cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([size, size], dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=2] window_b = np.zeros([size, size], dtype=DTYPEi)
     return window_a, window_b
-
-
 
 
 def sumsquare_array(arr1):
