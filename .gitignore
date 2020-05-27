@@ -8,9 +8,7 @@ openpiv/src/lib.c
 build/
 *.txt
 /setup.cfg
-openpiv/lib.so
-openpiv/process.so
-openpiv/gpu_process.so
+*.so
 openpiv-python-mark-data-checkpoint.ipynb
 openpiv-python-tutorial-part1-checkpoint.ipynb
 dist
