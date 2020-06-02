@@ -12,7 +12,7 @@ import skcuda.misc as cu_misc
 
 import numpy as np
 import numpy.ma as ma
-from numpy.fft import rfft2,irfft2,fftshift
+from numpy.fft import rfft2, irfft2, fftshift
 from math import log
 from scipy.signal import convolve
 import time
@@ -21,12 +21,9 @@ import warnings
 from progressbar import *
 
 cimport numpy as np
-# cimport cython
-
 
 DTYPEi = np.int32
 ctypedef np.int32_t DTYPEi_t
-
 
 #GPU can only hold 32 bit numbers
 DTYPEf = np.float32
@@ -767,26 +764,26 @@ def get_field_shape (image_size, window_size, overlap):
 
 ##################################################################
 def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
-           np.ndarray[DTYPEi_t, ndim=2] frame_b,
-           np.ndarray[DTYPEi_t, ndim=2] mark,
-           int min_window_size,
-           float overlap_ratio,
-           int coarse_factor,
-           float dt,
-           str validation_method='mean_velocity',
-           int div_validation = 1,
-           int trust_1st_iter=1,
-           int validation_iter = 1,
-           float tolerance = 1.5,
-           float div_tolerance = 0.1,
-           int nb_iter_max=3,
-           str subpixel_method='gaussian',
-           str sig2noise_method='peak2peak',
-           int width=2,
-           nfftx=None,
-           nffty=None):
-    """
-    Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
+          np.ndarray[DTYPEi_t, ndim=2] frame_b,
+          np.ndarray[DTYPEi_t, ndim=2] mark,
+          int min_window_size,
+          float overlap_ratio,
+          int coarse_factor,
+          float dt,
+          str validation_method='mean_velocity',
+          int div_validation=1,
+          int trust_1st_iter=1,
+          int validation_iter=1,
+          float tolerance=1.5,
+          float div_tolerance=0.1,
+          int nb_iter_max=3,
+          str subpixel_method='gaussian',
+          str sig2noise_method='peak2peak',
+          int width=2,
+          nfftx=None,
+          nffty=None):
+    """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
+
     This is an iterative  method to cope with  the lost of pairs due to particles
     motion and get rid of the limitation in velocity range due to the window size.
     The possibility of window size coarsening is implemented.
@@ -832,7 +829,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     tolerance : float
         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
     div_tolerance : float
-        Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptible.
+        Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptable.
     nb_iter_max : int
         global number of iterations.
     subpixel_method : string
@@ -870,7 +867,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
 
     Example
-    --------
+    -------
     x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 
     --------------------------------------
@@ -935,7 +932,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     # window sizes list initialization
     for K in range(coarse_factor+1):
-        W[K] = np.power(2, coarse_factor - K)*min_window_size
+        W[K] = np.power(2, coarse_factor - K) * min_window_size
     for K in range(coarse_factor+1, nb_iter_max):
         W[K] = W[K-1]
 
@@ -948,7 +945,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         Nrow[K]=((pic_size[0]-W[K])//(W[K]-Overlap[K]))+1
         Ncol[K]=((pic_size[1]-W[K])//(W[K]-Overlap[K]))+1
 
-    #writting the parameters to the screen
+    # write the parameters to the screen
     if validation_iter==0:
         validation_method='None'
 
@@ -958,11 +955,12 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=4] F_check = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
 
-    # define mask - bool array don't exist in cython so we go to lower level with cast
+    # define mask - bool arrays don't exist in cython so we go to lower level with cast
     # you can access mask with (<object>mask)[I,J]
+    #TODO fix the int type
     cdef np.ndarray[np.uint8_t, ndim=2, cast=True] mask = np.empty([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=np.bool)
 
-    # define u,v, x,y fields (only used as outputs of this programm)
+    # define u,v, x,y fields (only used as outputs of this program)
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
@@ -1014,11 +1012,9 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     # end of the initializations
 
-
     ####################################################
     # MAIN LOOP
     ####################################################
-
     for K in range(nb_iter_max):
         print(" ")
         print("//////////////////////////////////////////////////////////////////")
@@ -1033,8 +1029,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         #################################################################################
 
         # Calculate second frame displacement (shift)
-        d_shift[0, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 6].copy().astype(np.int32) #xb=xa+dpx
-        d_shift[1, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 7].copy().astype(np.int32) #yb=ya+dpy
+        d_shift[0, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 6].copy().astype(np.int32)  # xb=xa+dpx
+        d_shift[1, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 7].copy().astype(np.int32)  # yb=ya+dpy
 
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, W[K], Overlap[K], nfftx, d_shift = d_shift[:, :Nrow[K], :Ncol[K]].copy())
@@ -1055,7 +1051,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
         #################################################################################
 
-        print("..[DONE]")
+        print("...[DONE]")
         """
         if K==0:
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
@@ -1064,13 +1060,13 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         """
 
         #####################################################
-        #validation of the velocity vectors with 3*3 filtering
+        # validation of the velocity vectors with 3*3 filtering
         #####################################################
 
         if K==0 and trust_1st_iter:#1st iteration can generally be trust if it follows the 1/4 rule
-            print("no validation : trusting 1st iteration")
+            print("no validation: trusting 1st iteration")
         else:
-            print("Starting validation..")
+            print("Starting validation...")
 
             # init mask to False
             for I in range(Nrow[nb_iter_max-1]):
@@ -1101,22 +1097,22 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 # do the validation
                 d_F = initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
 
-            print("..[DONE]")
+            print("...[DONE]")
             print(" ")
         # end of validation
 
         ##############################################################################
-        #stop process if this is the last iteration
+        # stop process if this is the last iteration
         ##############################################################################
 
         if K==nb_iter_max-1:
-            # print("//////////////////////////////////////////////////////////////////")
+            print("//////////////////////////////////////////////////////////////////")
             print("end of iterative process.. Re-arranging vector fields..")
 
             F = d_F.get()
             d_F.gpudata.free()
 
-            # assembling the u,v and x,y fields for outputs
+            # assembling the u, v and x, y fields for outputs
             for I in range(Nrow[K]):
                 for J in range(Ncol[K]):
                     x[I,J]=F[K,I,J,1]
@@ -1136,8 +1132,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             return x, y, u, v, (<object>mask)
         #############################################################################
 
-        # go to next iteration : compute the predictors dpx and dpy from the current displacements
-        print("going to next iteration.. ")
+        # go to next iteration: compute the predictors dpx and dpy from the current displacements
+        print("going to next iteration... ")
         print("performing interpolation of the displacement field for next iteration predictors")
         print(" ")
 
@@ -1155,7 +1151,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         # delete old correlation function
         del c
 
-        print("..[DONE] -----> going to iteration ", K+1)
+        print("...[DONE] -----> going to iteration ", K+1)
         print(" ")
 
 
@@ -1169,19 +1165,19 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
     Parameters
     ----------
 
-    d_F: 4D gpuarray - float
+    d_F : 4D gpuarray - float
         main array that stores all velocity data
-    validation_list: 2D array - int
+    validation_list : 2D array - int
         indicates which values must be validate. 1 indicates no validation needed, 0 indicated validation is needed
-    d_u_mean, d_v_mean: 3D gpuarray - float
+    d_u_mean, d_v_mean : 3D gpuarray - float
         mean velocity surrounding each point
-    K: int
+    K : int
         main loop iteration count
-    Nrow, Ncol: 1D array
+    Nrow, Ncol : 1D array
         number of rows an columns in each main loop iteration
-    dt: float
+    dt : float
         time between image frames
-    dat: int
+    dat : int
         data point to interpolate. Fourth index of the F array
 
     """
@@ -1200,22 +1196,22 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         d_indices = gpuarray.to_gpu(indices)
 
         # get mean velocity at validation points
-        d_u_tmp, d_indices = gpu_array_index(d_u_mean[K, :,:].copy(), d_indices, np.float32, ReturnList=True)
-        d_v_tmp, d_indices = gpu_array_index(d_v_mean[K, :,:].copy(), d_indices, np.float32, ReturnList=True)
+        d_u_tmp, d_indices = gpu_array_index(d_u_mean[K,:,:].copy(), d_indices, np.float32, ReturnList=True)
+        d_v_tmp, d_indices = gpu_array_index(d_v_mean[K,:,:].copy(), d_indices, np.float32, ReturnList=True)
 
         # update the velocity values
         d_F[K,:,:,10], d_indices = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indices, ReturnIndices=True)
         d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indices)
 
         #TODO, you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
-        d_F[K,:,:,4] = -d_F[K,:,:,11].copy() * dt
+        d_F[K,:,:,4] = - d_F[K,:,:,11].copy() * dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy() * dt
 
-    # case if different dimensions : interpolation using previous iteration
+    # case if different dimensions: interpolation using previous iteration
     elif K > 0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 10)
         d_F = gpu_interpolate_surroundings(d_F, validation_location, Nrow, Ncol, W, Overlap, K-1, 11)
-        d_F[K,:,:,4] = -d_F[K,:,:,11].copy() * dt
+        d_F[K,:,:,4] = - d_F[K,:,:,11].copy() * dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy() * dt
 
     # case if same dimensions
@@ -1227,10 +1223,15 @@ def initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K
         # update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
         #TODO - could replace with the mean of the previous values surrounding the point
-        assert d_F[K,:,:,10].ndim == 1, 'assert error 1'
-        d_F[K,:,:,10], d_indices = gpu_index_update(d_F[K,:,:,10].copy(), d_F[K-1,:,:,10].copy(), d_indices, ReturnIndices=True)
-        d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_F[K-1,:,:,11].copy(), d_indices)
-        d_F[K,:,:,4] = -d_F[K,:,:,11].copy() * dt
+        d_u_tmp, d_indices = gpu_array_index(d_F[K-1,:,:,10].copy(), d_indices, np.float32, ReturnList=True)  # changed by Eric
+        d_v_tmp, d_indices = gpu_array_index(d_F[K-1,:,:,11].copy(), d_indices, np.float32, ReturnList=True)  # changed by Eric
+
+        d_F[K,:,:,10], d_indices = gpu_index_update(d_F[K,:,:,10].copy(), d_u_tmp, d_indices, ReturnIndices=True)  # changed by Eric
+        d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_v_tmp, d_indices)  # changed by Eric
+
+        # d_F[K,:,:,10], d_indices = gpu_index_update(d_F[K,:,:,10].copy(), d_F[K-1,:,:,10].copy(), d_indices, ReturnIndices=True)  # original
+        # d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_F[K-1,:,:,11].copy(), d_indices)  # original
+        d_F[K,:,:,4] = - d_F[K,:,:,11].copy() * dt
         d_F[K,:,:,5] = d_F[K,:,:,10].copy() * dt
 
     return d_F
@@ -1241,21 +1242,20 @@ def gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, dat):
 
     Parameters
     ----------
-
-    d_F: 4D gpuarray - float
+    d_F : 4D gpuarray - float
         main array that stores all velocity data
-    v_list: 2D array - bool
+    v_list : 2D array - bool
         indicates which alues must be validate. True means it needs to be validated, False means no validation is needed.
-    Nrow, Ncol: 1D array
+    Nrow, Ncol : 1D array
         Number rows and columns in each iteration
-    K: int
+    K : int
         current iteration
-    dat: int
+    dat : int
         data that needs to be interpolated. 4th index in the F array
 
     Returns
     -------
-    d_F: 4D gpuarray - float
+    d_F : 4D gpuarray - float
         This must always be returned so the class handle is not lost
 
     """
@@ -2277,7 +2277,6 @@ def gpu_divergence(d_u, d_v, w, Nrow, Ncol):
     return d_div, d_u, d_v
 
 
-
 def F_dichotomy_gpu(d_range, K, side, d_pos_index, W, Overlap, Nrow, Ncol):
     """
     Look for the position of the vectors at the previous iteration that surround the current point in the frame
@@ -2471,8 +2470,6 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
 
 
 def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
-
-
     mod_lin = SourceModule("""
     __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int N)
     {
@@ -2507,7 +2504,7 @@ def linear_interp_gpu(d_x1, d_x2, d_x, d_f1, d_f2):
     return d_f
 
 
-def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  ReturnList = False):
+def gpu_array_index(d_array, d_return_list, data_type, ReturnInput=False, ReturnList=False):
     """Allows for arbitrary index selecting with numpy arrays
 
     Parameters
@@ -2555,7 +2552,7 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  Ret
     }
     """)
 
-    # Gpu will automatically flatten the input array. The indexing must reference the flattened GPU array.
+    # GPU will automatically flatten the input array. The indexing must reference the flattened GPU array.
     assert d_return_list.ndim == 1, "Number of dimensions of r_list is wrong. Should be equal to 1"
 
     # define gpu parameters
@@ -2563,7 +2560,7 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  Ret
     r_size = np.int32(d_return_list.size)
     x_blocks = int(r_size//block_size + 1)
 
-    #send data to the gpu
+    # send data to the gpu
     d_return_values = gpuarray.zeros(d_return_list.size, dtype=data_type)
 
     if data_type == np.float32:
@@ -2593,15 +2590,15 @@ def gpu_array_index(d_array, d_return_list, data_type, ReturnInput = False,  Ret
 
 
 def gpu_index_update(d_dest, d_values, d_indices, ReturnIndices=False):
-    """Allows for arbirtary index selecting with numpy arrays
+    """Allows for arbitrary index selecting with numpy arrays
 
     Parameters
     ----------
-    d_dest: nD gpuarray - float
+    d_dest : nD gpuarray - float
         Array to be updated with new values
-    d_values: 1D gpuarray - float
+    d_values : 1D gpuarray - float
         Array containing the values to be updated in the destination array
-    d_indices: 1D gpuarray - int
+    d_indices : 1D gpuarray - int
         Array of indices to update
 
     Returns
@@ -2612,14 +2609,14 @@ def gpu_index_update(d_dest, d_values, d_indices, ReturnIndices=False):
 
     """
     mod_index_update = SourceModule("""
-    __global__ void index_update(float *dest, float *values, int *indeces, int r_size )
+    __global__ void index_update(float *dest, float *values, int *indices, int r_size )
     {
         // 1D grid of 1D blocks
         int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
         if(tid >= r_size){return;}
 
-        dest[indeces[tid]] = values[tid];
+        dest[indices[tid]] = values[tid];
     }
     """)
 
