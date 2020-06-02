@@ -28,11 +28,9 @@ from PIL import Image
 
 class continuous_flow_field:
     def __init__(self, data):
+        """Checks if the continous flow should be created from a set of data points if so it interpolates them for a
+        continuous flow field
         """
-        Checks if the continous flow should be created from a set of data points
-        if so it interpolates them for a continuous flow field
-        """
-
         self.f_U = scipy.interpolate.interp2d(data[0, :, 0], data[:, 0, 1], data[:, :, 2])
         self.f_V = scipy.interpolate.interp2d(data[0, :, 0], data[:, 0, 1], data[:, :, 3])
 
@@ -51,35 +49,25 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
     data: None or numpy array
         If you have data from which to genrate the flow feild the synthetic image.
         It should be passed on as a numpy array with columns being (X grid position,Y grid position,U velocity at (X,Y) grid point,V velocity at (X,Y) grid point)
-
     x_bound,y_bound: list/tuple of floats
         The boundries of interest in the synthetic flow field.
-
     image_size: list/tuple of ints
         The desired image size in pixels.
-    
     path: str('None' for no generating data)
         Path to txt file of input data.
-
     inter: boolean
         False if no interpolation of input data is needed.
-        True if there is data you want to interpolate from.   
-
+        True if there is data you want to interpolate from.
     den: float
         Defines the number of particles per image.
-
     per_loss_pairs: float
         Percentage of synthetic pairs loss.
-
     par_diam_mean: float
         Mean particle diamter in pixels.
-
     par_diam_std: float
         Standard deviation of particles diamter in pixels.
-
     par_int_std: float
         Standard deviation of particles intensities.
-
     dt: float
         Synthetic time difference between both images.
 
@@ -87,38 +75,28 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
     -------
     ground_truth: continuous_flow_field class
         The synthetic ground truth as a continuous_flow_field class.
-
     cv:
         Convertion value to convert U,V from pixels/images to meters/seconds.
-
     x_1,y_1: numpy array
         Position of particles in the first synthetic image.
-
     U_par,V_par: numpy array
         Velocity speeds for each particle.
-
     par_diam1: numpy array
         Particle diamters for the first synthetic image.
-
     par_int1: numpy array
         Particle intensities for the first synthetic image.
-
     x_2,y_2: numpy array
         Position of particles in the second synthetic image.
-
     par_diam2: numpy array
         Particle diamters for the second synthetic image.
-
     par_int2: numpy array
         Particle intensities for the second synthetic image.
+
     """
-
     # Data processing
-
     cff = continuous_flow_field(data)
 
     # Creating syn particles
-
     margin = ((x_bound[1] - x_bound[0]) * 0.2, (y_bound[1] - y_bound[0]) * 0.2)
     num_of_par = int(image_size[0] * image_size[1] * den)
     num_of_lost_pairs = num_of_par * (per_loss_pairs / 100)
@@ -164,14 +142,12 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
     xy_2 = np.transpose(np.vstack((x_2, y_2, par_diam2, par_int2)))
 
     # Choosing particles in boundary area
-
     bounded_xy_1 = np.asarray(
         [xy for xy in xy_1 if x_bound[1] >= xy[0] >= x_bound[0] and y_bound[1] >= xy[1] >= y_bound[0]])
     bounded_xy_2 = np.asarray(
         [xy for xy in xy_2 if x_bound[1] >= xy[0] >= x_bound[0] and y_bound[1] >= xy[1] >= y_bound[0]])
 
-    # Tranforming coordinates into pixels
-
+    # Transforming coordinates into pixels
     x1 = ((bounded_xy_1[:, 0] - x_bound[0]) / (x_bound[1] - x_bound[0])) * image_size[0]
     y1 = ((bounded_xy_1[:, 1] - y_bound[0]) / (y_bound[1] - y_bound[0])) * image_size[1]
 
@@ -196,13 +172,10 @@ def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MA
     ----------
     HEIGHT, WIDTH: int
         The number of pixels in the desired output image.
-
     X,Y: numpy array
         The X and Y positions of the particles, created by create_synimage_parameters().
-
     PARTICLE_DIAMETERS, PARTICLE_MAX_INTENSITIES: numpy array
         The intensities and diameters of the particles, created by create_synimage_parameters().
-
     BIT_DEPTH: int
         The bit depth of the desired output image.
 

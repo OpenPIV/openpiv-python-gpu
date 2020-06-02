@@ -53,57 +53,44 @@ def extended_search_area_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     frame_a : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers containing grey levels of
         the first frame.
-
     frame_b : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers containing grey levels of
         the second frame.
-
     window_size : int
         the size of the (square) interrogation window.
-
     overlap : int
         the number of pixels by which two adjacent windows overlap.
-
     dt : float
         the time delay separating the two frames.
-
     search_area_size : int
         the size of the (square) interrogation window from the second frame
-
     subpixel_method : string
          one of the following methods to estimate subpixel location of the peak:
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
-
     sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-
     width : int
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-
     nfftx   : int
         the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended]
-
     nffty   : int
         the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended]
-
 
     Returns
     -------
     u : 2d np.ndarray
         a two dimensional array containing the u velocity component,
         in pixels/seconds.
-
     v : 2d np.ndarray
         a two dimensional array containing the v velocity component,
         in pixels/seconds.
-
     sig2noise : 2d np.ndarray, optional
         a two dimensional array containing the signal to noise ratio
         from the cross correlation function. This array is returned if
@@ -111,10 +98,9 @@ def extended_search_area_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     Examples
     --------
+    u, v = openpiv.process.extended_search_area_piv( frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
 
-    >>> u, v = openpiv.process.extended_search_area_piv( frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
     """
-
     # check the inputs for validity
 
     if search_area_size == 0:
@@ -241,8 +227,7 @@ class CorrelationFunction():
         return  (i, j),  array.max()
 
     def _find_second_peak ( self, width ):
-        """
-        Find the value of the second largest peak.
+        """Find the value of the second largest peak.
 
         The second largest peak is the height of the peak in
         the region outside a ``width * width`` submatrix around
@@ -258,7 +243,6 @@ class CorrelationFunction():
         -------
         i, j : two elements tuple
             the row, column index of the second correlation peak.
-
         corr_max2 : int
             the value of the second correlation peak.
 
@@ -278,8 +262,7 @@ class CorrelationFunction():
         return peak, corr_max2
 
     def subpixel_peak_position( self, method='gaussian' ):
-        """
-        Find subpixel approximation of the correlation peak.
+        """Find subpixel approximation of the correlation peak.
 
         This function returns a subpixels approximation of the correlation
         peak by using one of the several methods available.
@@ -297,8 +280,8 @@ class CorrelationFunction():
         subp_peak_position : two elements tuple
             the fractional row and column indices for the sub-pixel
             approximation of the correlation peak.
-        """
 
+        """
         # the peak and its neighbours: left, right, down, up
         try:
             c  = self.data[self.peak1[0]  , self.peak1[1]  ]
@@ -351,7 +334,6 @@ class CorrelationFunction():
             the method for evaluating the signal to noise ratio value from
             the correlation map. Can be `peak2peak`, `peak2mean` or None
             if no evaluation should be made.
-
         width : int, optional
             the half size of the region around the first
             correlation peak to ignore for finding the second
@@ -363,7 +345,6 @@ class CorrelationFunction():
             the signal to noise ratio from the correlation map.
 
         """
-
         # if the image is lacking particles, totally black it will correlate to very low value, but not zero
         # return zero, since we have no signal.
         if self.corr_max1 <  1e-3:
@@ -403,27 +384,22 @@ def get_coordinates(image_size, window_size, overlap):
         a two dimensional tuple for the pixel size of the image
         first element is number of rows, second element is
         the number of columns.
-
     window_size: int
         the size of the interrogation windows.
-
     overlap: int
         the number of pixel by which two adjacent interrogation
         windows overlap.
-
 
     Returns
     -------
     x : 2d np.ndarray
         a two dimensional array containing the x coordinates of the
         interrogation window centers, in pixels.
-
     y : 2d np.ndarray
         a two dimensional array containing the y coordinates of the
         interrogation window centers, in pixels.
 
     """
-
     # get shape of the resulting flow field
     field_shape = get_field_shape( image_size, window_size, overlap )
 
@@ -446,21 +422,18 @@ def get_field_shape ( image_size, window_size, overlap ):
         a two dimensional tuple for the pixel size of the image
         first element is number of rows, second element is
         the number of columns.
-
     window_size: int
         the size of the interrogation window.
-
     overlap: int
         the number of pixel by which two adjacent interrogation
         windows overlap.
-
 
     Returns
     -------
     field_shape : two elements tuple
         the shape of the resulting flow field
-    """
 
+    """
     return ( (image_size[0] - window_size)//(window_size-overlap)+1,
              (image_size[1] - window_size)//(window_size-overlap)+1 )
 
@@ -474,22 +447,17 @@ def correlate_windows( window_a, window_b, corr_method = 'fft', int nfftx = 0, i
     ----------
     window_a : 2d np.ndarray
         a two dimensions array for the first interrogation window.
-
     window_b : 2d np.ndarray
         a two dimensions array for the second interrogation window.
-
     corr_method   : string
         one of the two methods currently implemented: 'fft' or 'direct'.
         Default is 'fft', which is much faster.
-
     nfftx   : int
         the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended].
-
     nffty   : int
         the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended].
-
 
     Returns
     -------
@@ -497,7 +465,6 @@ def correlate_windows( window_a, window_b, corr_method = 'fft', int nfftx = 0, i
         a two dimensions array for the correlation function.
 
     """
-
     if corr_method == 'fft':
         if nfftx == 0:
             nfftx = 2*window_a.shape[0]
@@ -528,12 +495,6 @@ def normalize_intensity( window ):
     return window - window.mean()
 
 
-
-
-
-
-
-
 ##################################################################
 def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
            np.ndarray[DTYPEi_t, ndim=2] frame_b,
@@ -544,17 +505,17 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
            float dt,
            str validation_method='mean_velocity',
            int trust_1st_iter=1,
-           int validation_iter = 1,
-           float tolerance = 1.5,
+           int validation_iter=1,
+           float tolerance=1.5,
            int nb_iter_max=3,
            str subpixel_method='gaussian',
            str sig2noise_method='peak2peak',
-           float sig2noise_threshold = 1.5,
+           float sig2noise_threshold=1.5,
            int width=2,
            int nfftx=0,
            int nffty=0):
-    """
-    Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
+    """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
+
     This is an iterative  method to cope with  the lost of pairs due to particles
     motion and get rid of the limitation in velocity range due to the window size.
     The possibility of window size coarsening is implemented.
@@ -576,95 +537,72 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     frame_a : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers containing grey levels of
         the first frame.
-
     frame_b : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers containing grey levels of
         the second frame.
-
     mark : 2d np.ndarray, dtype=np.int32
         an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
-
     min_window_size : int
         the size of the minimum (final) (square) interrogation window.
-
     overlap_ratio : float
         the ratio of overlap between two windows (between 0 and 1).
-
+    coarse_factor : int
+        how many times the window size refining processes happens.
     dt : float
         the time delay separating the two frames.
-
     validation_method : string
         the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
-
     trust_1st_iter : int = 0 or 1
         0 if the first iteration need to be validated. With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
-
     validation_iter : int
         number of iterations per validation cycle.
-
     tolerance : float
         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-
     nb_iter_max : int
         global number of iterations.
-
     subpixel_method : string
          one of the following methods to estimate subpixel location of the peak:
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
-
     sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-
     sig2noise_threshold : float, recommended to use 1.5
         defines a threshold of a local outlier vector that is below the signal-to-noise threshold,
         see the sig2noise_method above for better understanding of this value.
-
     width : int
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-
-    nfftx   : int
+    nfftx : int
         the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended]
-
-    nffty   : int
+    nffty : int
         the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended]
 
-
     Returns
     -------
-
     x : 2d np.ndarray
         a two dimensional array containing the x-axis component of the interpolations locations.
-
     y : 2d np.ndarray
         a two dimensional array containing the y-axis component of the interpolations locations.
-
     u : 2d np.ndarray
         a two dimensional array containing the u velocity component,
         in pixels/seconds.
-
     v : 2d np.ndarray
         a two dimensional array containing the v velocity component,
         in pixels/seconds.
-
     mask : 2d np.ndarray
         a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
 
     Example
     --------
-
-    >>> x,y,u,v, mask = openpiv.process.WiDIM( frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25,
-      coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7,
-      nb_iter_max=4, sig2noise_method='peak2peak', sig2noise_threshold = 1.5)
+    x, y, u, v, mask = openpiv.process.WiDIM( frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak', sig2noise_threshold = 1.5)
 
     --------------------------------------
-    Method of implementation : to improve the speed of the programm,
+    Method of implementation : to improve the speed of the program,
     all data have been placed in the same huge 4-dimensions 'F' array.
     (this prevent the definition of a new array for each iteration)
     However, during the coarsening process a large part of the array is not used.
@@ -689,8 +627,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
-    """
 
+    """
     #initializations
     # warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= coarse_factor:
@@ -813,26 +751,26 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
         print(" --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0)
         #####################################################
-        #validation of the velocity vectors with 3*3 filtering
-        if K==0 and trust_1st_iter:#1st iteration can generally be trust if it follows the 1/4 rule
+        # validation of the velocity vectors with 3*3 filtering
+        if K==0 and trust_1st_iter:  # 1st iteration can generally be trust if it follows the 1/4 rule
             print("no validation : trusting 1st iteration")
         else:
             print("Starting validation..")
-            for I in range(Nrow[nb_iter_max-1]):#init mask to False
+            for I in range(Nrow[nb_iter_max-1]):  # init mask to False
                 for J in range(Ncol[nb_iter_max-1]):
                     (<object>mask)[I,J]=False
-            for i in range(validation_iter):#real validation starts
+            for i in range(validation_iter):  # real validation starts
                 print("Validation, iteration number ",i)
                 print(" ")
                 # widgets = ['Validation : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
            # ' ', ETA(), ' ', FileTransferSpeed()]
                 # pbar = ProgressBar(widgets=widgets, maxval=100)
                 # pbar.start()
-                for I in range(Nrow[K]):#run through locations
+                for I in range(Nrow[K]):  # run through locations
                     # pbar.update(100*I/Nrow[K])
                     for J in range(Ncol[K]):
-                        neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)#get a map of the neighbouring locations
-                        for L in range(3):#get the velocity of the neighbours in a 2*3*3 array
+                        neighbours_present = find_neighbours(I, J, Nrow[K]-1, Ncol[K]-1)  # get a map of the neighbouring locations
+                        for L in range(3):  # get the velocity of the neighbours in a 2*3*3 array
                             for M in range(3):
                                 if neighbours_present[L,M]:
                                     neighbours[0,L,M]=F[K,I+L-1,J+M-1,10]#u
@@ -896,11 +834,11 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             print(" ")
         #end of validation
         ##############################################################################
-        #stop process if this is the last iteration
+        # stop process if this is the last iteration
         if K==nb_iter_max-1:
             print("//////////////////////////////////////////////////////////////////")
             print("end of iterative process.. Re-arranging vector fields..")
-            for I in range(Nrow[K]):#assembling the u,v and x,y fields for outputs
+            for I in range(Nrow[K]):  # assembling the u, v and x, y fields for outputs
                 for J in range(Ncol[K]):
                     x[I,J]=F[K,I,J,1]
                     y[I,J]=F[K,Nrow[K]-I-1,J,0]
@@ -911,7 +849,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             return x, y, u, v, (<object>mask)
         #############################################################################
         #go to next iteration : compute the predictors dpx and dpy from the current displacements
-        print("going to next iteration.. ")
+        print("going to next iteration..")
         print("performing interpolation of the displacement field")
         print(" ")
         # widgets = ['Performing interpolations : ', Percentage(), ' ', Bar(marker='-',left='[',right=']'),
@@ -922,9 +860,9 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             # pbar.update(100*I/Nrow[K+1])
             for J in range(Ncol[K+1]):
                 if Nrow[K+1]==Nrow[K] and Ncol[K+1]==Ncol[K]:
-                    F[K+1,I,J,6] = F[K,I,J,4]#dpx_k+1 = dx_k
-                    F[K+1,I,J,7] = F[K,I,J,5]#dpy_k+1 = dy_k
-                else:#interpolate if dimensions do not agree
+                    F[K+1,I,J,6] = F[K,I,J,4]  # dpx_k+1 = dx_k
+                    F[K+1,I,J,7] = F[K,I,J,5]  # dpy_k+1 = dy_k
+                else:  # interpolate if dimensions do not agree
                     F[K+1,I,J,6] = interpolate_surroundings(F,Nrow,Ncol,K,I,J, 4)
                     F[K+1,I,J,7] = interpolate_surroundings(F,Nrow,Ncol,K,I,J, 5)
         # pbar.finish()
@@ -945,19 +883,14 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
     ----------
     F :  4d np.ndarray
         The main array of the WIDIM algorithm.
-
     Nrow : 1d np.ndarray
         list of the numbers of row for each iteration K
-
     Ncol : 1d np.ndarray
         list of the numbers of column for each iteration K
-
     K : int
         the iteration that contains the valid data. K+1 will be the iteration at which the interpolation is needed.
-
     I,J : int
         indices of the point that need interpolation (in iteration K+1)
-
     dat : int
         the index of the data to interpolate.
 
@@ -975,12 +908,12 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
     cdef float pos_now_y = F[K+1,I,J,1]
     cdef np.ndarray[DTYPEi_t, ndim=1] Q1 = np.zeros(2, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] Q4 = np.zeros(2, dtype=DTYPEi)
-    if pos_now_x < lower_lim_previous_x:#top row
-        if pos_now_y < lower_lim_previous_y:#top left corner
+    if pos_now_x < lower_lim_previous_x:  # top row
+        if pos_now_y < lower_lim_previous_y:  # top left corner
             return F[K,0,0,dat]
-        elif pos_now_y > upper_lim_previous_y:#top right corner
+        elif pos_now_y > upper_lim_previous_y:  # top right corner
             return F[K,0,Ncol[K]-1,dat]
-        else:#top row no corners
+        else:  # top row no corners
             low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
             if low_y == high_y:
                 return F[K,0,low_y,dat]
@@ -1023,23 +956,19 @@ def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
             raise ValueError( "cannot perform interpolation, a problem occured" )
 
 
-
-
-
-
 def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
     """Perform a bilinear interpolation between 4 points
 
     Parameters
     ----------
-    x1,x2,y1,y2 :  int
+    x1, x2, y1, y2 :  int
         x-axis and y-axis locations of the 4 points. (ie. location in the frame)
         (Note that the x axis is vertical and pointing down while the y-axis is horizontal)
 
-    x,y : int
+    x, y : int
         locations of the target point for the interpolation (in the frame)
 
-    f1,f2,f3,f4 : float
+    f1, f2, f3, f4 : float
         value at each point : f1=f(x1,y1), f2=f(x1,y2), f3=f(x2, y1), f4=f(x2,y2)
 
     Returns
@@ -1058,9 +987,6 @@ def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f
         return (f1*(x2-x)*(y2-y)+f2*(x2-x)*(y-y1)+f3*(x-x1)*(y2-y)+f4*(x-x1)*(y-y1))/(np.float(x2-x1)*np.float(y2-y1))
 
 
-
-
-
 def linear_interpolation(int x1, int x2, int x, int f1, int f2):
     """Perform a linear interpolation between 2 points
 
@@ -1068,10 +994,8 @@ def linear_interpolation(int x1, int x2, int x, int f1, int f2):
     ----------
     x1,x2 :  int
         locations of the 2 points. (along any axis)
-
     x : int
         locations of the target point for the interpolation (along the same axis as x1 and x2)
-
     f1,f2 : float
         value at each point : f1=f(x1), f2=f(x2)
 
@@ -1083,11 +1007,6 @@ def linear_interpolation(int x1, int x2, int x, int f1, int f2):
     return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
 
 
-
-
-
-
-
 def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
     """Look for the position at the iteration K of the points surrounding a given point in the frame.
 
@@ -1095,16 +1014,12 @@ def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim
     ----------
     F :  4d np.ndarray
         The main array of the WIDIM algorithm.
-
     K : int
         the iteration of interest (1st index for F).
-
     N : 1d np.ndarray
         list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
-
     side : string
         the axis of interest : can be either 'x_axis' or 'y_axis'
-
     pos_now : int
         position of the point in the frame (along the axis 'side').
 
@@ -1112,7 +1027,6 @@ def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim
     -------
     low : int
         largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.
-
     high : int
         smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.
 
@@ -1168,11 +1082,6 @@ def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim
         raise ValueError( "no valid side for F-dichotomy!" )
 
 
-
-
-
-
-
 def define_windows(int size):
     """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
 
@@ -1191,10 +1100,6 @@ def define_windows(int size):
     return window_a, window_b
 
 
-
-
-
-
 def find_neighbours(int I, int J, int Imax, int Jmax):
     """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
 
@@ -1202,7 +1107,6 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
     ----------
     I,J : int
         indices of the point of interest
-
     Imax,Jmax : int
         max indices for the neighbours (ie. (size of the array) - 1)
 
@@ -1237,12 +1141,6 @@ def find_neighbours(int I, int J, int Imax, int Jmax):
     return neighbours
 
 
-
-
-
-
-
-
 def sumsquare_array(arr1):
     """Compute the sum of the square of the elements of a given array or list
 
@@ -1265,10 +1163,6 @@ def sumsquare_array(arr1):
     return result
 
 
-
-
-
-
 def launch(str method, names, arg):
     """A nice launcher for any openpiv function, printing a header in terminal with a list of the parameters used.
 
@@ -1276,10 +1170,8 @@ def launch(str method, names, arg):
     ----------
     method : string
         the name of the algorithm used
-
     names : list of string
         names of the parameters to print
-
     arg : list of parameters of different types
 
     Returns
@@ -1306,9 +1198,6 @@ def launch(str method, names, arg):
     print("-----------------------------------")
     cdef float StartTime  = time.time()
     return StartTime
-
-
-
 
 
 def end(float startTime):
