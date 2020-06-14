@@ -49,7 +49,6 @@ def replace_nans(np.ndarray[DTYPEf_t, ndim=2] array, int max_iter, float tol, in
 
     Parameters
     ----------
-    
     array : 2d np.ndarray
         an array containing NaN elements that have to be replaced
     
@@ -69,7 +68,6 @@ def replace_nans(np.ndarray[DTYPEf_t, ndim=2] array, int max_iter, float tol, in
         
     Returns
     -------
-    
     filled : 2d np.ndarray
         a copy of the input array, where NaN elements have been replaced.
         
