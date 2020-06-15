@@ -1,27 +1,16 @@
-"""
-
-Refactored version of job_run.py with multiprocessing.
-We use multiprocessing here because Python doesn't implement multithreading.
-
-"""
+"""This module performs multiprocessing of the OpenPIV GPU algorithms"""
 
 from multiprocessing import Process, Manager
 from time import time
 from skimage import io
-from piv_tools import contrast
 from datetime import datetime
 from PIL import Image
-
 import numpy as np
 import os
 import functools
-import json
-
 import glob
 import sys
-
 import scipy.interpolate as interp
-
 import openpiv.filters
 
 # ===================================================================================================================
@@ -29,149 +18,29 @@ import openpiv.filters
 # threads are accessing &/or writing to the same file. Please remember to use a queue if doing file I/O concurrently
 # ===================================================================================================================
 
-# Timing decorator (function_type being I/O or compute)
-# Note: Must unpack both the dict and the value in this function
-
-# To track distribution of runtime in functions using decorators
-manager = Manager()
-runtime_queue = manager.Queue()
-
-
-def measure_runtime_arg(queue, function_type):
-    def measure_runtime(func):
-        @functools.wraps(
-            func)  # preserve introspection of wrapped function (now func.__name__ returns func_name and not 'wrap')
-        def wrap(*args, **kwargs):
-            start_time = time()
-            res = func(*args, **kwargs)
-            finish_time = time()
-
-            func_name = func.__name__
-            func_runtime = finish_time - start_time
-
-            # Record relevant information: function name, function time, function type
-            queue.put({'func_name': func_name, 'func_runtime': func_runtime, 'func_type': function_type})
-            return res
-
-        return wrap
-
-    return measure_runtime
-
-
-def aggregate_runtime_metrics(queue, num_images, num_processes, filename):
-    # In: multiprocess queue, number of images, number of processes, file to write to
-    # Out: summary object for possible use in plots/graphs/figures
-
-    # total_dict will look like the following after tracking elements in the queue:
-    # {'func_name': {'total_avg/io_avg': <float>,
-    #                'longest': <int>,
-    #                'total/io': <int>},
-    #  'pCompute': <float>,
-    #  'pIO': <float>
-    # }
-    total_dict = {}
-    # Toggle this to print each entry into a file, otherwise only add aggregate lines
-    print_all = False
-
-    with open(filename, 'a+') as file:
-        # Leave a timestamp & ASCII section header
-        section_header = "========================================\n" + \
-                         str(datetime.utcnow()) + \
-                         "\n========================================\n"
-
-        file.write(section_header)
-
-        while not queue.empty():
-            element = queue.get()
-
-            if isinstance(element, str):
-                file.write(element)
-                continue
-
-            el_func_name = element['func_name']
-            ftype = element['func_type']
-            runtime = element['func_runtime']
-
-            if el_func_name in total_dict:
-                current_func = total_dict[el_func_name]
-
-                if ftype in current_func:
-                    current_func[ftype] += runtime
-                else:
-                    current_func[ftype] = runtime
-
-                if runtime > current_func['longest']:
-                    current_func['longest'] = runtime
-            else:
-                total_dict[el_func_name] = {ftype: runtime, 'longest': runtime}
-
-            if print_all:
-                line_string = 'Function: %s, Type: %s, Runtime: %d \n' % (el_func_name, ftype, runtime)
-                file.write(line_string)
-
-        agg = {'total_time': 0, 'io_time': 0}
-
-        # Dump raw data into separate file to be post-processed for graphs after interpretation
-        summary = {}
-
-        for key in total_dict:
-            current_func = total_dict[key]
-            longest = current_func['longest']
-
-            if key == 'save_files':
-                ftype = 'io'
-                total = current_func['io']
-                current_func['io_avg'] = total / (num_processes * 8)
-                agg['io_time'] += total
-            else:
-                ftype = 'total'
-                total = current_func['total']
-                current_func['total_avg'] = total / num_processes
-                agg['total_time'] += total
-
-            average_per_process = current_func[ftype + '_avg']
-            average_per_image = total / num_images  # This metric doesn't mean much if there's more than 1 process
-            average_per_process_per_image = average_per_process / num_images
-
-            line_string = 'Function: %-25s, ' \
-                          'Type: %-15s, ' \
-                          'Average Per Process: %-10f, ' \
-                          'Average Per Image: %-10f,' \
-                          'Average PPPI: %-10f,' \
-                          'Longest: %-5f \n' \
-                          % (key, ftype,
-                             average_per_process,
-                             average_per_image,
-                             average_per_process_per_image,
-                             longest)
-            file.write(line_string)
-
-            summary[key] = {'type': ftype,
-                            'APP': average_per_process,
-                            'API': average_per_image,
-                            'APPPI': average_per_process_per_image,
-                            'longest': longest}
-
-        pIO = agg['io_time'] / agg['total_time'] * 100
-        pCompute = 100 - pIO
-
-        total_string = 'Percent Time Computing: %f, Percent Time Reading/Writing Files: %f\n' % (pCompute, pIO)
-        file.write(total_string)
-
-        with open('../runtime_metric_obj.json', 'a+') as obj_file:
-            # note: when using shell to access this data, use json.load
-            json.dump(summary, obj_file)
-            obj_file.write('\n')  # so we can parse line by line later
-
-
 # ===================================================================================================================
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
 # ===================================================================================================================
 
 class MPGPU(Process):
+    """Multiprecessing class for OpenPIV processing algorithms
 
-    # Keep all properties that belong to an individual openpiv function within the properties dict
-    # to keep the responsibilities of this class clear (multiprocessing, not keeping track of parameters)
+    Parameters
+    ----------
+    gpuid :
+        GPUs avaiable
+    process_num : int
+        number of processes to create
+    start_index : int
+        index to begin processing at
+    frame_list_a, frame_list_b :
+        list of items to process
+    properties : dict
+        the algorithm properties
+
+    """
+    # Keep all properties that belong to an individual openpiv function within the properties dict to keep the
+    # responsibilities of this class clear (multiprocessing, not keeping track of parameters)
     def __init__(self, gpuid,
                  process_num, start_index,
                  frame_list_a, frame_list_b,
@@ -212,6 +81,20 @@ class MPGPU(Process):
 
 
 def parallelize(num_items, num_processes, list_tuple, properties):
+    """Parallelizes OpenPIV processing algorithms
+
+    Parameters
+    ----------
+    num_items : int
+        number of items to process
+    num_processes : int
+        number of parrallel processes to run
+    list_tuple : list
+        list of the items to process
+    properties : dict
+        properties of the algorithm to parrallelize
+
+    """
     # Properties contains data relevant to a particular openpiv function
 
     partitions = int(num_items / num_processes)
@@ -245,24 +128,30 @@ def parallelize(num_items, num_processes, list_tuple, properties):
 # FUNCTION DEFINITIONS
 # ===============================================================================
 
-def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
-    """
-    Outlier detection
+def outlier_detection(u, v, r_thresh=2.0, mask=None, max_iter=2):
+    """Outlier detection on computed PIV fields
 
-    A single pair of output files is taken by this function and the function
-    goes through each element of the arrays one by one. The median value of
-    all the surrounding elements is taken (not including the element under
-    analysis) and the median difference between the surrounding elements and
-    the median value is calculated. If the difference between the element under
-    analysis and the median value of the surrounding elements is greater than
-    the threshold, then the element is an outlier and assigned NaN. After this
-    is done for the entire array (u and v), the mask is applied to the array
-    and all masked elements are assigned a value of 0. Note that only the
-    outliers are assigned Nan. The arrays are then passed into
-    openpiv.filters.replace_outliers which replaces all the NaN elements to be
-    an average of the surrounding elements
-    """
+    A single pair of output files is taken by this function and the function, goes through each element of the arrays
+    one by one. The median value of all the surrounding elements is taken (not including the element under analysis)
+    and the median difference between the surrounding elements and the median value is calculated. If the difference
+    between the element under analysis and the median value of the surrounding elements is greater than the
+    threshold, then the element is an outlier and assigned NaN. After this is done for the entire array (u and v),
+    the mask is applied to the array and all masked elements are assigned a value of 0. Note that only the outliers
+    are assigned Nan. The arrays are then passed into openpiv.filters.replace_outliers which replaces all the NaN
+    elements to be an average of the surrounding elements
 
+    Parameters
+    ----------
+    u, v : ndarray
+        velocity fields
+    r_thresh : float
+        threshold for validation
+    mask : ndarray
+        mask applied to PIV images
+    max_iter
+        maximum validation iterations
+
+    """
     u_out = np.copy(u).astype(float)
     v_out = np.copy(v).astype(float)
 
@@ -369,7 +258,7 @@ def outlier_detection(u, v, r_thresh, mask=None, max_iter=2):
     return u_out, v_out
 
 
-@measure_runtime_arg(queue=runtime_queue, function_type='total')
+# @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
     """
     This function first loads all the output data from the output directory
@@ -435,54 +324,7 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     return mask_int
 
 
-@measure_runtime_arg(queue=runtime_queue, function_type='total')
-def histogram_adjust(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
-    frame_a = np.load(frame_a_file).astype(np.int32)
-    frame_b = np.load(frame_b_file).astype(np.int32)
-
-    # FOR TESTING ONLY -- REMOVE ONCE WE FIGURE OUT WHAT'S ACCEPTABLE
-    file = open("percentages.txt", "a+")
-
-    pixels_a_old = frame_a.flatten()
-    pixels_b_old = frame_b.flatten()
-    # % Difference between the two images in pixel sum based on the first image
-    p_deviation = np.sum(frame_a.flatten() - frame_b.flatten()) / np.sum(pixels_a_old)
-
-    frame_a = contrast(frame_a, r_low=60, r_high=90)
-    frame_b = contrast(frame_b, r_low=60, r_high=90)
-
-    # % Difference in pixel weight between the old and new image a
-    pixels_a_new = frame_a.flatten()
-    pixels_b_new = frame_b.flatten()
-
-    a_deviation = np.sum(pixels_a_new - pixels_a_old) / np.sum(pixels_a_new)
-    b_deviation = np.sum(pixels_b_new - pixels_b_old) / np.sum(pixels_b_new)
-
-    file_string = "Image number %d: P = %f, A = %f, B = %f" % (start_index, p_deviation, a_deviation, b_deviation)
-    file.write(file_string)
-    file.write('\n')
-
-    folder_prefix = properties['out_dir']
-
-    # Save as .tif for easy error checking (manual check via image check), .npy for further calculations
-    outname_A = os.path.splitext(os.path.basename(frame_a_file))[0]
-    outname_B = os.path.splitext(os.path.basename(frame_b_file))[0]
-
-    tif_path = ''.join([folder_prefix, '_tif/'])
-    npy_path = ''.join([folder_prefix, '_npy/'])
-
-    tif_file_A = ''.join([outname_A, '.tif'])
-    tif_file_B = ''.join([outname_B, '.tif'])
-    npy_file_A = ''.join([outname_A, '.npy'])
-    npy_file_B = ''.join([outname_B, '.npy'])
-
-    save_files(tif_path, tif_file_A, frame_a)
-    save_files(tif_path, tif_file_B, frame_b)
-    save_files(npy_path, npy_file_A, frame_a)
-    save_files(npy_path, npy_file_B, frame_b)
-
-
-@measure_runtime_arg(queue=runtime_queue, function_type='total')
+# @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     # TODO -- Decouple these parameters from the functions below and pass them in
     # ==================================================================
@@ -538,7 +380,7 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 # FILE READ/SAVE UTILITY & MISC
 # ===================================================================================================================
 
-@measure_runtime_arg(queue=runtime_queue, function_type='io')
+# @measure_runtime_arg(queue=runtime_queue, function_type='io')
 def save_files(out_dir, file_name, file_list):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -570,218 +412,3 @@ def tif_to_npy(out_dir, pattern, file_list):
     for i in range(len(file_list)):
         file_read = io.imread(file_list[i])
         np.save(os.path.splitext(file_list[i])[0] + '.npy', file_read)
-
-
-# ===================================================================================================================
-# SCRIPTING FUNCTIONS
-# ===================================================================================================================
-
-
-def process_images(num_images, num_processes):
-    # ===============================================================================
-    # DEFINE PIV & DIRECTORY VARIABLES HERE
-    # ===============================================================================
-
-    dt = 5e-6
-    min_window_size = 16
-    overlap = 0.50
-    coarse_factor = 2
-    nb_iter_max = 3
-    validation_iter = 1
-    x_scale = 7.45e-6  # m/pixel
-    y_scale = 7.41e-6  # m/pixel
-
-    # load the mask so that it is flipped in the correct orientation
-    mask = np.load("../mask.npy")[::-1, :]
-
-    # Some threshold value for replacing spurious vectors
-    r_thresh = 2.0
-
-    # path to input and output directory
-    raw_dir = "/scratch/p/psulliva/chouvinc/marks_piv_data/"
-    im_dir = "/scratch/p/psulliva/chouvinc/danalysis2/im/"
-    out_dir = "/scratch/p/psulliva/chouvinc/danalysis2/output_data"
-    rep_dir = "/scratch/p/psulliva/chouvinc/danalysis2/replaced_data"
-
-    # make output & replacement directory paths according to window size
-    out_dir += str(min_window_size) + "/"
-    rep_dir += str(min_window_size) + "/"
-
-    camera_zero_pattern = "C*_a.npy"
-    camera_one_pattern = "C*_b.npy"
-
-    # change pattern to your filename pattern
-    imA_list = get_input_files(raw_dir, camera_zero_pattern)
-    imB_list = get_input_files(raw_dir, camera_one_pattern)
-
-    # Pre-processing contrast
-    contrast_properties = {"gpu_func": histogram_adjust, "out_dir": im_dir}
-    parallelize(num_images, num_processes, (imA_list, imB_list), contrast_properties)
-
-    # The images are adjusted, now refresh to include them in our lists
-    im_dir += "_npy/"
-    imA_list = sorted(glob.glob(im_dir + camera_zero_pattern))
-    imB_list = sorted(glob.glob(im_dir + camera_one_pattern))
-
-    # Processing images
-    widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
-                        "min_window_size": min_window_size, "overlap": overlap,
-                        "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
-                        "validation_iter": validation_iter, "x_scale": x_scale,
-                        "y_scale": y_scale}
-    parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
-
-    # Post-processing
-    # > Replace outliers
-    # TODO: rename directories to say what data they actually contain (eg. out_dir --> vectors)
-    u_list = get_input_files(out_dir, "u*.npy")
-    v_list = get_input_files(out_dir, "v*.npy")
-
-    # Interpolate the mask onto the PIV grid
-    # if "mask_int" not in locals():
-    #   mask_int = interp_mask(mask, out_dir, exp=2)
-
-    # routliers_properties = {
-    #   "gpu_func": replace_outliers, "out_dir": rep_dir,
-    #  "mask": mask_int, "r_thresh": r_thresh
-    # }
-
-
-# parallelize(num_images, num_processes, (u_list, v_list), routliers_properties)
-
-# aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'runtime_metrics.txt')
-
-
-'''
-Writes to 'runtime_metrics.txt'.
-Measures the runtime by varying number of images processed
-'''
-
-
-def test_with_image_set_length(set_length_list):
-    # Add line to queue to show which test
-    image_set_length_string = '\n\n\nResults from varying image set size: \n'
-    runtime_queue.put(image_set_length_string)
-
-    for el in set_length_list:
-        runtime_queue.put('\n***** Num Images: %-5f *****\n' % el)
-        process_images(el, 20)
-
-
-'''
-Writes to 'runtime_metrics.txt'.
-Measures the runtime by varying number of processes used
-'''
-
-
-def test_with_num_processes(number_processes_list):
-    # Add line to queue to show which test
-    num_processes_string = '\n\n\nResults from varying number of processes: \n'
-    runtime_queue.put(num_processes_string)
-
-    for el in number_processes_list:
-        runtime_queue.put('\n***** Num Processes: %-5f *****\n' % el)
-        process_images(100, el)
-
-
-'''
-Writes to 'runtime_metrics.txt'.
-Varies runtime by window size, takes the c
-'''
-
-
-def test_external_set(im_dir, set_name, file_pattern, window_sizes=(64, 32, 16, 8)):
-    dt = 5e-6
-    overlap = 0.50
-    coarse_factor = 2
-    nb_iter_max = 3
-    validation_iter = 1
-    x_scale = 7.45e-6  # m/pixel
-    y_scale = 7.41e-6  # m/pixel
-
-    out_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/output_data"
-    rep_dir = "/scratch/p/psulliva/chouvinc/maria_PIV_cont/replaced_data"
-
-    imA_list = get_input_files(im_dir, file_pattern[0])
-    imB_list = get_input_files(im_dir, file_pattern[1])
-
-    if file_pattern[0] == file_pattern[1]:
-        # same file pattern, means images are implictly pairs by index
-        del imA_list[1::2]  # delete odd entries
-        del imB_list[0::2]  # delete even entries
-
-    num_images = len(imB_list)
-    num_processes = 10
-
-    for min_window_size in window_sizes:
-        window_size_string = '\n\n\nResults from %s set, with window size %d: \n' % (set_name, min_window_size)
-        runtime_queue.put(window_size_string)
-        # make output & replacement directory paths according to window size
-        out_dir += str(min_window_size) + "/"
-        rep_dir += str(min_window_size) + "/"
-
-        # Processing images
-        widim_properties = {"gpu_func": widim_gpu, "out_dir": out_dir, "dt": dt,
-                            "min_window_size": min_window_size, "overlap": overlap,
-                            "coarse_factor": coarse_factor, "nb_iter_max": nb_iter_max,
-                            "validation_iter": validation_iter, "x_scale": x_scale,
-                            "y_scale": y_scale}
-        parallelize(num_images, num_processes, (imA_list, imB_list), widim_properties)
-        aggregate_runtime_metrics(runtime_queue, num_images, num_processes, 'external_set_metrics.txt')
-
-
-def test_multi_correlation(image_sizes, window_sizes):
-    images = []
-
-    for size in image_sizes:
-        images.append(np.random.randn(size, size).astype(np.float32))
-
-    # Use object here (going to dump into json)
-    t = {}
-
-    for i in range(len(images)):
-        t_row = []
-        for j in range(len(window_sizes)):
-            start = time()
-            for k in range(10):
-                # Doing simple version of multiprocessing, since our class expects files and not np.arrays directly
-                process_list = []
-                p = Process(target=fake_process_images, args=(images, window_sizes, i, j, k % 4))
-                p.start()
-                process_list.append(p)
-
-            # Cleanup
-            try:
-                for process in process_list:
-                    process.join()
-            except KeyboardInterrupt:
-                for process in process_list:
-                    process.terminate()
-                    process.join()
-
-            print((time() - start) / 50)
-            t_row.append((time() - start) / 50)
-
-        t[str(image_sizes[i])] = t_row
-
-    with open('correlation.txt', 'a+') as file:
-        json.dump(t, file)
-
-
-def fake_process_images(images, window_sizes, i, j, gpuid):
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
-
-    # Imports for testing performance (after setting device number)
-    from test_util.gpuFFT import fft_gpu
-    from test_util.IWarrange import IWarrange_gpu
-
-    for x in range(5):
-        win_A, win_B = IWarrange_gpu(images[i], images[i], window_sizes[j], window_sizes[j] / 2)
-        corr_gpu = fft_gpu(win_A, win_B)
-
-
-def file_cleanup(file_names):
-    for s in file_names:
-        # Delete, regardless of extension (in case we have .csv, .xls, etc. in the future)
-        for f in glob.glob(s + '.*'):
-            os.remove(f)
