@@ -13,6 +13,7 @@ import sys
 import scipy.interpolate as interp
 import openpiv.filters
 
+
 # ===================================================================================================================
 # WARNING: File read/close is UNSAFE in multiprocessing applications because multiple
 # threads are accessing &/or writing to the same file. Please remember to use a queue if doing file I/O concurrently
@@ -21,13 +22,12 @@ import openpiv.filters
 # ===================================================================================================================
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
 # ===================================================================================================================
-
 class MPGPU(Process):
     """Multiprecessing class for OpenPIV processing algorithms
 
     Parameters
     ----------
-    gpuid :
+    gpuid : int
         GPUs avaiable
     process_num : int
         number of processes to create
@@ -39,6 +39,7 @@ class MPGPU(Process):
         the algorithm properties
 
     """
+
     # Keep all properties that belong to an individual openpiv function within the properties dict to keep the
     # responsibilities of this class clear (multiprocessing, not keeping track of parameters)
     def __init__(self, gpuid,
@@ -125,9 +126,9 @@ def parallelize(num_items, num_processes, list_tuple, properties):
 
 
 # ===============================================================================
-# FUNCTION DEFINITIONS
+# MULTIPROCESSED FUNCTIONS
 # ===============================================================================
-
+# These functions can be used in parallel
 def outlier_detection(u, v, r_thresh=2.0, mask=None, max_iter=2):
     """Outlier detection on computed PIV fields
 
@@ -258,13 +259,24 @@ def outlier_detection(u, v, r_thresh=2.0, mask=None, max_iter=2):
     return u_out, v_out
 
 
-# @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
-    """
-    This function first loads all the output data from the output directory
-    and applies the mask. All masked elements are assign NaN. A single pair of
-    output files is then passed to the function "outlier_detection" where the
+    """Replaces outliers
+
+    This function first loads all the output data from the output directory and applies the mask. All masked elements
+    are assign NaN. A single pair of output files is then passed to the function "outlier_detection" where the
     outliers are identified and later replaced using openpiv.filters
+
+    Parameters
+    ----------
+    image_pair_num : int
+        the image pair to remove outliers on
+    u_file, v_file : ndarray
+        velocity fields
+    properties : dict
+         properties of the outlier detection
+    gpuid : int
+        gpu to use
+
     """
 
     # TODO: just realized **kwargs is a thing, so need to change to that after.
@@ -288,9 +300,8 @@ def replace_outliers(image_pair_num, u_file, v_file, properties, gpuid=0):
 
 def interp_mask(mask, data_dir, exp=0, plot=False):
     """
-    Interpolate the mask onto the output data. The mask has dimensions 996x1296
-    while the the output data dimensions are much smaller (and depend on the
-    minimum window size chosen)
+    Interpolate the mask onto the output data. The mask has dimensions 996x1296 while the the output data dimensions
+    are much smaller (and depend on the minimum window size chosen)
     """
 
     # load the x and y location arrays from the output directory
@@ -324,7 +335,6 @@ def interp_mask(mask, data_dir, exp=0, plot=False):
     return mask_int
 
 
-# @measure_runtime_arg(queue=runtime_queue, function_type='total')
 def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
     # TODO -- Decouple these parameters from the functions below and pass them in
     # ==================================================================
@@ -380,7 +390,6 @@ def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
 # FILE READ/SAVE UTILITY & MISC
 # ===================================================================================================================
 
-# @measure_runtime_arg(queue=runtime_queue, function_type='io')
 def save_files(out_dir, file_name, file_list):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
