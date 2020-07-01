@@ -42,33 +42,31 @@ class continuous_flow_field:
 def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
                                per_loss_pairs=2, par_diam_mean=15 ** (1.0 / 2), par_diam_std=1.5, par_int_std=0.25,
                                dt=0.1):
-    """Creates the synthetic image with the synthetic image parameters
+    """Creates the synthetic image with the synthetic image parameters.
 
     Parameters
     ----------
     data: None or numpy array
-        If you have data from which to genrate the flow feild the synthetic image.
-        It should be passed on as a numpy array with columns being (X grid position,Y grid position,U velocity at (X,Y) grid point,V velocity at (X,Y) grid point)
-    x_bound,y_bound: list/tuple of floats
+        If you have data from which to genrate the flow feild the synthetic image. It should be passed on as a numpy array with columns being (X grid position,Y grid position,U velocity at (X,Y) grid point,V velocity at (X,Y) grid point)
+    x_bound, y_bound : list/tuple of floats
         The boundries of interest in the synthetic flow field.
-    image_size: list/tuple of ints
+    image_size : list/tuple of ints
         The desired image size in pixels.
-    path: str('None' for no generating data)
+    path : str('None' for no generating data)
         Path to txt file of input data.
-    inter: boolean
-        False if no interpolation of input data is needed.
-        True if there is data you want to interpolate from.
-    den: float
+    inter : boolean
+        False if no interpolation of input data is needed. True if there is data you want to interpolate from.
+    den : float
         Defines the number of particles per image.
-    per_loss_pairs: float
+    per_loss_pairs : float
         Percentage of synthetic pairs loss.
-    par_diam_mean: float
+    par_diam_mean : float
         Mean particle diamter in pixels.
-    par_diam_std: float
+    par_diam_std : float
         Standard deviation of particles diamter in pixels.
-    par_int_std: float
+    par_int_std : float
         Standard deviation of particles intensities.
-    dt: float
+    dt : float
         Synthetic time difference between both images.
 
     Returns
@@ -76,20 +74,20 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
     ground_truth: continuous_flow_field class
         The synthetic ground truth as a continuous_flow_field class.
     cv:
-        Convertion value to convert U,V from pixels/images to meters/seconds.
-    x_1,y_1: numpy array
+        Conversion value to convert U, V from pixels/images to meters/seconds.
+    x_1, y_1 : ndarray
         Position of particles in the first synthetic image.
-    U_par,V_par: numpy array
+    U_par,V_par : ndarray
         Velocity speeds for each particle.
-    par_diam1: numpy array
+    par_diam1 : ndarray
         Particle diamters for the first synthetic image.
-    par_int1: numpy array
+    par_int1 : numpy array
         Particle intensities for the first synthetic image.
-    x_2,y_2: numpy array
+    x_2, y_2 : ndarray
         Position of particles in the second synthetic image.
-    par_diam2: numpy array
-        Particle diamters for the second synthetic image.
-    par_int2: numpy array
+    par_diam2 : ndarray
+        Particle diameters for the second synthetic image.
+    par_int2 : ndarray
         Particle intensities for the second synthetic image.
 
     """
@@ -114,6 +112,10 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
 
     def Move_par(i):
         U_par[i], V_par[i] = cff.get_U_V(x_1[i], y_1[i])
+
+        # move the particles symmetrically
+        x_1[i] = x_1[i] - U_par[i] * dt / 2
+        y_1[i] = y_1[i] - V_par[i] * dt / 2
         x_2[i] = x_1[i] + U_par[i] * dt
         y_2[i] = y_1[i] + V_par[i] * dt
         par_diam2[i] = par_diam1[i]
@@ -156,16 +158,11 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
 
     conversion_value = min((x_bound[1] - x_bound[0]) / image_size[0], (y_bound[1] - y_bound[0]) / image_size[1]) / dt
 
-    return cff, conversion_value, x1, y1, bounded_xy_1[:, 2], bounded_xy_1[:, 3], bounded_xy_1[:, 4], bounded_xy_1[:,
-                                                                                                      5], x2, y2, bounded_xy_2[
-                                                                                                                  :,
-                                                                                                                  2], bounded_xy_2[
-                                                                                                                      :,
-                                                                                                                      3]
+    return cff, conversion_value, x1, y1, bounded_xy_1[:, 2], bounded_xy_1[:, 3], bounded_xy_1[:, 4], bounded_xy_1[:, 5], x2, y2, bounded_xy_2[:, 2], bounded_xy_2[:, 3]
 
 
 def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MAX_INTENSITIES, BIT_DEPTH):
-    """Creates the synthetic image with the synthetic image parameters
+    """Creates the synthetic image with the synthetic image parameters.
     Should be run with the parameters of each image (first,second) separately.
 
     Parameters
@@ -196,8 +193,7 @@ def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MA
     index_to_render = []
 
     for i in range(X.size):
-        if 1 < minRenderedCols[i] and maxRenderedCols[i] < WIDTH and 1 < minRenderedRows[i] and maxRenderedRows[
-            i] < HEIGHT:
+        if 1 < minRenderedCols[i] and maxRenderedCols[i] < WIDTH and 1 < minRenderedRows[i] and maxRenderedRows[i] < HEIGHT:
             index_to_render.append(i)
 
     for i in range(len(index_to_render)):
