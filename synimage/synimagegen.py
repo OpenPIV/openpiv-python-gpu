@@ -26,7 +26,7 @@ import matplotlib.cm as cm
 from PIL import Image
 
 
-class continuous_flow_field:
+class ContinuousFlowField:
     def __init__(self, data):
         """Checks if the continous flow should be created from a set of data points if so it interpolates them for a
         continuous flow field
@@ -41,7 +41,7 @@ class continuous_flow_field:
 
 def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
                                per_loss_pairs=2, par_diam_mean=15 ** (1.0 / 2), par_diam_std=1.5, par_int_std=0.25,
-                               dt=0.1):
+                               dt=0.1, symmetric=False):
     """Creates the synthetic image with the synthetic image parameters.
 
     Parameters
@@ -68,6 +68,8 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
         Standard deviation of particles intensities.
     dt : float
         Synthetic time difference between both images.
+    symmetric: bool
+        whether to symmetrically displace the particles
 
     Returns
     -------
@@ -92,7 +94,7 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
 
     """
     # Data processing
-    cff = continuous_flow_field(data)
+    cff = ContinuousFlowField(data)
 
     # Creating syn particles
     margin = ((x_bound[1] - x_bound[0]) * 0.2, (y_bound[1] - y_bound[0]) * 0.2)
@@ -114,8 +116,9 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
         U_par[i], V_par[i] = cff.get_U_V(x_1[i], y_1[i])
 
         # move the particles symmetrically
-        x_1[i] = x_1[i] - U_par[i] * dt / 2
-        y_1[i] = y_1[i] - V_par[i] * dt / 2
+        if symmetric:
+            x_1[i] = x_1[i] - U_par[i] * dt / 2
+            y_1[i] = y_1[i] - V_par[i] * dt / 2
         x_2[i] = x_1[i] + U_par[i] * dt
         y_2[i] = y_1[i] + V_par[i] * dt
         par_diam2[i] = par_diam1[i]
@@ -158,7 +161,12 @@ def create_synimage_parameters(data, x_bound, y_bound, image_size, den=0.008,
 
     conversion_value = min((x_bound[1] - x_bound[0]) / image_size[0], (y_bound[1] - y_bound[0]) / image_size[1]) / dt
 
-    return cff, conversion_value, x1, y1, bounded_xy_1[:, 2], bounded_xy_1[:, 3], bounded_xy_1[:, 4], bounded_xy_1[:, 5], x2, y2, bounded_xy_2[:, 2], bounded_xy_2[:, 3]
+    return cff, conversion_value, x1, y1, bounded_xy_1[:, 2], bounded_xy_1[:, 3], bounded_xy_1[:, 4], bounded_xy_1[:,
+                                                                                                      5], x2, y2, bounded_xy_2[
+                                                                                                                  :,
+                                                                                                                  2], bounded_xy_2[
+                                                                                                                      :,
+                                                                                                                      3]
 
 
 def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MAX_INTENSITIES, BIT_DEPTH):
@@ -193,7 +201,8 @@ def generate_particle_image(HEIGHT, WIDTH, X, Y, PARTICLE_DIAMETERS, PARTICLE_MA
     index_to_render = []
 
     for i in range(X.size):
-        if 1 < minRenderedCols[i] and maxRenderedCols[i] < WIDTH and 1 < minRenderedRows[i] and maxRenderedRows[i] < HEIGHT:
+        if 1 < minRenderedCols[i] and maxRenderedCols[i] < WIDTH and 1 < minRenderedRows[i] and maxRenderedRows[
+            i] < HEIGHT:
             index_to_render.append(i)
 
     for i in range(len(index_to_render)):
