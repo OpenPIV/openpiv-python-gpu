@@ -42,14 +42,14 @@ class MPGPU(Process):
 
     Parameters
     ----------
-    gpuid : int
+    func : function
         GPU to use
-    process_num : int
-        number of processes to create
-    start_index : int
-        index to begin processing at
-    frame_list_a, frame_list_b :
+    list_a, list_b : tuple
         list of items to process
+    gpuid : int
+        which GPU to use for processing
+    index : int
+        beginning index number of items to process
 
     """
     # Keep all properties that belong to an individual openpiv function within the properties dict to keep the
@@ -70,22 +70,27 @@ class MPGPU(Process):
         # process_time = time()
         # func = self.properties["gpu_func"]
 
+        # set the starting index
+        index = self.index
+
         for i in range(self.num_items):
             # run the function
             if self.list_a is not None:
                 if self.list_b is not None:
                     if self.index is not None:
-                        self.func(self.list_a[i], self.list_b[i], self.index)
+                        self.func(self.list_a[i], self.list_b[i], index)
                     else:
                         self.func(self.list_a[i], self.list_b[i])
                 else:
                     if self.index is not None:
-                        self.func(self.list_a[i], self.index)
+                        self.func(self.list_a[i], index)
                     else:
                         self.func(self.list_a[i])
             else:
                 if self.index is not None:
                     self.func()
+
+            index += 1
 
             # func(self.start_index + i, frame_a, frame_b, self.properties, gpuid=self.gpuid)
 
@@ -121,7 +126,7 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
     ----------
     func : function
         user-defined function to parallelize
-    list_a, list_b
+    list_a, list_b: tuple
         1D lists of the items to process
     num_processes : int
         number of parallel processes to run. This may exceed the number of CPU cores, but will not speed up processing.
