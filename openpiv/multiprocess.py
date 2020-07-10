@@ -43,32 +43,33 @@ class MPGPU(Process):
     Parameters
     ----------
     func : function
-        GPU to use
+        OpenPIV algorithm that is multiprocessed
     items : tuple
-        list of items to process
-    gpuid : int
+        *lists of partitions of items to process. *list is comprised of arguments to be passed to func (e.g. frame_a, frame_b).
+    gpu_id : int
         which GPU to use for processing
     index : int
         beginning index number of items to process
 
     """
-
-    # Keep all properties that belong to an individual openpiv function within the properties dict to keep the
-    # responsibilities of this class clear (multiprocessing, not keeping track of parameters)
-    def __init__(self, func, *items, gpuid=None, index=None):
+    def __init__(self, func, items, gpu_id, index=None, parameters=None):
         Process.__init__(self)
         self.func = func
-        self.gpuid = gpuid
+        self.gpu_id = gpu_id
         self.items = items
         self.index = index
         self.num_items = len(items[0])
+        self.parameters = parameters
 
-        if gpuid is not None:
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
+        if gpu_id is not None:
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     def run(self):
         # process_time = time()
         # func = self.properties["gpu_func"]
+
+        # this rearranges the items to pick out the corresponding *args
+        items = [[item[i] for item in self.items] for i in range(self.num_items)]
 
         # set the starting index
         index = self.index
@@ -76,10 +77,11 @@ class MPGPU(Process):
         for i in range(self.num_items):
             # run the function
             if self.items is not None:
+
                 if self.index is not None:
-                    self.func(*self.items, index)
+                    self.func(*items[i], index=index, **self.parameters)
                 else:
-                    self.func(*self.items)
+                    self.func(*items[i], **self.parameters)
             else:
                 if self.index is not None:
                     self.func()
@@ -109,28 +111,35 @@ class MPGPU(Process):
     #     return np.load(image_a).astype(np.int32), np.load(image_b).astype(np.int32)
 
 
-def parallelize(func, *items, num_processes=None, num_gpus=None, index=None):
+def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **parameters):
     """Parallelizes OpenPIV algorithms
 
     This helper function spawns instances of the class MGPU to multiprocess up to two sets of corresponding items. It
-    assumes that each physical GPU will handle one process. The arguments for func are optional and must only be
-    list_a, list_b and index.
+    assumes that each physical GPU will handle one process. The arguments for func must be *args followed by **kargs.
+    If index is true, then MGPU will pass the index number of the items as a keyword argument.
 
     Parameters
     ----------
     func : function
         user-defined function to parallelize
     items: tuple
-        1D lists of the items to process
+        *list of the items to process. *list is comprised of arguments to be passed to func (e.g. frame_a, frame_b).
     num_processes : int
         number of parallel processes to run. This may exceed the number of CPU cores, but will not speed up processing.
     num_gpus : int
         number of physical GPUs to use for multiprocessing. This will cause errors if the larger than number of GPUs.
-    index : index
+    index : bool
         whether to pass the user-defined function an index of the items processed
+    parameters : dict
+        other parameters to pass to function
 
     """
-    # check that the lists provided are the same dimension
+    process_list = []
+    gpu_id = None
+    num_args = len(items)
+    num_items = len(items[0])
+
+    # check that each of the lists of input items provided are the same dimension
     if items is not None:
         assert all([len(item_a) == len(item_b) for item_a in items for item_b in items]), \
             'Input item lists are different lengths. len(items) = {}'.format([len(item) for item in items])
@@ -141,7 +150,7 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None):
 
     # size of each partition is computed
     if items[0] is not None:
-        partition_size = ceil(len(items[0]) / num_processes)
+        partition_size = ceil(num_items / num_processes)
     else:
         partition_size = None
 
@@ -151,40 +160,37 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None):
     print('Multiprocessing: Number of physical GPUs to use =', num_gpus, '. Number of GPUs available =', 'unknown')
     print('Multiprocessing: Size of each partition =', partition_size)
 
-    process_list = []
-    gpuid = None
-
     # loop through each partition to spawn processes
     i = 0  # number of processes spawned
     while True:
-        # If we go over array bounds, stop spawning new processes
-        start_index = i * partition_size
+        # determine which GPU to use, if any
+        if num_gpus is not None:
+            gpu_id = i % num_gpus
 
-        # The items to process are divided into partitions
+        # The partition is selected
+        start_index = i * partition_size
         if items is not None:
-            sublist = [[]] * len(items)
-            for i in range(len(items)):
-                sublist[i] = items[i][start_index: start_index + partition_size]
+            # create a list of partitions for each of the input items
+            sublist = [[]] * num_args
+            for j in range(num_args):
+                sublist[j] = items[j][start_index:start_index + partition_size]
         else:
             sublist = None
 
-        # determine which GPU to use, if any
-        if num_gpus is not None:
-            gpuid = i % num_gpus
-
         # spawn the process
         if index is not None:
-            process = MPGPU(func, *sublist, gpuid=gpuid, index=start_index + index)
+            process = MPGPU(func, sublist, gpu_id, index=start_index, parameters=parameters)
         else:
-            process = MPGPU(func, *sublist, gpuid=gpuid)
+            process = MPGPU(func, sublist, gpu_id, parameters=parameters)
         process.start()
         process_list.append(process)
 
+        # update the process number
         i += 1
 
         # check to see if process stops
         if items is not None:
-            if i * partition_size >= len(items[0]):
+            if i * partition_size >= num_items:
                 break
         else:
             if i == num_processes:
