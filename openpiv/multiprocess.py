@@ -11,7 +11,6 @@ In the future the obsolete code fragments will be deleted. The number of physica
 that the user won't need to input it.
 
 """
-
 from multiprocessing import Process, Manager, cpu_count
 import numpy as np
 from math import ceil, floor
@@ -25,6 +24,7 @@ import glob
 import sys
 import scipy.interpolate as interp
 import openpiv.filters
+
 
 # ===================================================================================================================
 # WARNING: File read/close is UNSAFE in multiprocessing applications because multiple
@@ -44,7 +44,7 @@ class MPGPU(Process):
     ----------
     func : function
         GPU to use
-    list_a, list_b : tuple
+    items : tuple
         list of items to process
     gpuid : int
         which GPU to use for processing
@@ -52,16 +52,16 @@ class MPGPU(Process):
         beginning index number of items to process
 
     """
+
     # Keep all properties that belong to an individual openpiv function within the properties dict to keep the
     # responsibilities of this class clear (multiprocessing, not keeping track of parameters)
-    def __init__(self, func, list_a, list_b, gpuid, index):
+    def __init__(self, func, *items, gpuid=None, index=None):
         Process.__init__(self)
         self.func = func
         self.gpuid = gpuid
-        self.list_a = list_a
-        self.list_b = list_b
+        self.items = items
         self.index = index
-        self.num_items = len(list_a)
+        self.num_items = len(items[0])
 
         if gpuid is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = str(gpuid)
@@ -75,17 +75,11 @@ class MPGPU(Process):
 
         for i in range(self.num_items):
             # run the function
-            if self.list_a is not None:
-                if self.list_b is not None:
-                    if self.index is not None:
-                        self.func(self.list_a[i], self.list_b[i], index)
-                    else:
-                        self.func(self.list_a[i], self.list_b[i])
+            if self.items is not None:
+                if self.index is not None:
+                    self.func(*self.items, index)
                 else:
-                    if self.index is not None:
-                        self.func(self.list_a[i], index)
-                    else:
-                        self.func(self.list_a[i])
+                    self.func(*self.items)
             else:
                 if self.index is not None:
                     self.func()
@@ -115,7 +109,7 @@ class MPGPU(Process):
     #     return np.load(image_a).astype(np.int32), np.load(image_b).astype(np.int32)
 
 
-def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=None, index=False):
+def parallelize(func, *items, num_processes=None, num_gpus=None, index=None):
     """Parallelizes OpenPIV algorithms
 
     This helper function spawns instances of the class MGPU to multiprocess up to two sets of corresponding items. It
@@ -126,33 +120,35 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
     ----------
     func : function
         user-defined function to parallelize
-    list_a, list_b: tuple
+    items: tuple
         1D lists of the items to process
     num_processes : int
         number of parallel processes to run. This may exceed the number of CPU cores, but will not speed up processing.
     num_gpus : int
         number of physical GPUs to use for multiprocessing. This will cause errors if the larger than number of GPUs.
-    index : bool
+    index : index
         whether to pass the user-defined function an index of the items processed
 
     """
     # check that the lists provided are the same dimension
-    if list_b is not None:
-        assert len(list_a) == len(list_b), 'List A and B are different sizes'
+    if items is not None:
+        assert all([len(item_a) == len(item_b) for item_a in items for item_b in items]), \
+            'Input item lists are different lengths. len(items) = {}'.format([len(item) for item in items])
 
     # default to a number of cores equal to 37.5% or fewer of the available CPU cores (75% of physical cores)
     if num_processes is None:
         num_processes = max(floor(cpu_count() * 0.75), 1)  # minimum 1 in case of low-spec machine
 
     # size of each partition is computed
-    if list_a is not None:
-        partition_size = ceil(len(list_a) / num_processes)
+    if items[0] is not None:
+        partition_size = ceil(len(items[0]) / num_processes)
     else:
         partition_size = None
 
     # print information about the multiprocessing
-    print('Multiprocessing: Number of processes requested =', num_processes, '. Number of CPU cores available =', cpu_count())
-    print('Multiprocessing: Number of physical GPUs to use =', num_gpus, '. Number of GPUS available =', 'unknown')
+    print('Multiprocessing: Number of processes requested =', num_processes,
+          '. Number of CPU cores available =', cpu_count())
+    print('Multiprocessing: Number of physical GPUs to use =', num_gpus, '. Number of GPUs available =', 'unknown')
     print('Multiprocessing: Size of each partition =', partition_size)
 
     process_list = []
@@ -165,33 +161,30 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
         start_index = i * partition_size
 
         # The items to process are divided into partitions
-        if list_a is not None:
-            sublist_a = list_a[start_index: start_index + partition_size]
+        if items is not None:
+            sublist = [[]] * len(items)
+            for i in range(len(items)):
+                sublist[i] = items[i][start_index: start_index + partition_size]
         else:
-            sublist_a = None
-
-        if list_b is not None:
-            sublist_b = list_b[start_index: start_index + partition_size]
-        else:
-            sublist_b = None
+            sublist = None
 
         # determine which GPU to use, if any
         if num_gpus is not None:
             gpuid = i % num_gpus
 
         # spawn the process
-        if index:
-            process = MPGPU(func, sublist_a, sublist_b, gpuid, start_index)
+        if index is not None:
+            process = MPGPU(func, *sublist, gpuid=gpuid, index=start_index + index)
         else:
-            process = MPGPU(func, sublist_b, sublist_b, gpuid, None)
+            process = MPGPU(func, *sublist, gpuid=gpuid)
         process.start()
         process_list.append(process)
 
         i += 1
 
         # check to see if process stops
-        if list_a is not None:
-            if i * partition_size >= len(list_a):
+        if items is not None:
+            if i * partition_size >= len(items[0]):
                 break
         else:
             if i == num_processes:
@@ -209,7 +202,6 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
     #     for process in process_list:
     #         process.terminate()
     #         process.join()
-
 
 # ===============================================================================
 # MULTIPROCESSED FUNCTIONS
@@ -364,7 +356,6 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
 #
 #     """
 #
-#     # TODO: just realized **kwargs is a thing, so need to change to that after.
 #     output_dir = properties["out_dir"]
 #     mask = properties["mask"]
 #     r_thresh = properties["r_thresh"]
@@ -421,7 +412,6 @@ def parallelize(func, list_a=None, list_b=None, num_processes=None, num_gpus=Non
 #
 #
 # def widim_gpu(start_index, frame_a_file, frame_b_file, properties, gpuid=0):
-#     # TODO -- Decouple these parameters from the functions below and pass them in
 #     # ==================================================================
 #     # PARAMETERS FOR OPENPIV
 #     # ==================================================================
