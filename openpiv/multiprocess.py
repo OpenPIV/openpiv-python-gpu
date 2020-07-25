@@ -63,6 +63,7 @@ class MPGPU(Process):
 
         if gpu_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+            # os.environ['CUDA_DEVICE'] = str(gpu_id)
 
     def run(self):
         # process_time = time()
