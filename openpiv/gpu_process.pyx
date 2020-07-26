@@ -7,19 +7,15 @@ import pycuda.driver as drv
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
 
-import skcuda.cublas as cu_cublas
+# import skcuda.cublas as cu_cublas
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import rfft2, irfft2, fftshift
-# from math import log
-# from scipy.signal import convolve
 import time
-# import openpiv
 import warnings
-# from progressbar import *
 
 cimport numpy as np
 
@@ -953,16 +949,15 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     if nb_validation_iter==0:
         validation_method='None'
 
-    cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
+    cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
 
     # define the main array f that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max-1], n_col[nb_iter_max-1], 13], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=4] F_check = np.zeros([nb_iter_max, n_row[nb_iter_max-1], n_col[nb_iter_max-1], 13], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f_check = np.zeros([nb_iter_max, n_row[nb_iter_max-1], n_col[nb_iter_max-1], 13], dtype=DTYPEf)
 
     # define mask - bool arrays don't exist in cython so we go to lower level with cast
     # you can access mask with (<object>mask)[I,J]
-    cdef np.ndarray[np.uint8_t, ndim=2, cast=True] mask = np.empty([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)  # og
-    # cdef np.ndarray[np.uint8, ndim=2, cast=True] mask = np.empty([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)
+    cdef np.ndarray[np.uint8_t, ndim=2, cast=True] mask = np.empty([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)
 
     # define u,v, x,y fields (only used as outputs of this program)
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
@@ -1124,7 +1119,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
             # delete old correlation function
             del(c, d_f)
-            # end(startTime)
+            # end(start_time)
             return x, y, u, v, (<object>mask)
         #############################################################################
 
@@ -2224,37 +2219,37 @@ def gpu_find_neighbours(n_row, n_col):
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
         int row_zero = (w_idx >= Ncol);
-        int row_max = (w_idx < Ncol*(Nrow-1));
+        int row_max = (w_idx < Ncol * (Nrow - 1));
         int col_zero = (w_idx % Ncol != 0);
-        int col_max = (w_idx % Ncol != Ncol-1);
+        int col_max = (w_idx % Ncol != Ncol - 1);
 
         // Top Row
-        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * row_zero;
-        neighbours_present[w_idx*9 + 1] = neighbours_present[w_idx*9 + 1] * row_zero;
-        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * row_zero;
+        neighbours_present[w_idx * 9 + 0] = neighbours_present[w_idx * 9 + 0] * row_zero;
+        neighbours_present[w_idx * 9 + 1] = neighbours_present[w_idx * 9 + 1] * row_zero;
+        neighbours_present[w_idx * 9 + 2] = neighbours_present[w_idx * 9 + 2] * row_zero;
 
         __syncthreads();
 
         // Bottom row
-        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * row_max;
-        neighbours_present[w_idx*9 + 7] = neighbours_present[w_idx*9 + 7] * row_max;
-        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * row_max;
+        neighbours_present[w_idx * 9 + 6] = neighbours_present[w_idx * 9 + 6] * row_max;
+        neighbours_present[w_idx * 9 + 7] = neighbours_present[w_idx * 9 + 7] * row_max;
+        neighbours_present[w_idx * 9 + 8] = neighbours_present[w_idx * 9 + 8] * row_max;
 
         __syncthreads();
 
         // Left column
-        neighbours_present[w_idx*9 + 0] = neighbours_present[w_idx*9 + 0] * col_zero;
-        neighbours_present[w_idx*9 + 3] = neighbours_present[w_idx*9 + 3] * col_zero;
-        neighbours_present[w_idx*9 + 6] = neighbours_present[w_idx*9 + 6] * col_zero;
+        neighbours_present[w_idx * 9 + 0] = neighbours_present[w_idx * 9 + 0] * col_zero;
+        neighbours_present[w_idx * 9 + 3] = neighbours_present[w_idx * 9 + 3] * col_zero;
+        neighbours_present[w_idx * 9 + 6] = neighbours_present[w_idx * 9 + 6] * col_zero;
 
         __syncthreads();
 
         // right column
-        neighbours_present[w_idx*9 + 2] = neighbours_present[w_idx*9 + 2] * col_max;
-        neighbours_present[w_idx*9 + 5] = neighbours_present[w_idx*9 + 5] * col_max;
-        neighbours_present[w_idx*9 + 8] = neighbours_present[w_idx*9 + 8] * col_max;
+        neighbours_present[w_idx * 9 + 2] = neighbours_present[w_idx * 9 + 2] * col_max;
+        neighbours_present[w_idx * 9 + 5] = neighbours_present[w_idx * 9 + 5] * col_max;
+        neighbours_present[w_idx * 9 + 8] = neighbours_present[w_idx * 9 + 8] * col_max;
 
-        // Set center to zero, can't be a neighbour for yourself
+        // Set center to zero--can't be a neighbour for yourself
         neighbours_present[w_idx*9 + 4] = 0;
     }
     """)
@@ -2283,9 +2278,6 @@ def gpu_find_neighbours(n_row, n_col):
 def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     """An array that stores the values of the velocity of the neighbours around it.
 
-    WARNING: this function uses constant memory on the GPU, which there is only a limited amount of.
-             Do not do this for field that
-
     Parameters
     ----------
     d_u, d_v : 2D GPU array - float32
@@ -2297,7 +2289,7 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
 
     Returns
     -------
-    neighbours : 5D array [Nrow, Ncol, 2, 3 , 3]
+    neighbours : 5D array [n_row, n_col, 2, 3, 3]
         stores the values of u and v of the neighbours of a point
 
     """
@@ -2310,26 +2302,27 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         // Nrow, Ncol - number of rows and columns
 
         // references each IW
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        if(w_idx >= Nrow*Ncol){return;}
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int max_idx = Nrow * Ncol;
+        
+        if(w_idx >= max_idx){return;}
 
         // get velocities
-        neighbours[w_idx*18 + 0] = u[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];
-        neighbours[w_idx*18 + 1] = u[w_idx - Ncol] * neighbours_present[w_idx*9 + 1];
-        neighbours[w_idx*18 + 2] = u[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        neighbours[w_idx * 18 + 0] = u[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
+        neighbours[w_idx * 18 + 1] = u[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
+        neighbours[w_idx * 18 + 2] = u[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
 
         __syncthreads();
 
-        neighbours[w_idx*18 + 3] = u[w_idx - 1] * neighbours_present[w_idx*9 + 3];
-        neighbours[w_idx*18 + 4] = 0.0;
-        neighbours[w_idx*18 + 5] = u[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        neighbours[w_idx * 18 + 3] = u[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
+        neighbours[w_idx * 18 + 4] = 0.0;
+        neighbours[w_idx * 18 + 5] = u[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
 
         __syncthreads();
 
-        neighbours[w_idx*18 + 6] = u[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
-        neighbours[w_idx*18 + 7] = u[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
-        neighbours[w_idx*18 + 8] = u[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];
+        neighbours[w_idx * 18 + 6] = u[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
+        neighbours[w_idx * 18 + 7] = u[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
+        neighbours[w_idx * 18 + 8] = u[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
 
         __syncthreads();
     }
@@ -2337,30 +2330,32 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     __global__ void get_v_neighbours(float *neighbours, float *neighbours_present, float *v, int Nrow, int Ncol)
     {
         // neighbours - u and v values around each point
-        //neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+        // neighbours_present - 1 if there is a neighbour, 0 if no neighbour
         // u, v - u and v velocities
         // Nrow, Ncol - number of rows and columns
 
         // references each IW
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        if(w_idx >= Nrow*Ncol){return;}
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int max_idx = Nrow * Ncol;
+        
+        if(w_idx >= max_idx){return;}
 
         // get velocities
-        neighbours[w_idx*18 + 9] = v[w_idx - Ncol - 1] * neighbours_present[w_idx*9 + 0];
-        neighbours[w_idx*18 + 10] = v[w_idx - Ncol]* neighbours_present[w_idx*9 + 1];
-        neighbours[w_idx*18 + 11] = v[w_idx - Ncol + 1] * neighbours_present[w_idx*9 + 2];
+        neighbours[w_idx * 18 + 9] = v[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
+        neighbours[w_idx * 18 + 10] = v[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
+        neighbours[w_idx * 18 + 11] = v[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
 
         __syncthreads();
 
-        neighbours[w_idx*18 + 12] = v[w_idx - 1] * neighbours_present[w_idx*9 + 3];
-        neighbours[w_idx*18 + 13] = 0.0;
-        neighbours[w_idx*18 + 14] = v[w_idx + 1] * neighbours_present[w_idx*9 + 5];
+        neighbours[w_idx * 18 + 12] = v[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
+        neighbours[w_idx * 18 + 13] = 0.0;
+        neighbours[w_idx * 18 + 14] = v[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
 
         __syncthreads();
-        neighbours[w_idx*18 + 15] =  v[w_idx + Ncol - 1] * neighbours_present[w_idx*9 + 6];
-        neighbours[w_idx*18 + 16] = v[w_idx + Ncol] * neighbours_present[w_idx*9 + 7];
-        neighbours[w_idx*18 + 17] = v[w_idx + Ncol + 1] * neighbours_present[w_idx*9 + 8];
+        
+        neighbours[w_idx * 18 + 15] = v[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
+        neighbours[w_idx * 18 + 16] = v[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
+        neighbours[w_idx * 18 + 17] = v[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
 
         __syncthreads();
     }
@@ -2373,42 +2368,36 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     # Get GPU grid dimensions and function
     block_size = 16
     x_blocks = int(n_col * n_row // block_size + 1)
+    print('x_blocks {}'.format(x_blocks))
     get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
     get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
 
     # find neighbours
-    d_neighbours_present = gpu_find_neighbours(n_row, n_col).astype(np.float32)
-    neighbours = np.zeros([n_row, n_col, 2, 3, 3])
+    d_neighbours_present = gpu_find_neighbours(n_row, n_col)#.astype(np.float32)  # og
+    neighbours = np.zeros((n_row, n_col, 2, 3, 3))
     neighbours = neighbours.astype(np.float32)
 
-    # assert statements for data
-    assert neighbours.dtype == np.float32, "Wrong data type for neighbours"
-    assert type(n_row) == np.int32, "Wrong data type for Nrow"
-    assert type(n_col) == np.int32, "Wrong data type for Ncol"
+    # # assert statements for data
+    # assert neighbours.dtype == np.float32, "Wrong data type for neighbours"
+    # assert type(n_row) == np.int32, "Wrong data type for Nrow"
+    # assert type(n_col) == np.int32, "Wrong data type for Ncol"
 
     # send data to the gpu
     d_neighbours = gpuarray.to_gpu(neighbours)
-    # d_neighbours_1 = gpuarray.to_gpu(neighbours.copy())
-
-    a_gpu = gpuarray.to_gpu(np.random.randn(4,4).astype(np.float32))
-    a = a_gpu.get()
 
     # Get u and v data
     get_u_neighbours(d_neighbours, d_neighbours_present, d_u, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
     get_v_neighbours(d_neighbours, d_neighbours_present, d_v, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # # return data
-    # print('DEBUG HERE')
-    print(d_neighbours.mem_size)
-    a_gpu = gpuarray.to_gpu(np.random.randn(4,4).astype(np.float32))
-    a = a_gpu.get()
     neighbours = d_neighbours.get()
-    # print('DEBUG PASSED')
     #
     # #TODO Figure out what is going on here.
     # # With vector fields over size 40000, nans show up in neighbours, but only where zeros should be.
     # # I have no idea why this is, but this works...
-    # a = np.isnan(neighbours)
+    a = np.isnan(neighbours)
+    if a.any():
+        print('NANs detected in neighbours')
     # if np.sum(a) > 0:
     #     neighbours[a] = 0.0
     #
@@ -2483,8 +2472,8 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     block_size = 16
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    assert u_mean.dtype == np.float32, "dtype for u_mean is wrong. Should be np.float32"
-    assert v_mean.dtype == np.float32, "dtype for v_mean is wrong. Should be np.float32"
+    # assert u_mean.dtype == np.float32, "dtype for u_mean is wrong. Should be np.float32"
+    # assert v_mean.dtype == np.float32, "dtype for v_mean is wrong. Should be np.float32"
 
     #send data to gpu
     d_u_mean = gpuarray.to_gpu(u_mean)
@@ -2493,8 +2482,8 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     # get and launch kernel
     u_mean_vel = mod_mean_vel.get_function("u_mean_vel")
     v_mean_vel = mod_mean_vel.get_function("v_mean_vel")
-    u_mean_vel(d_u_mean, d_neighbours, d_neighbours_present, n_row, n_col, block = (block_size, 1, 1), grid = (x_blocks, 1))
-    v_mean_vel(d_v_mean, d_neighbours, d_neighbours_present, n_row, n_col, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    u_mean_vel(d_u_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    v_mean_vel(d_v_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return d_u_mean, d_v_mean, d_neighbours, d_neighbours_present
 
@@ -2504,16 +2493,16 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
 
     Parameters
     ----------
-    d_neighbours: 5D gpuarray - float32
+    d_neighbours : 5D gpuarray - float32
         all the neighbouring velocities of every point
-    d_neighbours_present: 4D gpuarray - float32
+    d_neighbours_present : 4D gpuarray - float32
         indicates if a neighbour is present
     n_row, n_col : int
         number of rows and columns of the velocity field
 
     Returns
     -------
-    u_mean, v_mean : 2D gpuarray - float32
+    d_u_rms, d_v_rms : 2D gpuarray - float32
         mean velocities at each point
     d_neighbours, d_neighbours_present : gpuarray
         need to return the gpu array handle or else it gets lost
@@ -2580,8 +2569,8 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
     # get and launch kernel
     mod_u_rms = mod_rms.get_function("u_rms_k")
     mod_v_rms = mod_rms.get_function("v_rms_k")
-    mod_u_rms(d_u_rms, d_neighbours, d_neighbours_present, n_row, n_col, block = (block_size, 1, 1), grid = (x_blocks, 1))
-    mod_v_rms(d_v_rms, d_neighbours, d_neighbours_present, n_row, n_col, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    mod_u_rms(d_u_rms, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_rms(d_v_rms, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return d_u_rms, d_v_rms, d_neighbours, d_neighbours_present
 
@@ -2604,6 +2593,7 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
         divergence at each point
 
     """
+    #TODO check that the min/max functions in the SourceModule below do what is expected
     mod_div = SourceModule("""
     __global__ void div_k(float *div, float *u, float *v, float w, int Nrow, int Ncol)
     {
@@ -2613,13 +2603,14 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
         // Nrow, Ncol: number of rows and columns
 
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int max_idx = Nrow * Ncol;
 
         // Avoid the boundary
-        if(w_idx >= (Nrow-1)*Ncol){return;}
-        if(w_idx%Ncol == Ncol-1){return;}
+        if(w_idx >= (Nrow - 1) * Ncol){return;}
+        if(w_idx%Ncol == Ncol - 1){return;}
 
-        float u1 = u[w_idx + Ncol];
-        float v1 = v[w_idx + 1];
+        float u1 = u[min(w_idx + Ncol, max_idx)];
+        float v1 = v[min(w_idx + 1, max_idx)];
 
         __syncthreads();
 
@@ -2636,10 +2627,10 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
         // only calculate on the boundary
-        if(w_idx < (Nrow-1)*Ncol && w_idx%Ncol != Ncol-1){return;}
+        if(w_idx < (Nrow - 1) * Ncol && w_idx%Ncol != Ncol - 1){return;}
 
-        float u1 = u[w_idx - Ncol];
-        float v1 = v[w_idx - 1];
+        float u1 = u[max(w_idx - Ncol, 0)];
+        float v1 = v[max(w_idx - 1, 0)];
 
         __syncthreads();
 
