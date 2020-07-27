@@ -763,22 +763,22 @@ def get_field_shape(image_size, window_size, overlap):
     return ((image_size[0] - window_size)//(window_size-overlap)+1,
              (image_size[1] - window_size)//(window_size-overlap)+1)
 
-
+# TODO make mask functional
 ##################################################################
 def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
           np.ndarray[DTYPEi_t, ndim=2] frame_b,
           np.ndarray[DTYPEi_t, ndim=2] mark,
-          int min_window_size,
-          float overlap_ratio,
-          int nb_refinement_iter,
-          float dt,
-          str validation_method='mean_velocity',
-          int div_validation=1,
+          int nb_iter_max=2,
+          int nb_refinement_iter=1,
+          int min_window_size=16,
+          float overlap_ratio=0.5,
+          float dt=1,
           int trust_1st_iter=True,
           int nb_validation_iter=1,
+          str validation_method='mean_velocity',
+          int div_validation=True,
           float tolerance=1.5,
           float div_tolerance=0.1,
-          int nb_iter_max=3,
           str subpixel_method='gaussian',
           str sig2noise_method='peak2peak',
           int width=2,
@@ -1065,8 +1065,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
         if K==0 and trust_1st_iter:#1st iteration can generally be trusted if it follows the 1/4 rule
             print("No validation: trusting 1st iteration")
-        else:
-            print("Starting validation...")
+        # else:
+        #     print("Starting validation...")
 
             # init mask to False
             for I in range(n_row[nb_iter_max-1]):
@@ -1085,6 +1085,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 d_f, validation_list[0:n_row[K], 0:n_col[K]], d_u_mean[K, 0:n_row[K], 0:n_col[K]], d_v_mean[K, 0:n_row[K], 0:n_col[K]] = gpu_validation(d_f, K, sig2noise[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], w[K], 1.5, tolerance, div_tolerance)
 
                 # do the validation
+                print('Validating {} out of {} vectors.'.format(n_row[-1] * n_col[-1] - np.sum(validation_list), n_row[K] * n_col[K]))
                 d_f = initiate_validation(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
 
             print("...[DONE]")
@@ -1144,391 +1145,6 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
         print("...[DONE] -----> going to iteration ", K+1)
         print(" ")
-
-
-##################################################################
-# def widim_windef(np.ndarray[DTYPEi_t, ndim=2] frame_a,
-#           np.ndarray[DTYPEi_t, ndim=2] frame_b,
-#           np.ndarray[DTYPEi_t, ndim=2] mark,
-#           int min_window_size,
-#           float overlap_ratio,
-#           int coarse_factor,
-#           float dt,
-#           str validation_method='mean_velocity',
-#           int div_validation=1,
-#           int trust_1st_iter=1,
-#           int validation_iter=1,
-#           float tolerance=1.5,
-#           float div_tolerance=0.1,
-#           int nb_iter_max=3,
-#           str subpixel_method='gaussian',
-#           str sig2noise_method='peak2peak',
-#           int width=2,
-#           nfftx=None,
-#           nffty=None):
-#     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
-#
-#     This is an iterative  method to cope with  the lost of pairs due to particles
-#     motion and get rid of the limitation in velocity range due to the window size.
-#     The possibility of window size coarsening is implemented.
-#     Example : minimum window size of 16*16 pixels and coarse_level of 2 gives a 1st
-#     iteration with a window size of 64*64 pixels, then 32*32 then 16*16.
-#         ----Algorithm : At each step, a predictor of the displacement (dp) is applied based on the results of the previous iteration.
-#                         Each window is correlated with a shifted window.
-#                         The displacement obtained from this correlation is the residual displacement (dc)
-#                         The new displacement (d) is obtained with dx = dpx + dcx and dy = dpy + dcy
-#                         The velocity field is validated and wrong vectors are replaced by mean value of surrounding vectors from the previous iteration (or by bilinear interpolation if the window size of previous iteration was different)
-#                         The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
-#                             dpx_k+1 = dx_k
-#
-#     Reference:
-#         F. Scarano & M. L. Riethmuller, Iterative multigrid approach in PIV image processing with discrete window offset, Experiments in Fluids 26 (1999) 513-523
-#
-#     Parameters
-#     ----------
-#     frame_a : 2d np.ndarray, dtype=np.float32
-#         an two dimensions array of integers containing grey levels of
-#         the first frame.
-#     frame_b : 2d np.ndarray, dtype=np.float32
-#         an two dimensions array of integers containing grey levels of
-#         the second frame.
-#     mark : 2d np.ndarray, dtype=np.int32
-#         an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
-#     min_window_size : int
-#         the size of the minimum (final) (square) interrogation window.
-#     overlap_ratio : float
-#         the ratio of overlap between two windows (between 0 and 1).
-#     coarse_factor : int
-#         how many times the window size refining processes happens.
-#     dt : float
-#         the time delay separating the two frames.
-#     validation_method : string
-#         the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
-#     trust_1st_iter : int = 0 or 1
-#         0 if the first iteration need to be validated. With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
-#     validation_iter : int
-#         number of iterations per validation cycle.
-#     div_validation : int
-#         Boolean - if 1 then the data wil be validated by calculating the divergence. If 0 then it will not be done.
-#     tolerance : float
-#         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-#     div_tolerance : float
-#         Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptable.
-#     nb_iter_max : int
-#         global number of iterations.
-#     subpixel_method : string
-#          one of the following methods to estimate subpixel location of the peak:
-#          'centroid' [replaces default if correlation map is negative],
-#          'gaussian' [default if correlation map is positive],
-#          'parabolic'.
-#     sig2noise_method : string
-#         defines the method of signal-to-noise-ratio measure,
-#         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-#     width : int
-#         the half size of the region around the first
-#         correlation peak to ignore for finding the second
-#         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-#     nfftx : int
-#         the size of the 2D FFT in x-direction,
-#         [default: 2 x windows_a.shape[0] is recommended]
-#     nffty : int
-#         the size of the 2D FFT in y-direction,
-#         [default: 2 x windows_a.shape[1] is recommended]
-#
-#     Returns
-#     -------
-#     x : 2d np.ndarray
-#         a two dimensional array containing the x-axis component of the interpolations locations.
-#     y : 2d np.ndarray
-#         a two dimensional array containing the y-axis component of the interpolations locations.
-#     u : 2d np.ndarray
-#         a two dimensional array containing the u velocity component,
-#         in pixels/seconds.
-#     v : 2d np.ndarray
-#         a two dimensional array containing the v velocity component,
-#         in pixels/seconds.
-#     mask : 2d np.ndarray
-#         a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
-#
-#     Example
-#     -------
-#     x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
-#
-#     --------------------------------------
-#     Method of implementation : to improve the speed of the programm,
-#     all data have been placed in the same huge 4-dimensions 'F' array.
-#     (this prevent the definition of a new array for each iteration)
-#     However, during the coarsening process a large part of the array is not used.
-#     Structure of array F:
-#     --The 1st index is the main iteration (K)   --> length is nb_iter_max
-#         -- 2nd index (I) is row (of the map of the interpolations locations of iteration K) --> length (effectively used) is Nrow[K]
-#             --3rd index (J) is column  --> length (effectively used) is Ncol[K]
-#                 --4th index represent the type of data stored at this point:
-#                             | 0 --> x         |
-#                             | 1 --> y         |
-#                             | 2 --> xb        |
-#                             | 3 --> yb        |
-#                             | 4 --> dx        |
-#                             | 5 --> dy        |
-#                             | 6 --> dpx       |
-#                             | 7 --> dpy       |
-#                             | 8 --> dcx       |
-#                             | 9 --> dcy       |
-#                             | 10 --> u        |
-#                             | 11 --> v        |
-#                             | 12 --> sig2noise|
-#     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
-#     A python dictionary type could have been used (and would be much more intuitive)
-#     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
-#
-#     """
-#     ####################################################
-#     # INITIALIZATIONS
-#     ####################################################
-#
-#     # Initialize skcuda miscellaneous library
-#     cu_misc.init()
-#
-#     # cast images as floats
-#     #TODO changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
-#     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
-#
-#     # Send images to the gpu
-#     d_frame_a_f = gpuarray.to_gpu(frame_a_f)
-#     d_frame_b_f = gpuarray.to_gpu(frame_b_f)
-#
-#     # warnings.warn("deprecated", RuntimeWarning)
-#     if nb_iter_max <= coarse_factor:
-#         raise ValueError( "Please provide a nb_iter_max that is greater than the coarse_level" )
-#     cdef int K  # main iteration index
-#     cdef int I, J  # interrogation locations indices
-#     cdef int L, M  # inside window indices
-#     cdef int O, P  # frame indices corresponding to I and J
-#     cdef int i, j  # dumb indices for various works
-#     cdef float mean_u, mean_v, rms_u, rms_v, residual_0, div
-#     cdef int residual, nbwind
-#     cdef np.ndarray[DTYPEi_t, ndim=1] Nrow = np.zeros(nb_iter_max, dtype=DTYPEi)
-#     cdef np.ndarray[DTYPEi_t, ndim=1] Ncol = np.zeros(nb_iter_max, dtype=DTYPEi)
-#     cdef np.ndarray[DTYPEi_t, ndim=1] W = np.zeros(nb_iter_max, dtype=DTYPEi)
-#     cdef np.ndarray[DTYPEi_t, ndim=1] Overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
-#     pic_size=frame_a.shape
-#
-#     # window sizes list initialization
-#     for K in range(coarse_factor+1):
-#         W[K] = np.power(2, coarse_factor - K) * min_window_size
-#     for K in range(coarse_factor+1, nb_iter_max):
-#         W[K] = W[K-1]
-#
-#     # overlap init
-#     for K in range(nb_iter_max):
-#         Overlap[K]=int(np.floor(overlap_ratio*W[K]))
-#
-#     # Ncol and Nrow init
-#     for K in range(nb_iter_max):
-#         Nrow[K]=((pic_size[0]-W[K])//(W[K]-Overlap[K]))+1
-#         Ncol[K]=((pic_size[1]-W[K])//(W[K]-Overlap[K]))+1
-#
-#     # write the parameters to the screen
-#     if validation_iter==0:
-#         validation_method='None'
-#
-#     cdef float startTime = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','Nrow', 'Ncol', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, coarse_factor, dt, validation_method, validation_iter,  subpixel_method, Nrow, Ncol, W, Overlap])
-#
-#     # define the main array F that contains all the data
-#     cdef np.ndarray[DTYPEf_t, ndim=4] F = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=4] F_check = np.zeros([nb_iter_max, Nrow[nb_iter_max-1], Ncol[nb_iter_max-1], 13], dtype=DTYPEf)
-#
-#     # define mask - bool arrays don't exist in cython so we go to lower level with cast
-#     # you can access mask with (<object>mask)[I,J]
-#     #TODO fix the int type
-#     cdef np.ndarray[np.uint8_t, ndim=2, cast=True] mask = np.empty([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=np.bool)
-#
-#     # define u,v, x,y fields (only used as outputs of this program)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] y = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#
-#     # define temporary arrays and reshaped arrays to store the correlation function output
-#     cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(Nrow[-1]*Ncol[-1], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(Nrow[-1]*Ncol[-1], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([Nrow[nb_iter_max-1], Ncol[nb_iter_max-1]], dtype=DTYPEf)
-#
-#     # define array for signal to noise ratio
-#     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-#
-#     # define arrays used for the validation process
-#     # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
-#     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-#     # cdef np.ndarray[DTYPEf_t, ndim=3] u_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-#     # cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
-#
-#     #### GPU arrays###
-#
-#     # define arrays to stores the displacement vector in to save displacement information
-#     d_shift = gpuarray.zeros([2, Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-#
-#     # define arrays to store all the mean velocity at each point in each iteration
-#     d_u_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-#     d_v_mean = gpuarray.zeros([nb_iter_max, Nrow[-1], Ncol[-1]], dtype=DTYPEf)
-#
-#     # initialize x and y values
-#     for K in range(nb_iter_max):
-#         for I in range(Nrow[K]):
-#             for J in range(Ncol[K]):
-#                 #x unit vector corresponds to rows
-#                 #y unit vector corresponds to columns
-#                 if I == 0:
-#                     F[K,I,J,0] = W[K]/2 #init x on 1st row
-#                 else:
-#                     F[K,I,J,0] = F[K,I-1,J,0] + W[K] - Overlap[K] #init x
-#                 if J == 0:
-#                     F[K,I,J,1] = W[K]/2 #init y on first column
-#                 else:
-#                     F[K,I,J,1] = F[K,I,J-1,1] + W[K] - Overlap[K] #init y
-#
-#     # Move F to the GPU for the whole calculation
-#     d_F = gpuarray.to_gpu(F)
-#
-#     # end of the initializations
-#
-#     ####################################################
-#     # MAIN LOOP
-#     ####################################################
-#     for K in range(nb_iter_max):
-#         # print(" ")
-#         print("//////////////////////////////////////////////////////////////////")
-#         # print(" ")
-#         print("ITERATION # ", K)
-#         # print(" ")
-#
-#         residual = 0
-#
-#         #################################################################################
-#         #  GPU VERSION
-#         #################################################################################
-#
-#         # Calculate second frame displacement (shift)
-#         d_shift[0, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 6].copy().astype(np.int32)  # xb=xa+dpx
-#         d_shift[1, :Nrow[K], :Ncol[K]] = d_F[K, 0:Nrow[K], 0:Ncol[K], 7].copy().astype(np.int32)  # yb=ya+dpy
-#
-#         # Get correlation function
-#         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, W[K], Overlap[K], nfftx, d_shift = d_shift[:, :Nrow[K], :Ncol[K]].copy())
-#
-#         # Get window displacement to subpixel accuracy
-#         i_tmp[0:Nrow[K]*Ncol[K]], j_tmp[0:Nrow[K]*Ncol[K]] = c.subpixel_peak_location()
-#
-#         # reshape the peaks
-#         i_peak[0:Nrow[K], 0: Ncol[K]] = np.reshape(i_tmp[0:Nrow[K]*Ncol[K]], (Nrow[K], Ncol[K]))
-#         j_peak[0:Nrow[K], 0: Ncol[K]] = np.reshape(j_tmp[0:Nrow[K]*Ncol[K]], (Nrow[K], Ncol[K]))
-#
-#         # Get signal to noise ratio
-#         sig2noise[0:Nrow[K], 0:Ncol[K]] = c.sig2noise_ratio(method = sig2noise_method)
-#
-#         # update the field with new values
-#         # TODO check for nans in i_peak and j_peak
-#         d_F = gpu_update(d_F, sig2noise[0:Nrow[K], 0:Ncol[K]], i_peak[0:Nrow[K], 0:Ncol[K]], j_peak[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], c.nfft, dt, K)
-#
-#         #################################################################################
-#
-#         print("...[DONE]")
-#         print(" ")
-#         """
-#         if K==0:
-#             residual_0 = residual/np.float(Nrow[K]*Ncol[K])
-#             print(residual_0)
-#         print(" --residual : ", (residual/np.float(Nrow[K]*Ncol[K]))/residual_0)
-#         """
-#
-#         #####################################################
-#         # validation of the velocity vectors with 3*3 filtering
-#         #####################################################
-#
-#         if K==0 and trust_1st_iter:#1st iteration can generally be trust if it follows the 1/4 rule
-#             print("No validation: trusting 1st iteration")
-#         else:
-#             print("Starting validation...")
-#
-#             # init mask to False
-#             for I in range(Nrow[nb_iter_max-1]):
-#                 for J in range(Ncol[nb_iter_max-1]):
-#                     (<object>mask)[I,J] = False
-#
-#             # real validation starts
-#             for i in range(validation_iter):
-#                 print("Validation, iteration number ", i)
-#                 # print(" ")
-#
-#                 # reset validation list
-#                 validation_list = np.ones([Nrow[-1], Ncol[-1]], dtype=DTYPEi)
-#
-#                 # get list of places that need to be validated
-#                 d_F, validation_list[0:Nrow[K], 0:Ncol[K]], d_u_mean[K, 0:Nrow[K], 0:Ncol[K]], d_v_mean[K, 0:Nrow[K], 0:Ncol[K]] = gpu_validation(d_F, K, sig2noise[0:Nrow[K], 0:Ncol[K]], Nrow[K], Ncol[K], W[K], 1.5, tolerance, div_tolerance)
-#
-#                 # do the validation
-#                 d_F = initiate_validation(d_F, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, Nrow, Ncol, W, Overlap, dt)
-#
-#             print("...[DONE]")
-#             print(" ")
-#         # end of validation
-#
-#         ##############################################################################
-#         # stop process if this is the last iteration
-#         ##############################################################################
-#
-#         if K==nb_iter_max-1:
-#             print("//////////////////////////////////////////////////////////////////")
-#             print("End of iterative process. Re-arranging vector fields...")
-#
-#             F = d_F.get()
-#             d_F.gpudata.free()
-#
-#             # assembling the u, v and x, y fields for outputs
-#             for I in range(Nrow[K]):
-#                 for J in range(Ncol[K]):
-#                     x[I,J]=F[K,I,J,1]
-#                     y[I,J]=F[K,Nrow[K]-I-1,J,0]
-#                     u[I,J]=F[K,I,J,10]
-#                     v[I,J]=F[K,I,J,11]
-#
-#             print("...[DONE]")
-#             print(" ")
-#
-#             # delete images from gpu memory
-#             d_frame_a_f.gpudata.free()
-#             d_frame_b_f.gpudata.free()
-#
-#             # delete old correlation function
-#             del(c, d_F)
-#             # end(startTime)
-#             return x, y, u, v, (<object>mask)
-#         #############################################################################
-#
-#         # go to next iteration: compute the predictors dpx and dpy from the current displacements
-#         print("Going to next iteration... ")
-#         print("Performing interpolation of the displacement field for next iteration predictors")
-#         # print(" ")
-#
-#         if Nrow[K+1] == Nrow[K] and Ncol[K+1] == Ncol[K]:
-#              d_F[K+1, :Nrow[K+1], :Ncol[K+1], 6] =  gpu_round(d_F[K, :Nrow[K], :Ncol[K], 4].copy()) #dpx_k+1 = dx_k
-#              d_F[K+1, :Nrow[K+1], :Ncol[K+1], 7] =  gpu_round(d_F[K, :Nrow[K], :Ncol[K], 5].copy()) #dpy_k+1 = dy_k
-#         # interpolate if dimensions do not agree
-#         else:
-#             v_list = np.ones((Nrow[-1], Ncol[-1]), dtype=bool)
-#             #interpolate velocity onto next iterations grid. Then take the floor as the predictor for the next step
-#             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 4)
-#             d_F = gpu_interpolate_surroundings(d_F, v_list, Nrow, Ncol, W, Overlap, K, 5)
-#             d_F[K+1,:,:,6] =  gpu_round(d_F[K+1,:,:,4].copy())
-#             d_F[K+1,:,:,7] =  gpu_round(d_F[K+1,:,:,5].copy())
-#         # delete old correlation function
-#         del c
-#
-#         print("...[DONE] -----> going to iteration ", K+1)
-#         print(" ")
 
 
 def initiate_validation(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
@@ -1620,7 +1236,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     d_f : 4D gpuarray - float
         main array that stores all velocity data
     v_list : 2D array - bool
-        indicates which alues must be validate. True means it needs to be validated, False means no validation is needed.
+        indicates which values must be validated. True means it needs to be validated, False means no validation is needed.
     n_row, n_col : 1D array
         Number rows and columns in each iteration
     w :
@@ -2119,12 +1735,13 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     n_col = np.int32(n_col)
     w = np.float32(w)
 
-    assert sig2noise.dtype == np.float32, "dtype of sig2noise is {}. Should be np.float32".format(sig2noise.dtype)
-    assert type(s2n_tol) == np.float32, "type of s2n_tol is {}. Should be np.float32".format(type(s2n_tol))
-    assert type(n_row) == np.int32, "dtype of Nrow is {}. Should be np.int32".format(type(n_row))
-    assert type(n_col) == np.int32, "dtype of Ncol is {}. Should be np.int32".format(type(n_col))
-    assert type(w) == np.float32, "dtype of w is {}. Should be np.float32" .format(type(w))
-    assert d_f.dtype == np.float32, "dtype of d_F is {}. dtype should be np.float32".format(d_f.dtype)
+    # TODO delete these checks
+    # assert sig2noise.dtype == np.float32, "dtype of sig2noise is {}. Should be np.float32".format(sig2noise.dtype)
+    # assert type(s2n_tol) == np.float32, "type of s2n_tol is {}. Should be np.float32".format(type(s2n_tol))
+    # assert type(n_row) == np.int32, "dtype of Nrow is {}. Should be np.int32".format(type(n_row))
+    # assert type(n_col) == np.int32, "dtype of Ncol is {}. Should be np.int32".format(type(n_col))
+    # assert type(w) == np.float32, "dtype of w is {}. Should be np.float32" .format(type(w))
+    # assert d_f.dtype == np.float32, "dtype of d_F is {}. dtype should be np.float32".format(d_f.dtype)
 
     # GPU settings
     block_size = 16
@@ -2146,7 +1763,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
 
     # Launch signal to noise kernel and free sig2noise data
     s2n = mod_validation.get_function("s2n")
-    s2n(d_val_list, d_sig2noise, s2n_tol, n_row, n_col, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    s2n(d_val_list, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
     d_sig2noise.gpudata.free()
 
     ##########################
@@ -2159,17 +1776,17 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
 
     # get and launch rms
     mean_validation = mod_validation.get_function("mean_validation")
-    mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     ##########################
     # divergence validation
     ##########################
 
-    d_div, d_u, d_v = gpu_divergence(d_u, d_v, w, n_row, n_col)
-
-    # launch divergence validation kernel
-    div_validation = mod_validation.get_function("div_validation")
-    div_validation(d_val_list, d_div, n_row, n_col, div_tol, block = (block_size, 1, 1), grid = (x_blocks, 1))
+    # d_div, d_u, d_v = gpu_divergence(d_u, d_v, w, n_row, n_col)
+    #
+    # # launch divergence validation kernel
+    # div_validation = mod_validation.get_function("div_validation")
+    # div_validation(d_val_list, d_div, n_row, n_col, div_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # return the final validation list
     val_list = d_val_list.get()
@@ -2186,9 +1803,9 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     #d_v_mean.gpudata.free()
     d_u_rms.gpudata.free()
     d_v_rms.gpudata.free()
-    d_div.gpudata.free()
+    # d_div.gpudata.free()
 
-    del(d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms, d_div)
+    del d_val_list, d_sig2noise, d_neighbours, d_neighbours_present, d_u, d_v, d_u_rms, d_v_rms,# d_div
 
     return d_f, val_list, d_u_mean, d_v_mean
 
@@ -2293,6 +1910,76 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         stores the values of u and v of the neighbours of a point
 
     """
+    # TODO delete this redundant code
+
+    # mod_get_neighbours = SourceModule("""
+    # __global__ void get_u_neighbours(float *neighbours, float *neighbours_present, float *u, int Nrow, int Ncol)
+    # {
+    #     // neighbours - u and v values around each point
+    #     // neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+    #     // u, v - u and v velocities
+    #     // Nrow, Ncol - number of rows and columns
+    #
+    #     // references each IW
+    #     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    #     int max_idx = Nrow * Ncol;
+    #
+    #     if(w_idx >= max_idx){return;}
+    #
+    #     // get velocities
+    #     neighbours[w_idx * 18 + 0] = u[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
+    #     neighbours[w_idx * 18 + 1] = u[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
+    #     neighbours[w_idx * 18 + 2] = u[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
+    #
+    #     __syncthreads();
+    #
+    #     neighbours[w_idx * 18 + 3] = u[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
+    #     neighbours[w_idx * 18 + 4] = 0.0;
+    #     neighbours[w_idx * 18 + 5] = u[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
+    #
+    #     __syncthreads();
+    #
+    #     neighbours[w_idx * 18 + 6] = u[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
+    #     neighbours[w_idx * 18 + 7] = u[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
+    #     neighbours[w_idx * 18 + 8] = u[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
+    #
+    #     __syncthreads();
+    # }
+    #
+    # __global__ void get_v_neighbours(float *neighbours, float *neighbours_present, float *v, int Nrow, int Ncol)
+    # {
+    #     // neighbours - u and v values around each point
+    #     // neighbours_present - 1 if there is a neighbour, 0 if no neighbour
+    #     // u, v - u and v velocities
+    #     // Nrow, Ncol - number of rows and columns
+    #
+    #     // references each IW
+    #     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    #     int max_idx = Nrow * Ncol;
+    #
+    #     if(w_idx >= max_idx){return;}
+    #
+    #     // get velocities
+    #     neighbours[w_idx * 18 + 9] = v[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
+    #     neighbours[w_idx * 18 + 10] = v[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
+    #     neighbours[w_idx * 18 + 11] = v[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
+    #
+    #     __syncthreads();
+    #
+    #     neighbours[w_idx * 18 + 12] = v[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
+    #     neighbours[w_idx * 18 + 13] = 0.0;
+    #     neighbours[w_idx * 18 + 14] = v[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
+    #
+    #     __syncthreads();
+    #
+    #     neighbours[w_idx * 18 + 15] = v[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
+    #     neighbours[w_idx * 18 + 16] = v[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
+    #     neighbours[w_idx * 18 + 17] = v[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
+    #
+    #     __syncthreads();
+    # }
+    # """)
+
     mod_get_neighbours = SourceModule("""
     __global__ void get_u_neighbours(float *neighbours, float *neighbours_present, float *u, int Nrow, int Ncol)
     {
@@ -2304,25 +1991,25 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         // references each IW
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         int max_idx = Nrow * Ncol;
-        
+
         if(w_idx >= max_idx){return;}
 
         // get velocities
-        neighbours[w_idx * 18 + 0] = u[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
-        neighbours[w_idx * 18 + 1] = u[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
-        neighbours[w_idx * 18 + 2] = u[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
+        if(neighbours_present[w_idx * 9 + 0] == 1){neighbours[w_idx * 18 + 0] = u[w_idx - Ncol - 1];}
+        if(neighbours_present[w_idx * 9 + 1] == 1){neighbours[w_idx * 18 + 1] = u[w_idx - Ncol];}
+        if(neighbours_present[w_idx * 9 + 2] == 1){neighbours[w_idx * 18 + 2] = u[w_idx - Ncol + 1];}
 
         __syncthreads();
 
-        neighbours[w_idx * 18 + 3] = u[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
-        neighbours[w_idx * 18 + 4] = 0.0;
-        neighbours[w_idx * 18 + 5] = u[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
+        if(neighbours_present[w_idx * 9 + 3] == 1){neighbours[w_idx * 18 + 3] = u[w_idx - 1];}
+        //neighbours[w_idx * 18 + 4] = 0.0;
+        if(neighbours_present[w_idx * 9 + 5] == 1){neighbours[w_idx * 18 + 5] = u[w_idx + 1];}
 
         __syncthreads();
 
-        neighbours[w_idx * 18 + 6] = u[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
-        neighbours[w_idx * 18 + 7] = u[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
-        neighbours[w_idx * 18 + 8] = u[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
+        if(neighbours_present[w_idx * 9 + 6] == 1){neighbours[w_idx * 18 + 6] = u[w_idx + Ncol - 1];}
+        if(neighbours_present[w_idx * 9 + 7] == 1){neighbours[w_idx * 18 + 7] = u[w_idx + Ncol];}
+        if(neighbours_present[w_idx * 9 + 8] == 1){neighbours[w_idx * 18 + 8] = u[w_idx + Ncol + 1];}
 
         __syncthreads();
     }
@@ -2337,25 +2024,25 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         // references each IW
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         int max_idx = Nrow * Ncol;
-        
+
         if(w_idx >= max_idx){return;}
 
         // get velocities
-        neighbours[w_idx * 18 + 9] = v[max(w_idx - Ncol - 1, 0)] * neighbours_present[w_idx * 9 + 0];
-        neighbours[w_idx * 18 + 10] = v[max(w_idx - Ncol, 0)] * neighbours_present[w_idx * 9 + 1];
-        neighbours[w_idx * 18 + 11] = v[max(w_idx - Ncol + 1, 0)] * neighbours_present[w_idx * 9 + 2];
+        if(neighbours_present[w_idx * 9 + 0] == 1){neighbours[w_idx * 18 + 9] = v[w_idx - Ncol - 1];}
+        if(neighbours_present[w_idx * 9 + 1] == 1){neighbours[w_idx * 18 + 10] = v[w_idx - Ncol];}
+        if(neighbours_present[w_idx * 9 + 2] == 1){neighbours[w_idx * 18 + 11] = v[w_idx - Ncol + 1];}
 
         __syncthreads();
 
-        neighbours[w_idx * 18 + 12] = v[max(w_idx - 1, 0)] * neighbours_present[w_idx * 9 + 3];
-        neighbours[w_idx * 18 + 13] = 0.0;
-        neighbours[w_idx * 18 + 14] = v[min(w_idx + 1, max_idx)] * neighbours_present[w_idx * 9 + 5];
+        if(neighbours_present[w_idx * 9 + 3] == 1){neighbours[w_idx * 18 + 12] = v[w_idx - 1];}
+        //neighbours[w_idx * 18 + 13] = 0.0;
+        if(neighbours_present[w_idx * 9 + 5] == 1){neighbours[w_idx * 18 + 14] = v[w_idx + 1];}
 
         __syncthreads();
-        
-        neighbours[w_idx * 18 + 15] = v[min(w_idx + Ncol - 1, max_idx)] * neighbours_present[w_idx * 9 + 6];
-        neighbours[w_idx * 18 + 16] = v[min(w_idx + Ncol, max_idx)] * neighbours_present[w_idx * 9 + 7];
-        neighbours[w_idx * 18 + 17] = v[min(w_idx + Ncol + 1, max_idx)] * neighbours_present[w_idx * 9 + 8];
+
+        if(neighbours_present[w_idx * 9 + 6] == 1){neighbours[w_idx * 18 + 15] = v[w_idx + Ncol - 1];}
+        if(neighbours_present[w_idx * 9 + 7] == 1){neighbours[w_idx * 18 + 16] = v[w_idx + Ncol];}
+        if(neighbours_present[w_idx * 9 + 8] == 1){neighbours[w_idx * 18 + 17] = v[w_idx + Ncol + 1];}
 
         __syncthreads();
     }
@@ -2368,7 +2055,6 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     # Get GPU grid dimensions and function
     block_size = 16
     x_blocks = int(n_col * n_row // block_size + 1)
-    print('x_blocks {}'.format(x_blocks))
     get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
     get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
 
@@ -2377,6 +2063,7 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     neighbours = np.zeros((n_row, n_col, 2, 3, 3))
     neighbours = neighbours.astype(np.float32)
 
+    # TODO delete this check
     # # assert statements for data
     # assert neighbours.dtype == np.float32, "Wrong data type for neighbours"
     # assert type(n_row) == np.int32, "Wrong data type for Nrow"
@@ -2389,15 +2076,11 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     get_u_neighbours(d_neighbours, d_neighbours_present, d_u, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
     get_v_neighbours(d_neighbours, d_neighbours_present, d_v, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    # # return data
+    # TODO delete this check for NaNs
+    # return data
     neighbours = d_neighbours.get()
-    #
-    # #TODO Figure out what is going on here.
-    # # With vector fields over size 40000, nans show up in neighbours, but only where zeros should be.
-    # # I have no idea why this is, but this works...
     a = np.isnan(neighbours)
-    if a.any():
-        print('NANs detected in neighbours')
+    assert not a.any(),'NaNs detected in neighbours'
     # if np.sum(a) > 0:
     #     neighbours[a] = 0.0
     #
@@ -2559,8 +2242,9 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
     block_size = 16
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    assert u_rms.dtype == np.float32, "dtype for u_rms is wrong. Should be np.float32"
-    assert v_rms.dtype == np.float32, "dtype for v_rms is wrong. Should be np.float32"
+    # TODO delete this check
+    # assert u_rms.dtype == np.float32, "dtype for u_rms is wrong. Should be np.float32"
+    # assert v_rms.dtype == np.float32, "dtype for v_rms is wrong. Should be np.float32"
 
     # send data to gpu
     d_u_rms = gpuarray.to_gpu(u_rms)
@@ -2574,7 +2258,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
 
     return d_u_rms, d_v_rms, d_neighbours, d_neighbours_present
 
-
+#TODO check to ensure this function does what it should
 def gpu_divergence(d_u, d_v, w, n_row, n_col):
     """Calculates the divergence at each point in a velocity field.
 
@@ -2593,24 +2277,23 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
         divergence at each point
 
     """
-    #TODO check that the min/max functions in the SourceModule below do what is expected
     mod_div = SourceModule("""
     __global__ void div_k(float *div, float *u, float *v, float w, int Nrow, int Ncol)
     {
-        // u: u velocity
-        // v: v velocity
-        // w: window size
-        // Nrow, Ncol: number of rows and columns
+        // u : u velocity
+        // v : v velocity
+        // w : window size
+        // Nrow, Ncol : number of rows and columns
 
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         int max_idx = Nrow * Ncol;
 
         // Avoid the boundary
         if(w_idx >= (Nrow - 1) * Ncol){return;}
         if(w_idx%Ncol == Ncol - 1){return;}
 
-        float u1 = u[min(w_idx + Ncol, max_idx)];
-        float v1 = v[min(w_idx + 1, max_idx)];
+        float u1 = u[w_idx + Ncol];
+        float v1 = v[w_idx + 1];
 
         __syncthreads();
 
@@ -2619,18 +2302,18 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
 
     __global__ void div_boundary_k(float *div, float *u, float *v, float w, int Nrow, int Ncol)
     {
-        // u: u velocity
-        // v: v velocity
-        // w: window size
-        // Nrow, Ncol: number of rows and columns
+        // u : u velocity
+        // v : v velocity
+        // w : window size
+        // Nrow, Ncol : number of rows and columns
 
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         // only calculate on the boundary
         if(w_idx < (Nrow - 1) * Ncol && w_idx%Ncol != Ncol - 1){return;}
 
-        float u1 = u[max(w_idx - Ncol, 0)];
-        float v1 = v[max(w_idx - 1, 0)];
+        float u1 = u[w_idx - Ncol];
+        float v1 = v[w_idx - 1];
 
         __syncthreads();
 
@@ -2638,7 +2321,7 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
     }
     """)
 
-    div = np.empty((n_row, n_col), dtype = np.float32)
+    div = np.empty((n_row, n_col), dtype=np.float32)
     n_row = np.int32(n_row)
     n_col = np.int32(n_col)
     w = np.float32(w)
@@ -2647,7 +2330,8 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
     block_size = 16
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    assert div.dtype == np.float32, "dtype of div is {}. Should be np.float32".format(div.dtype)
+    # TODO delete this check
+    # assert div.dtype == np.float32, "dtype of div is {}. Should be np.float32".format(div.dtype)
 
     # move data to gpu
     d_div = gpuarray.to_gpu(div)
@@ -2750,10 +2434,11 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
     k = np.int32(k)
     n = np.int32(d_pos_index.size)
 
-    assert n_row.dtype == np.int32, "Nrow data type is {}. Should be int32".format(n_row.dtype)
-    assert n_col.dtype == np.int32, "Ncol data type is {}. Should be int32".format(n_col.dtype)
-    assert d_range.dtype == np.float32, "d_range data type is {}. Should be np.float32".format(d_range.dtype)
-    assert d_pos_index.dtype == np.int32, "d_pos_index data type is {}. Should be np.int32".format(d_pos_index.dtype)
+    # TODO delete this check
+    # assert n_row.dtype == np.int32, "Nrow data type is {}. Should be int32".format(n_row.dtype)
+    # assert n_col.dtype == np.int32, "Ncol data type is {}. Should be int32".format(n_col.dtype)
+    # assert d_range.dtype == np.float32, "d_range data type is {}. Should be np.float32".format(d_range.dtype)
+    # assert d_pos_index.dtype == np.int32, "d_pos_index data type is {}. Should be np.int32".format(d_pos_index.dtype)
 
     # define gpu settings
     block_size = 8
@@ -3009,13 +2694,13 @@ def gpu_index_update(d_dest, d_values, d_indices, return_indices=False):
         dest[indices[tid]] = values[tid];
     }
     """)
-
-    # GPU will automatically flatten the input array. The indexing must reference the flattened GPU array.
-    assert d_values.ndim == 1, "Number of dimensions of d_values is {}. It should be equal to 1".format(d_values.ndim)
-    assert d_values.size == d_indices.size, "Inputs d_values (size {}) and d_indices (size {}) should have the same size.".format(d_values.size, d_indices.size)
-    assert d_indices.dtype == np.int32, "d_indices data type is {}. Should be np.int32".format(d_indices.dtype)
-    assert d_values.dtype == np.float32, "d_values data type is {}. Should be np.float32".format(d_values.dtype)
-    assert d_dest.dtype == np.float32, "d_dest data type is {}. Should be np.float32".format(d_dest.dtype)
+    # TODO delete these checks
+    # # GPU will automatically flatten the input array. The indexing must reference the flattened GPU array.
+    # assert d_values.ndim == 1, "Number of dimensions of d_values is {}. It should be equal to 1".format(d_values.ndim)
+    # assert d_values.size == d_indices.size, "Inputs d_values (size {}) and d_indices (size {}) should have the same size.".format(d_values.size, d_indices.size)
+    # assert d_indices.dtype == np.int32, "d_indices data type is {}. Should be np.int32".format(d_indices.dtype)
+    # assert d_values.dtype == np.float32, "d_values data type is {}. Should be np.float32".format(d_values.dtype)
+    # assert d_dest.dtype == np.float32, "d_dest data type is {}. Should be np.float32".format(d_dest.dtype)
 
     # define gpu parameters
     block_size = 8
@@ -3148,377 +2833,3 @@ def gpu_round(d_src, return_input=False):
         return d_dst, d_src
     else:
         raise ValueError("ReturnInput is currently {}. Must be of type boolean".format(return_input))
-
-
-# ################################################################################
-# #  OLD/DEPRECIATED FUNCTIONS
-# ################################################################################
-# def interpolate_surroundings(np.ndarray[DTYPEf_t, ndim=4] F,
-#                              np.ndarray[DTYPEi_t, ndim=1] Nrow,
-#                              np.ndarray[DTYPEi_t, ndim=1] Ncol,
-#                              int K,
-#                              int I,
-#                              int J,
-#                              int dat):
-#     """Perform interpolation of between to iterations of the F 4d-array for a specific location I,J and the data type dat.
-#
-#     Parameters
-#     ----------
-#     F :  4d np.ndarray
-#         The main array of the WIDIM algorithm.
-#     Nrow : 1d np.ndarray
-#         list of the numbers of row for each iteration K
-#     Ncol : 1d np.ndarray
-#         list of the numbers of column for each iteration K
-#     K : int
-#         the iteration that contains the valid data. K+1 will be the iteration at which the interpolation is needed.
-#     I,J : int
-#         indices of the point that need interpolation (in iteration K+1)
-#     dat : int
-#         the index of the data to interpolate.
-#
-#     Returns
-#     -------
-#     the interpolated data (type float)
-#
-#     """
-#     #interpolate data dat from previous iteration
-#     cdef float lower_lim_previous_x = F[K,0,0,0]
-#     cdef float lower_lim_previous_y = F[K,0,0,1]
-#     cdef float upper_lim_previous_x = F[K,Nrow[K]-1,Ncol[K]-1,0]
-#     cdef float upper_lim_previous_y = F[K,Nrow[K]-1,Ncol[K]-1,1]
-#     cdef float pos_now_x = F[K+1,I,J,0]
-#     cdef float pos_now_y = F[K+1,I,J,1]
-#     cdef np.ndarray[DTYPEi_t, ndim=1] Q1 = np.zeros(2, dtype=DTYPEi)
-#     cdef np.ndarray[DTYPEi_t, ndim=1] Q4 = np.zeros(2, dtype=DTYPEi)
-#
-#     # Many cases depending on where the vector location is
-#
-#     # Top row
-#     if pos_now_x < lower_lim_previous_x:
-#         #top left corner
-#         if pos_now_y < lower_lim_previous_y:
-#             return F[K,0,0,dat]
-#         #top right corner
-#         elif pos_now_y > upper_lim_previous_y:
-#             return F[K,0,Ncol[K]-1,dat]
-#         #top row no corners
-#         else:
-#             low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-#             if low_y == high_y:
-#                 return F[K,0,low_y,dat]
-#             else:
-#                 return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,0,low_y,dat], F[K,0,high_y,dat])
-#     # Bottom row
-#     elif pos_now_x > upper_lim_previous_x:
-#         # bottom left corner
-#         if pos_now_y < lower_lim_previous_y:
-#             return F[K,Nrow[K]-1,0,dat]
-#         #bottom right corner
-#         elif pos_now_y > upper_lim_previous_y:
-#             return F[K,Nrow[K]-1,Ncol[K]-1,dat]
-#         #bottom row no corners
-#         else:
-#             low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-#             #print(low_y, high_y)
-#             if low_y == high_y:
-#                 return F[K,Nrow[K]-1,low_y,dat]
-#             else:
-#                 return linear_interpolation(F[K,0,low_y,1], F[K,0,high_y,1], pos_now_y, F[K,Nrow[K]-1,low_y,dat], F[K,Nrow[K]-1,high_y,dat])
-#     #left column no corners
-#     elif pos_now_y < lower_lim_previous_y:
-#         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-#         if low_x == high_x:
-#             return F[K,low_x,0,dat]
-#         else:
-#             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,0,dat], F[K,high_x,0,dat])
-#     #right column no corners
-#     elif pos_now_y > upper_lim_previous_y:
-#         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-#         if low_x == high_x:
-#             return F[K,low_x,Ncol[K]-1,dat]
-#         else:
-#             return linear_interpolation(F[K,low_x,0,0], F[K,high_x,0,0], pos_now_x, F[K,low_x,Ncol[K]-1,dat], F[K,high_x,Ncol[K]-1,dat])
-#     #interior grid
-#     else:
-#         low_x, high_x = F_dichotomy(F,K,Nrow,'x_axis',pos_now_x)
-#         low_y, high_y = F_dichotomy(F,K,Ncol,'y_axis',pos_now_y)
-#         Q1[0] = F[K,low_x,0,0]
-#         Q1[1] = F[K,0,low_y,1]
-#         Q4[0] = F[K,high_x,0,0]
-#         Q4[1] = F[K,0,high_y,1]
-#         if pos_now_x >= Q1[0] and pos_now_x <= Q4[0] and pos_now_y >= Q1[1] and pos_now_y <= Q4[1]:
-#             return bilinear_interpolation(Q1[0],Q4[0],Q1[1],Q4[1],pos_now_x,pos_now_y,F[K,low_x,low_y,dat],F[K,low_x,high_y,dat],F[K,high_x,low_y,dat],F[K,high_x,high_y,dat])
-#         else:
-#             raise ValueError( "cannot perform interpolation, a problem occured" )
-#
-#
-# def bilinear_interpolation(int x1, int x2, int y1, int y2, int x, int y, float f1, float f2, float f3, float f4):
-#     """Perform a bilinear interpolation between 4 points
-#
-#     Parameters
-#     ----------
-#     x1, x2, y1, y2 :  int
-#         x-axis and y-axis locations of the 4 points. (ie. location in the frame)
-#         (Note that the x axis is vertical and pointing down while the y-axis is horizontal)
-#     x, y : int
-#         locations of the target point for the interpolation (in the frame)
-#     f1,f2,f3,f4 : float
-#         value at each point : f1=f(x1,y1), f2=f(x1,y2), f3=f(x2, y1), f4=f(x2,y2)
-#
-#     Returns
-#     -------
-#     the interpolated data (type float)
-#
-#     """
-#     if x1 == x2:
-#         if y1 == y2:
-#             return f1
-#         else:
-#             return linear_interpolation(y1,y2,y,f1,f2)
-#     elif y1 == y2:
-#         return linear_interpolation(x1,x2,x,f1,f3)
-#     else:
-#         return (f1*(x2-x)*(y2-y)+f2*(x2-x)*(y-y1)+f3*(x-x1)*(y2-y)+f4*(x-x1)*(y-y1))/(np.float(x2-x1)*np.float(y2-y1))
-#
-#
-# def linear_interpolation(int x1, int x2, int x, float f1, float f2):
-#     """Perform a linear interpolation between 2 points
-#
-#     Parameters
-#     ----------
-#     x1, x2 :  int
-#         locations of the 2 points. (along any axis)
-#     x : int
-#         locations of the target point for the interpolation (along the same axis as x1 and x2)
-#     f1, f2 : float
-#         value at each point : f1=f(x1), f2=f(x2)
-#
-#     Returns
-#     -------
-#     the interpolated data (type float)
-#
-#     """
-#     return ((x2-x)/np.float(x2-x1))*f1 + ((x-x1)/np.float(x2-x1))*f2
-#
-#
-# def F_dichotomy(np.ndarray[DTYPEf_t, ndim=4] F, int K, np.ndarray[DTYPEi_t, ndim=1] N, str side, int pos_now):
-#     """Look for the position of the vectors at the previous iteration that surround the current point in the fram
-#     you want to interpolate.
-#
-#     Parameters
-#     ----------
-#     F :  4d np.ndarray
-#         The main array of the WIDIM algorithm.
-#     K : int
-#         the iteration of interest (1st index for F).
-#     N : 1d np.ndarray
-#         list of the numbers of row or column (depending on the specified value of 'side') for each iteration K
-#     side : string
-#         the axis of interest : can be either 'x_axis' or 'y_axis'
-#     pos_now : int
-#         position of the point in the frame (along the axis 'side').
-#
-#     Returns
-#     -------
-#     low : int
-#         largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.
-#     high : int
-#         smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.
-#
-#     """
-#     #print("starting dichotomy")
-#     cdef int low
-#     cdef int high
-#     cdef int minlow = 0
-#     cdef int maxhigh = N[K]-1
-#     cdef int searching
-#     low = np.floor(maxhigh/2)
-#     high = low + 1
-#     searching = 1
-#     if side == 'x_axis':
-#         while searching:#start dichotomy
-#             if pos_now == F[K,low,0,0] or (low == 0 and pos_now < F[K,low,0,0]):
-#                 searching = 0
-#                 high = low
-#             elif pos_now == F[K,high,0,0] or (high == N[K]-1 and pos_now > F[K,high,0,0]):
-#                 searching = 0
-#                 low = high
-#             elif pos_now > F[K,low,0,0] and pos_now < F[K,high,0,0]:
-#                 searching = 0
-#             elif pos_now < F[K,low,0,0]:
-#                 maxhigh = low
-#                 low = np.floor((low-minlow)/2)
-#                 high = low + 1
-#             else:
-#                 minlow=high
-#                 low = low + np.floor((maxhigh-low)/2)
-#                 high = low + 1
-#         return low, high
-#     elif side == 'y_axis':
-#         while searching:#start dichotomy
-#             if pos_now == F[K,0,low,1] or (low == 0 and pos_now < F[K,0,low,1]):
-#                 searching = 0
-#                 high = low
-#             elif pos_now == F[K,0,high,1] or (high == N[K]-1 and pos_now > F[K,0,high,1]):
-#                 searching = 0
-#                 low = high
-#             elif pos_now > F[K,0,low,1] and pos_now < F[K,0,high,1]:
-#                 searching = 0
-#             elif pos_now < F[K,0,low,1]:
-#                 maxhigh = low
-#                 low = np.floor((low-minlow)/2)
-#                 high = low + 1
-#             else:
-#                 minlow=high
-#                 low = low + np.floor((maxhigh-low)/2)
-#                 high = low + 1
-#         return low, high
-#     else:
-#         raise ValueError( "no valid side for F-dichotomy!" )
-#
-#
-# def find_neighbours(int I, int J, int Imax, int Jmax):
-#     """Find the neighbours of a point I,J in an array of size Imax+1, Jmax+1
-#
-#     Parameters
-#     ----------
-#     I, J : int
-#         indices of the point of interest
-#     Imax, Jmax : int
-#         max indices for the neighbours (ie. (size of the array) - 1)
-#
-#     Returns
-#     -------
-#     neighbours : 2d np.ndarray of size 3*3
-#         containing value 1 if neighbour is present, 0 if not. Value is 0 at the center (corresponds to point I,J).
-#
-#     """
-#     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours = np.zeros([3,3], dtype=DTYPEi)
-#     cdef int k,l
-#     for k in range(3):
-#         for l in range(3):
-#             neighbours[k,l]=1
-#     neighbours[1,1]=0
-#     if I == 0:
-#         neighbours[0,0]=0
-#         neighbours[0,1]=0
-#         neighbours[0,2]=0
-#     if J == 0:
-#         neighbours[0,0]=0
-#         neighbours[1,0]=0
-#         neighbours[2,0]=0
-#     if I == Imax:
-#         neighbours[2,0]=0
-#         neighbours[2,1]=0
-#         neighbours[2,2]=0
-#     if J == Jmax:
-#         neighbours[0,2]=0
-#         neighbours[1,2]=0
-#         neighbours[2,2]=0
-#     return neighbours
-#
-#
-# def old_initiate_validation(np.ndarray[DTYPEf_t, ndim=4] F,
-#                          np.ndarray[DTYPEi_t, ndim=1] Nrow,
-#                          np.ndarray[DTYPEi_t, ndim=1] Ncol,
-#                          np.ndarray[DTYPEi_t, ndim=2] neighbours_present,
-#                          np.ndarray[DTYPEf_t, ndim=3] neighbours,
-#                          float mean_u,
-#                          float mean_v,
-#                          float dt,
-#                          int K,
-#                          int I,
-#                          int J):
-#     """
-#     Parameters
-#     ----------
-#     F :  4d np.ndarray
-#         The main array of the WIDIM algorithm.
-#     Nrow : 1d np.ndarray
-#         list of the numbers of row for each iteration K
-#     Ncol : 1d np.ndarray
-#         list of the numbers of column for each iteration K
-#     neighbours_present : 2d np.ndarray
-#         3x3 array surrounding the point indicating if the point has neighbouring values
-#     neighbours : 3d np.ndarray
-#         the value of the velocity at the neighbouring points
-#     mean_u, mean_v : float
-#         mean velocities of the neighbouring points
-#     dt : float
-#         time step between image frames
-#     K : int
-#         The current main loop iteration
-#     I, J : int
-#         indices of the point that need interpolation
-#
-#     """
-#     # No previous iteration. Replace with mean velocity
-#     if K==0:
-#         F[K,I,J,10] = mean_u
-#         F[K,I,J,11] = mean_v
-#         F[K,I,J,4] = -F[K,I,J,11]*dt
-#         F[K,I,J,5] = F[K,I,J,10]*dt
-#     #case if different dimensions : interpolation using previous iteration
-#     elif K>0 and (Nrow[K] != Nrow[K-1] or Ncol[K] != Ncol[K-1]):
-#         F[K,I,J,10] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 10)
-#         F[K,I,J,11] = interpolate_surroundings(F,Nrow,Ncol,K-1,I,J, 11)
-#         F[K,I,J,4] = -F[K,I,J,11]*dt
-#         F[K,I,J,5] = F[K,I,J,10]*dt
-#     #case if same dimensions
-#     elif K>0 and (Nrow[K] == Nrow[K-1] or Ncol[K] == Ncol[K-1]):
-#         for L in range(3):
-#             for M in range(3):
-#                 if neighbours_present[L,M]:
-#                     neighbours[0,L,M] = F[K-1,I+L-1,J+M-1,10]#u
-#                     neighbours[1,L,M] = F[K-1,I+L-1,J+M-1,11]#v
-#                 else:
-#                     neighbours[0,L,M] = 0
-#                     neighbours[1,L,M] = 0
-#         if np.sum(neighbours_present) != 0:
-#             mean_u = np.sum(neighbours[0])/np.float(np.sum(neighbours_present))
-#             mean_v = np.sum(neighbours[1])/np.float(np.sum(neighbours_present))
-#             F[K,I,J,10] = mean_u
-#             F[K,I,J,11] = mean_v
-#             F[K,I,J,4] = -F[K,I,J,11]*dt
-#             F[K,I,J,5] = F[K,I,J,10]*dt
-#
-#
-# def define_windows(int size):
-#     """Define two windows of a given size (trick to allow the use of cdef during an iterative process)
-#
-#     Parameters
-#     ----------
-#     size : int
-#         size of the two windows
-#
-#     Returns
-#     -------
-#     window_a, window_b : two 2d np.ndarray of zero (integer)
-#
-#     """
-#     cdef np.ndarray[DTYPEi_t, ndim=2] window_a = np.zeros([size, size], dtype=DTYPEi)
-#     cdef np.ndarray[DTYPEi_t, ndim=2] window_b = np.zeros([size, size], dtype=DTYPEi)
-#     return window_a, window_b
-#
-#
-# def sumsquare_array(arr1):
-#     """Compute the sum of the square of the elements of a given array or list
-#
-#     Parameters
-#     ----------
-#     arr1 : array or list of any size
-#
-#     Returns
-#     -------
-#     result : float
-#         = sum( arr1_i * arr1_i)
-#
-#     """
-#     cdef float result
-#     cdef I, J
-#     result = 0
-#     for I in range(arr1.shape[0]):
-#         for J in range(arr1.shape[1]):
-#             result = result + arr1[I,J]*arr1[I,J]
-#     return result
