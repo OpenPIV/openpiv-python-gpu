@@ -17,11 +17,12 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+
 import numpy as np
 from scipy.ndimage import median_filter
 
 
-def global_val(u, v, u_thresholds, v_thresholds):
+def global_val( u, v, u_thresholds, v_thresholds ):
     """Eliminate spurious vectors with a global threshold.
     
     This validation method tests for the spatial consistency of the data
@@ -60,20 +61,21 @@ def global_val(u, v, u_thresholds, v_thresholds):
     """
 
     np.warnings.filterwarnings('ignore')
-
-    ind = np.logical_or(np.logical_or(u < u_thresholds[0], u > u_thresholds[1]),
-                        np.logical_or(v < v_thresholds[0], v > v_thresholds[1]))
-
+    
+    ind = np.logical_or(\
+          np.logical_or(u < u_thresholds[0], u > u_thresholds[1]), \
+          np.logical_or(v < v_thresholds[0], v > v_thresholds[1]) \
+          )
+    
     u[ind] = np.nan
     v[ind] = np.nan
-
+    
     mask = np.zeros(u.shape, dtype=bool)
     mask[ind] = True
-
+    
     return u, v, mask
-
-
-def global_std(u, v, std_threshold=3):
+    
+def global_std( u, v, std_threshold = 3 ):
     """Eliminate spurious vectors with a global threshold defined by the standard deviation
     
     This validation method tests for the spatial consistency of the data
@@ -108,20 +110,19 @@ def global_std(u, v, std_threshold=3):
         a boolean array. True elements corresponds to outliers.
         
     """
-
-    vel_magnitude = u ** 2 + v ** 2
-    ind = vel_magnitude > std_threshold * np.std(vel_magnitude)
-
+    
+    vel_magnitude = u**2 + v**2
+    ind = vel_magnitude > std_threshold*np.std(vel_magnitude)
+    
     u[ind] = np.nan
     v[ind] = np.nan
-
+    
     mask = np.zeros(u.shape, dtype=bool)
     mask[ind] = True
-
+    
     return u, v, mask
 
-
-def sig2noise_val(u, v, sig2noise, threshold=1.3):
+def sig2noise_val( u, v, sig2noise, w=None, threshold = 1.3):
     """Eliminate spurious vectors from cross-correlation signal to noise ratio.
     
     Replace spurious vectors with zero if signal to noise ratio
@@ -129,27 +130,32 @@ def sig2noise_val(u, v, sig2noise, threshold=1.3):
     
     Parameters
     ----------
-    u : 2d np.ndarray
-        a two dimensional array containing the u velocity component.
+    u : 2d or 3d np.ndarray
+        a two or three dimensional array containing the u velocity component.
         
-    v : 2d np.ndarray
-        a two dimensional array containing the v velocity component.
+    v : 2d or 3d np.ndarray
+        a two or three dimensional array containing the v velocity component.
         
     sig2noise : 2d np.ndarray
-        a two dimensional array containing the value  of the signal to 
+        a two or three dimensional array containing the value  of the signal to
         noise ratio from cross-correlation function.
-        
+    w : 2d or 3d np.ndarray
+        a two or three dimensional array containing the w (in z-direction) velocity component.
     threshold: float
         the signal to noise ratio threshold value.
         
     Returns
     -------
-    u : 2d np.ndarray
-        a two dimensional array containing the u velocity component, 
+    u : 2d or 3d np.ndarray
+        a two or three dimensional array containing the u velocity component,
         where spurious vectors have been replaced by NaN.
         
-    v : 2d np.ndarray
-        a two dimensional array containing the v velocity component, 
+    v : 2d or 3d  np.ndarray
+        a two or three dimensional array containing the v velocity component,
+        where spurious vectors have been replaced by NaN.
+
+    w : 2d or 3d  np.ndarray
+        optional, a two or three dimensional array containing the w (in z-direction) velocity component.
         where spurious vectors have been replaced by NaN.
         
     mask : boolean 2d np.ndarray 
@@ -165,14 +171,15 @@ def sig2noise_val(u, v, sig2noise, threshold=1.3):
 
     u[ind] = np.nan
     v[ind] = np.nan
+    if isinstance(w, np.ndarray):
+        w[ind] = np.nan
+        return u, v, w, ind
 
-    mask = np.zeros(u.shape, dtype=bool)
-    mask[ind] = True
-
-    return u, v, mask
+    return u, v, ind
 
 
-def local_median_val(u, v, u_threshold, v_threshold, size=1):
+
+def local_median_val( u, v, u_threshold, v_threshold, size=1 ):
     """Eliminate spurious vectors with a local median threshold.
     
     This validation method tests for the spatial consistency of the data.
@@ -208,16 +215,16 @@ def local_median_val(u, v, u_threshold, v_threshold, size=1):
         a boolean array. True elements corresponds to outliers.
         
     """
-
-    um = median_filter(u, size=2 * size + 1)
-    vm = median_filter(v, size=2 * size + 1)
-
-    ind = (np.abs((u - um)) > u_threshold) | (np.abs((v - vm)) > v_threshold)
-
+    
+    um = median_filter( u, size=2*size+1 )
+    vm = median_filter( v, size=2*size+1 )
+    
+    ind = (np.abs( (u-um) ) > u_threshold) | (np.abs( (v-vm) ) > v_threshold)
+    
     u[ind] = np.nan
     v[ind] = np.nan
-
+    
     mask = np.zeros(u.shape, dtype=bool)
     mask[ind] = True
-
+    
     return u, v, mask

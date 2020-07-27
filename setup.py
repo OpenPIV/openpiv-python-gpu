@@ -19,9 +19,7 @@ except ImportError:
     pass
 
 extensions = [
-    Extension("openpiv.process", ["./openpiv/process.pyx"], include_dirs=[numpy.get_include()]),
-    Extension("openpiv.lib", ["./openpiv/lib.pyx"], include_dirs=[numpy.get_include()])
-]
+    Extension("openpiv.process",["./openpiv/process.pyx"],include_dirs = [numpy.get_include()])]
 
 if GPU_SUPPORT == True:
     gpu_module = Extension(name="openpiv.gpu_process",
@@ -39,10 +37,10 @@ with open(path.join(this_directory, 'README.md')) as f:
     long_description = f.read()
 
 setup(
-    name="OpenPIV",
-    version='0.21.9',
-    cmdclass={'build_ext': build_ext},
-    ext_modules=extensions,
+    name = "OpenPIV",
+    version ='0.22.2',
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = extensions,
     packages=find_packages(),
     include_package_data=True,
     setup_requires=[
@@ -58,8 +56,11 @@ setup(
         'scikit-image',
         'progressbar2',
         'scipy',
+        'natsort',
+        'GitPython',
+        'pytest'
     ],
-    classifiers=[
+    classifiers = [
         # PyPI-specific version type. The number specified here is a magic constant
         # with no relation to this application's version numbering scheme. *sigh*
         'Development Status :: 4 - Beta',

@@ -13,11 +13,10 @@
 # ---
 
 # %% [markdown]
-# # OpenPIV tutorial 1
+# # OpenPIV on the bridgepile_wake
 #
-#
-# In this tutorial we read the pair of images using `imread`, compare them visually 
-# and process using OpenPIV. Here the import is using directly the basic functions and methods
+# See the post on LinkedIn by Stefano Brizzolara
+# https://www.linkedin.com/posts/stefano-brizzolara-6a8501198_rheinfall-flowvisualization-ugcPost-6672832128742408192-lRub
 
 # %%
 from openpiv import tools, process, validation, filters, scaling 
@@ -30,8 +29,8 @@ import imageio
 
 
 # %%
-frame_a  = tools.imread( '../test1/exp1_001_a.bmp' )
-frame_b  = tools.imread( '../test1/exp1_001_b.bmp' )
+frame_a  = tools.imread( '~/Downloads/bridgepile_wake/frame0001.tif' )
+frame_b  = tools.imread( '~/Downloads/bridgepile_wake/frame0011.tif' )
 
 # %%
 fig,ax = plt.subplots(1,2,figsize=(12,10))
@@ -40,10 +39,10 @@ ax[1].imshow(frame_b,cmap=plt.cm.gray)
 
 
 # %%
-winsize = 24 # pixels
-searchsize = 64  # pixels, search in image B
-overlap = 12 # pixels
-dt = 0.02 # sec
+winsize = 48 # pixels
+searchsize = 96  # pixels, search in image B
+overlap = 24 # pixels
+dt = 1./30 # sec, assume 30 fps
 
 
 u0, v0, sig2noise = process.extended_search_area_piv( frame_a.astype(np.int32), frame_b.astype(np.int32), window_size=winsize, overlap=overlap, dt=dt, search_area_size=searchsize, sig2noise_method='peak2peak' )
@@ -52,24 +51,25 @@ u0, v0, sig2noise = process.extended_search_area_piv( frame_a.astype(np.int32), 
 x, y = process.get_coordinates( image_size=frame_a.shape, window_size=winsize, overlap=overlap )
 
 # %%
-u1, v1, mask = validation.sig2noise_val( u0, v0, sig2noise, threshold = 1.3 )
+u1, v1, mask = validation.sig2noise_val( u0, v0, sig2noise, threshold = 1.15)
 
 # %%
 u2, v2 = filters.replace_outliers( u1, v1, method='localmean', max_iter=10, kernel_size=2)
 
 # %%
-x, y, u3, v3 = scaling.uniform(x, y, u2, v2, scaling_factor = 96.52 )
+x, y, u3, v3 = scaling.uniform(x, y, u2, v2, scaling_factor = 1. )
 
 # %%
 tools.save(x, y, u3, v3, mask, 'exp1_001.txt' )
 
 # %%
-tools.display_vector_field('exp1_001.txt', scale=50, width=0.0025)
+# tools.display_vector_field('exp1_001.txt', scaling_factor=100., width=0.0025)
 
 # %%
 # If you need a larger view:
-
 fig, ax = plt.subplots(figsize=(12,12))
-tools.display_vector_field('exp1_001.txt', ax=ax, scaling_factor=96.52, scale=50, width=0.0025, on_img=True, image_name='../test1/exp1_001_a.bmp');
+tools.display_vector_field('exp1_001.txt', ax=ax, scaling_factor=1.0, scale=3500, width=0.0045, on_img=True, image_name='~/Downloads/bridgepile_wake/frame0001.tif');
+
+# %%
 
 # %%

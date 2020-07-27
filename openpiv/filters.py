@@ -93,8 +93,9 @@ def gaussian( u, v, half_width=1) :
     uf = convolve( u, g, mode='same')
     vf = convolve( v, g, mode='same')
     return uf, vf
-    
-def replace_outliers( u, v, method='localmean', max_iter=5, tol=1e-3, kernel_size=1):
+
+
+def replace_outliers( u, v, w=None, method='localmean', max_iter=5, tol=1e-3, kernel_size=1):
     """Replace invalid vectors in an velocity field using an iterative image inpainting algorithm.
     
     The algorithm is the following:
@@ -110,15 +111,18 @@ def replace_outliers( u, v, method='localmean', max_iter=5, tol=1e-3, kernel_siz
     Parameters
     ----------
     
-    u : 2d np.ndarray
+    u : 2d or 3d np.ndarray
         the u velocity component field
         
-    v : 2d np.ndarray
+    v : 2d or 3d  np.ndarray
         the v velocity component field
+
+    w : 2d or 3d  np.ndarray
+        the w velocity component field
         
     max_iter : int
         the number of iterations
-    fil
+
     kernel_size : int
         the size of the kernel, default is 1
         
@@ -127,16 +131,24 @@ def replace_outliers( u, v, method='localmean', max_iter=5, tol=1e-3, kernel_siz
         
     Returns
     -------
-    uf : 2d np.ndarray
+    uf : 2d or 3d np.ndarray
         the smoothed u velocity component field, where invalid vectors have been replaced
         
-    vf : 2d np.ndarray
-        the smoothed v velocity component field, where invalid vectors have been replaced    
+    vf : 2d or 3d np.ndarray
+        the smoothed v velocity component field, where invalid vectors have been replaced
+
+    wf : 2d or 3d np.ndarray
+        the smoothed w velocity component field, where invalid vectors have been replaced
         
     """
-    uf = u.copy()
-    vf = v.copy()
-    uf = replace_nans( uf, method=method, max_iter=max_iter, tol=tol, kernel_size=kernel_size )
-    vf = replace_nans( vf, method=method, max_iter=max_iter, tol=tol, kernel_size=kernel_size )
-    
+    uf = replace_nans(u, method=method, max_iter=max_iter, tol=tol, kernel_size=kernel_size)
+    vf = replace_nans(v, method=method, max_iter=max_iter, tol=tol, kernel_size=kernel_size)
+
+    if isinstance(w, np.ndarray):
+        wf = replace_nans(w, method=method, max_iter=max_iter, tol=tol, kernel_size=kernel_size)
+        return uf, vf, wf
+
     return uf, vf
+
+
+

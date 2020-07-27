@@ -5,11 +5,11 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.4.2
+#       jupytext_version: 1.5.0
 #   kernelspec:
-#     display_name: Python [conda env:openpiv] *
+#     display_name: Python [conda env:test] *
 #     language: python
-#     name: conda-env-openpiv-py
+#     name: conda-env-test-py
 # ---
 
 # %% [markdown]
@@ -62,7 +62,3 @@ for test in list_of_tests:
     
     openpiv_default_run(list_of_images[0],list_of_images[1])
 
-
-# %%
-
-# %%
