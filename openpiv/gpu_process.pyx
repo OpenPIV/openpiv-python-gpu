@@ -230,7 +230,7 @@ class CorrelationFunction:
         self.data = self._correlate_windows(d_win_a_zp, d_search_area_zp)
 
         # get first peak of correlation function
-        self.row, self.col, self.corr_max1 = self._find_peak(self.data)
+        self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
 
 
     def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_search_area, d_shift):
@@ -564,7 +564,7 @@ class CorrelationFunction:
         """
         # Reshape matrix
         array_reshape = array.reshape(self.batch_size, self.nfft ** 2)
-        s = self.nfft
+        cdef int s = self.nfft
 
         # Get index and value of peak
         ind = np.argmax(array_reshape, axis=1)
@@ -576,14 +576,14 @@ class CorrelationFunction:
 
         # return the center if the correlation peak is zero
         w = s / 2
-        c_idx = np.asarray(array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum).nonzero()
+        c_idx = np.asarray((array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum)).nonzero()
         row[c_idx] = w
         col[c_idx] = w
 
         return row, col, maximum
 
 
-    def _find_second_peak(self, width):
+    def _find_second_peak(self, int width):
         """Find the value of the second largest peak.
 
         The second largest peak is the height of the peak in the region outside a ``width * width`` submatrix around
@@ -605,17 +605,18 @@ class CorrelationFunction:
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
 
-        # TODO When the try statement fails, this can leave lot of points unmasked that
-        # should be masked. Must find a better way to do the masking.
-
+        # TODO When the try statement fails, this can leave lot of points unmasked that should be masked. Must find a better way to do the masking.
         # set (width x width) square submatrix around the first correlation peak as masked
         tmp_len = range(self.batch_size)
+
+        cdef Py_ssize_t i
+        cdef Py_ssize_t j
         for i in range(-width, width + 1):
             for j in range(-width, width + 1):
                 try:
-                    tmp[tmp_len, self.row + i, self.col + j ] = ma.masked
+                    tmp[tmp_len, self.p_row + i, self.p_col + j] = ma.masked
                 except IndexError:
-                    pass
+                    print('########## mask index error! ##########')
 
         row2, col2, corr_max2 = self._find_peak(tmp)
 
@@ -647,8 +648,8 @@ class CorrelationFunction:
 
         # cast corr and row as a ctype array
         cdef np.ndarray[DTYPEf_t, ndim=3] corr_c = np.array(self.data, dtype=DTYPEf)
-        cdef np.ndarray[DTYPEf_t, ndim=1] row_c = np.array(self.row, dtype=DTYPEf)
-        cdef np.ndarray[DTYPEf_t, ndim=1] col_c = np.array(self.col, dtype=DTYPEf)
+        cdef np.ndarray[DTYPEf_t, ndim=1] row_c = np.array(self.p_row, dtype=DTYPEf)
+        cdef np.ndarray[DTYPEf_t, ndim=1] col_c = np.array(self.p_col, dtype=DTYPEf)
 
         # Define arrays to store the data
         cdef np.ndarray[DTYPEf_t, ndim=1] row_sp = np.empty(self.batch_size, dtype=DTYPEf)
@@ -656,10 +657,10 @@ class CorrelationFunction:
 
         # TODO figure out what this means
         # Move boundary peaks inward one node. Replace later in sig2noise
-        row_tmp = np.copy(self.row)
+        row_tmp = np.copy(self.p_row)
         row_tmp[row_tmp < 1] = 1
         row_tmp[row_tmp > self.nfft - 2] = self.nfft - 2
-        col_tmp = np.copy(self.col)
+        col_tmp = np.copy(self.p_col)
         col_tmp[col_tmp < 1] = 1
         col_tmp[col_tmp > self.nfft - 2] = self.nfft - 2
 
@@ -736,8 +737,8 @@ class CorrelationFunction:
 
         # if the first peak is on the borders, the correlation map is wrong
         # return zero, since we have no signal.
-        sig2noise[np.array(self.row==0)*np.array(self.row==self.data.shape[1])
-                 * np.array(self.col==0)*np.array(self.col==self.data.shape[2])] = 0.0
+        sig2noise[np.array(self.p_row == 0) * np.array(self.p_row == self.data.shape[1])
+                  * np.array(self.p_col == 0) * np.array(self.p_col == self.data.shape[2])] = 0.0
 
         return sig2noise.reshape(self.n_rows, self.n_cols)
 
@@ -1036,11 +1037,8 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     # MAIN LOOP
     ####################################################
     for K in range(nb_iter_max):
-        # print(" ")
         print("//////////////////////////////////////////////////////////////////")
-        # print(" ")
         print("ITERATION # {}".format(K))
-        # print(" ")
 
         residual = 0
 
@@ -1097,7 +1095,6 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             # real validation starts
             for i in range(nb_validation_iter):
                 print("Validation iteration {}.".format(i))
-                # print(" ")
 
                 # reset validation list
                 validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
@@ -1140,13 +1137,12 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             # delete old correlation function
             del c, d_f
             # end(start_time)
-            return x, y, u, v
+            return x, y, u, v, mask, sig2noise
         #############################################################################
 
         # go to next iteration: compute the predictors dpx and dpy from the current displacements
         print("Going to next iteration...")
         print("Performing interpolation of the displacement field for next iteration predictors")
-        # print(" ")
 
         if n_row[K+1] == n_row[K] and n_col[K+1] == n_col[K]:
              d_f[K+1, :n_row[K+1], :n_col[K+1], 6] = gpu_round(d_f[K, :n_row[K], :n_col[K], 4].copy()) #dpx_k+1=dx_k
