@@ -175,9 +175,9 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_frame_a, d_frame_b: 2d gpu arrays - float32
+        d_frame_a, d_frame_b : 2d gpu arrays - float32
             image pair
-        window_size: int
+        window_size : int
             size of the interrogation window
         overlap: int
             pixel overlap between interrogation windows
@@ -194,15 +194,15 @@ class CorrelationFunction:
         self.shape = d_frame_a.shape
         self.window_size = np.int32(window_size)
         self.overlap = np.int32(overlap)
-        self.n_rows, self.n_cols = np.int32(get_field_shape( self.shape, window_size, overlap ))
+        self.n_rows, self.n_cols = np.int32(get_field_shape(self.shape, window_size, overlap))
         self.batch_size = np.int32(self.n_rows*self.n_cols)
 
-        if nfftx is None:
-            self.nfft = np.int32(2*self.window_size)
-            assert (self.nfft&(self.nfft-1)) == 0, 'nfft must be power of 2'
+        if nfftx == 0:
+            self.nfft = np.int32(2 * self.window_size)
+            assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
         else:
             self.nfft = np.int32(nfftx)
-            assert (self.nfft&(self.nfft-1)) == 0, 'nfft must be power of 2'
+            assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
 
         ########################################################################################
 
@@ -213,7 +213,7 @@ class CorrelationFunction:
         d_search_area = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_search_area, d_shift)
 
-        #normalize array
+        # normalize array by computing the norm of each IW
         d_win_a_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         d_search_area_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         self._normalize_intensity(d_win_a, d_search_area, d_win_a_norm, d_search_area_norm)
@@ -222,8 +222,8 @@ class CorrelationFunction:
         # need this to index arrays apparently...
         d_win_a_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype=np.float32)
         d_search_area_zp = gpuarray.zeros_like(d_win_a_zp)
-        #d_win_a_zp[:, :end, :end] = d_win_a_norm.copy()
-        #d_search_area_zp[:, :end, :end] = d_search_area_norm.copy()
+        # d_win_a_zp[:, :end, :end] = d_win_a_norm.copy()
+        # d_search_area_zp[:, :end, :end] = d_search_area_norm.copy()
         self._zero_pad(d_win_a_norm, d_search_area_norm, d_win_a_zp, d_search_area_zp)
 
         # correlate Windows
@@ -240,16 +240,17 @@ class CorrelationFunction:
 
         Parameters
         -----------
-        d_frame_a, d_frame_b: 2D numpy arrays - float32
+        d_frame_a, d_frame_b : 2D numpy arrays - float32
             PIV image pair
-        d_win_a: 3D numpy array
-             All frame_a interrogation windows stacked on each other
-        d_search_area: 3D numpy array
-             All frame_b interrogation windows stacked on each other
-        d_shift
+        d_win_a : 3D numpy array
+            All frame_a interrogation windows stacked on each other
+        d_search_area : 3D numpy array
+            All frame_b interrogation windows stacked on each other
+        d_shift : gpuarray
+            shift of the second window
 
         """
-        #define window slice algorithm
+        # define window slice algorithm
         mod_ws = SourceModule("""
             __global__ void window_slice(float *input, float *output, int window_size, int overlap, int n_col, int w, int batch_size)
         {
@@ -265,7 +266,7 @@ class CorrelationFunction:
             for(int i=0; i<batch_size; i++)
             {
                 //indices of image to map from
-                f_range = (i/n_col*diff + ind_y)*w + (i%n_col)*diff + ind_x;
+                f_range = (i / n_col*diff + ind_y) * w + (i%n_col) * diff + ind_x;
 
                 //indices of new array to map to
                 w_range = i*IW_size + window_size*ind_y + ind_x;
@@ -307,7 +308,7 @@ class CorrelationFunction:
                 x_shift = x_shift*outside_range;
                 y_shift = y_shift*outside_range;
 
-                //indices of image to map from. Apply shift to pixels
+                // indices of image to map from. Apply shift to pixels
                 f_range = (i/n_col*diff + y_shift)*w + (i%n_col)*diff + x_shift;
 
                 // indices of image to map to
@@ -329,7 +330,7 @@ class CorrelationFunction:
 
         # for debugging
         assert self.window_size >= 8, "Window size is too small"
-        assert self.window_size%8 == 0, "Window size should be a multiple of 8"
+        assert self.window_size % 8 == 0, "Window size should be a multiple of 8"
 
         # gpu parameters
         # TODO this could be optimized
@@ -367,9 +368,9 @@ class CorrelationFunction:
         d_search_area : 3D gpuarray - float32
             stack of second frame IW's
         d_win_a_norm : 3D gpuarray - float32
-
+            the normalized intensity in the first window
         d_search_area_norm : 3D gpuarray - float32
-
+            the normalized intensity in the second window
 
         Returns
         -------
@@ -380,10 +381,10 @@ class CorrelationFunction:
         mod_norm = SourceModule("""
             __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size)
         {
-            //global thread id for 1D grid of 2D blocks
+            // global thread id for 1D grid of 2D blocks
             int threadId = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
 
-            //indices for mean matrix
+            // indices for mean matrix
             int meanId = threadId / iw_size;
 
             array_norm[threadId] = array[threadId] - mean[meanId];
@@ -446,11 +447,11 @@ class CorrelationFunction:
         mod_zp = SourceModule("""
             __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int batch_size)
             {
-                //indices for each IW
+                // indices for each IW
                 int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
                 int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
 
-                //number of pixels in each IW
+                // number of pixels in each IW
                 int IWsize = fft_size*fft_size;
                 int arr_size = window_size*window_size;
 
@@ -460,11 +461,11 @@ class CorrelationFunction:
 
                 for(i=0; i<batch_size; i++)
                 {
-                    //get range of values to map
+                    // get range of values to map
                     arr_range = i*arr_size + window_size*ind_y + ind_x;
                     zp_range = i*IWsize + fft_size*ind_y + ind_x;
 
-                    //apply the map
+                    // apply the map
                     array_zp[zp_range] = array[arr_range];
                 }
             }
@@ -493,9 +494,10 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_win_a_zp :
-
-        d_search_area_zp :
+        d_win_a_zp : gpuarray
+            first window
+        d_search_area_zp : gpuarray
+            second window
 
         Returns
         -------
@@ -509,8 +511,8 @@ class CorrelationFunction:
 
         # allocate space on gpu for FFTs
         d_win_i_fft = gpuarray.empty((self.batch_size, win_h, win_w), np.float32)
-        d_win_fft = gpuarray.empty((self.batch_size, win_h, win_w//2+1), np.complex64)
-        d_search_area_fft = gpuarray.empty((self.batch_size, win_h, win_w//2+1), np.complex64)
+        d_win_fft = gpuarray.empty((self.batch_size, win_h, win_w // 2 + 1), np.complex64)
+        d_search_area_fft = gpuarray.empty((self.batch_size, win_h, win_w // 2 + 1), np.complex64)
 
         # forward FFTs
         plan_forward = cu_fft.Plan((win_h, win_w), np.float32, np.complex64, self.batch_size)
@@ -521,14 +523,14 @@ class CorrelationFunction:
         d_win_fft = d_win_fft.conj()
         d_tmp = cu_misc.multiply(d_search_area_fft, d_win_fft)
 
-        #inverse transform
+        # inverse transform
         plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, np.float32, self.batch_size)
         cu_fft.ifft(d_tmp, d_win_i_fft, plan_inverse, True)
 
         # transfer back to cpu to do FFTshift
         corr = fftshift(d_win_i_fft.get().real, axes=(1, 2))
 
-        #free gpu memory
+        # free gpu memory
         d_win_i_fft.gpudata.free()
         d_win_fft.gpudata.free()
         d_search_area_fft.gpudata.free()
@@ -537,7 +539,7 @@ class CorrelationFunction:
         d_search_area_zp.gpudata.free()
 
         # delete classes for the plan for free any associated memory
-        del(plan_forward, plan_inverse)
+        del plan_forward, plan_inverse
 
         return corr
 
@@ -548,7 +550,7 @@ class CorrelationFunction:
         Parameters
         ----------
         array : ndarray
-            array of intensities
+            array that is image of the correlation function
 
         Returns
         -------
@@ -561,7 +563,7 @@ class CorrelationFunction:
 
         """
         # Reshape matrix
-        array_reshape = array.reshape(self.batch_size, self.nfft**2)
+        array_reshape = array.reshape(self.batch_size, self.nfft ** 2)
         s = self.nfft
 
         # Get index and value of peak
@@ -572,12 +574,17 @@ class CorrelationFunction:
         row = ind // s
         col = ind % s
 
+        # return the center if the correlation peak is zero
+        w = s / 2
+        c_idx = np.asarray(array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum).nonzero()
+        row[c_idx] = w
+        col[c_idx] = w
+
         return row, col, maximum
 
 
     def _find_second_peak(self, width):
-        """
-        Find the value of the second largest peak.
+        """Find the value of the second largest peak.
 
         The second largest peak is the height of the peak in the region outside a ``width * width`` submatrix around
         the first correlation peak.
@@ -603,20 +610,20 @@ class CorrelationFunction:
 
         # set (width x width) square submatrix around the first correlation peak as masked
         tmp_len = range(self.batch_size)
-        for i in range(-width, width+1):
-            for j in range(-width, width+1):
+        for i in range(-width, width + 1):
+            for j in range(-width, width + 1):
                 try:
                     tmp[tmp_len, self.row + i, self.col + j ] = ma.masked
                 except IndexError:
                     pass
 
-        row2, col2, corr_max2 = self._find_peak( tmp )
+        row2, col2, corr_max2 = self._find_peak(tmp)
 
         return corr_max2
 
 
     def subpixel_peak_location(self):
-        """Find subpixel peak Approximation using Gaussian method
+        """Find subpixel peak approximation using Gaussian method
 
         Inputs
         ------
@@ -638,7 +645,7 @@ class CorrelationFunction:
         # Define small number to replace zeros and get rid of warnings in calculations
         cdef DTYPEf_t small = 1e-20
 
-        #cast corr and row as a ctype array
+        # cast corr and row as a ctype array
         cdef np.ndarray[DTYPEf_t, ndim=3] corr_c = np.array(self.data, dtype=DTYPEf)
         cdef np.ndarray[DTYPEf_t, ndim=1] row_c = np.array(self.row, dtype=DTYPEf)
         cdef np.ndarray[DTYPEf_t, ndim=1] col_c = np.array(self.col, dtype=DTYPEf)
@@ -658,10 +665,10 @@ class CorrelationFunction:
 
         # Initialize arrays
         cdef np.ndarray[DTYPEf_t, ndim=1] c = corr_c[range(self.batch_size), row_tmp, col_tmp]
-        cdef np.ndarray[DTYPEf_t, ndim=1] cl = corr_c[range(self.batch_size), row_tmp-1, col_tmp]
-        cdef np.ndarray[DTYPEf_t, ndim=1] cr = corr_c[range(self.batch_size), row_tmp+1, col_tmp]
-        cdef np.ndarray[DTYPEf_t, ndim=1] cd = corr_c[range(self.batch_size), row_tmp, col_tmp-1]
-        cdef np.ndarray[DTYPEf_t, ndim=1] cu = corr_c[range(self.batch_size), row_tmp, col_tmp+1]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cl = corr_c[range(self.batch_size), row_tmp - 1, col_tmp]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cr = corr_c[range(self.batch_size), row_tmp + 1, col_tmp]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cd = corr_c[range(self.batch_size), row_tmp, col_tmp - 1]
+        cdef np.ndarray[DTYPEf_t, ndim=1] cu = corr_c[range(self.batch_size), row_tmp, col_tmp + 1]
 
         # Get rid of values that are zero or lower
         cdef np.ndarray[DTYPEf_t, ndim=1] non_zero = np.array(c > 0, dtype=DTYPEf)
@@ -672,8 +679,8 @@ class CorrelationFunction:
         cu[cu <= 0] = small
 
         # Do subpixel approximation. Add small to avoid zero divide.
-        row_sp = row_c + ( (np.log(cl)-np.log(cr) )/( 2*np.log(cl) - 4*np.log(c) + 2*np.log(cr) + small ))*non_zero
-        col_sp = col_c + ( (np.log(cd)-np.log(cu) )/( 2*np.log(cd) - 4*np.log(c) + 2*np.log(cu) + small))*non_zero
+        row_sp = row_c + ((np.log(cl) - np.log(cr))/(2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero
+        col_sp = col_c + ((np.log(cd) - np.log(cu))/(2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero
 
         return row_sp, col_sp
 
@@ -718,19 +725,19 @@ class CorrelationFunction:
         corr_max2[corr_max2 == 0.0] = 1e-20
 
         # get signal to noise ratio
-        sig2noise = self.corr_max1/corr_max2
+        sig2noise = self.corr_max1 / corr_max2
 
         # get rid of nan values. Set sig2noise to zero
         sig2noise[np.isnan(sig2noise)] = 0.0
 
         # if the image is lacking particles, it will correlate to very low value, but not zero
         # return zero, since we have no signal.
-        sig2noise[self.corr_max1 <  1e-3] = 0.0
+        sig2noise[self.corr_max1 < 1e-3] = 0.0
 
         # if the first peak is on the borders, the correlation map is wrong
         # return zero, since we have no signal.
         sig2noise[np.array(self.row==0)*np.array(self.row==self.data.shape[1])
-                 *np.array(self.col==0)*np.array(self.col==self.data.shape[2])] = 0.0
+                 * np.array(self.col==0)*np.array(self.col==self.data.shape[2])] = 0.0
 
         return sig2noise.reshape(self.n_rows, self.n_cols)
 
@@ -751,13 +758,13 @@ def get_field_shape(image_size, window_size, overlap):
 
     Parameters
     ----------
-    image_size: two elements tuple
+    image_size : two elements tuple
         a two dimensional tuple for the pixel size of the image
         first element is number of rows, second element is
         the number of columns.
-    window_size: int
+    window_size : int
         the size of the interrogation window.
-    overlap: int
+    overlap : int
         the number of pixel by which two adjacent interrogation
         windows overlap.
 
@@ -767,19 +774,19 @@ def get_field_shape(image_size, window_size, overlap):
         the shape of the resulting flow field
 
     """
-    return ((image_size[0] - window_size)//(window_size-overlap)+1,
-             (image_size[1] - window_size)//(window_size-overlap)+1)
+    return ((image_size[0] - window_size) // (window_size-overlap) + 1,
+             (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 # TODO make mask functional
 ##################################################################
-def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
+def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
           np.ndarray[DTYPEi_t, ndim=2] frame_b,
-          np.ndarray[DTYPEi_t, ndim=2] mark,
           int nb_iter_max=2,
           int nb_refinement_iter=1,
           int min_window_size=16,
           float overlap_ratio=0.5,
           float dt=1,
+          np.ndarray[DTYPEi_t, ndim=2] mask=None,
           int trust_1st_iter=True,
           int nb_validation_iter=1,
           str validation_method='mean_velocity',
@@ -790,8 +797,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
           str subpixel_method='gaussian',
           str sig2noise_method='peak2peak',
           int width=2,
-          nfftx=None,
-          nffty=None):
+          int nfftx=0,
+          int nffty=0):
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
@@ -818,8 +825,6 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     frame_b : 2d np.ndarray, dtype=np.float32
         an two dimensions array of integers containing grey levels of
         the second frame.
-    mark : 2d np.ndarray, dtype=np.int32
-        an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     min_window_size : int
         the size of the minimum (final) (square) interrogation window.
     overlap_ratio : float
@@ -828,6 +833,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         how many times the window size refining processes happens.
     dt : float
         the time delay separating the two frames.
+    mask : 2d np.ndarray, dtype=np.int32
+        an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     validation_method : string
         the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
     trust_1st_iter : bool
@@ -916,7 +923,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cu_misc.init()
 
     # cast images as floats
-    #TODO changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
+    # TODO changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 
@@ -938,7 +945,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] w = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
-    pic_size = frame_a.shape
+    # ht, wd = frame_a.shape
+    ht, wd = frame_a.astype(np.float32).shape
 
     # window sizes list initialization
     for K in range(nb_refinement_iter + 1):
@@ -948,38 +956,40 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 
     # overlap init
     for K in range(nb_iter_max):
-        overlap[K]=int(np.floor(overlap_ratio*w[K]))
+        overlap[K] = int(np.floor(overlap_ratio * w[K]))
 
     # n_col and n_row init
     for K in range(nb_iter_max):
-        n_row[K]=((pic_size[0]-w[K])//(w[K]-overlap[K]))+1
-        n_col[K]=((pic_size[1]-w[K])//(w[K]-overlap[K]))+1
+        n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
+        n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
 
     # write the parameters to the screen
-    if nb_validation_iter==0:
+    if nb_validation_iter == 0:
         validation_method='None'
 
-    cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[pic_size[0], pic_size[1]], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
+    cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
 
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max-1], n_col[nb_iter_max-1], 13], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=4] f_check = np.zeros([nb_iter_max, n_row[nb_iter_max-1], n_col[nb_iter_max-1], 13], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f_check = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
 
     # define mask - bool arrays don't exist in cython so we go to lower level with cast
     # you can access mask with (<object>mask)[I,J]
-    cdef np.ndarray[DTYPEb_t, ndim=2, cast=True] mask = np.empty([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)  # changed type
+    # if mask is not None:
+    #     mask = some function that maps onto the vector field
+    # cdef np.ndarray[DTYPEb_t, ndim=2, cast=True] mask = np.ones([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)  # changed type
 
     # define u, v & x, y fields (only used as outputs of this program)
-    cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] y = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] y = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
     # define temporary arrays and reshaped arrays to store the correlation function output
-    cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1]*n_col[-1], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_row[-1]*n_col[-1], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
     # define array for signal to noise ratio
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
@@ -989,8 +999,8 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
     # cdef np.ndarray[DTYPEf_t, ndim=3] u_mean = np.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     # cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2,3,3], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3,3], dtype=DTYPEi)
+    cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
     #### GPU arrays###
 
@@ -1001,6 +1011,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
     d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     d_v_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
 
+    # TODO simplify these loops
     # initialize x and y values
     for K in range(nb_iter_max):
         for I in range(n_row[K]):
@@ -1008,13 +1019,13 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 # x unit vector corresponds to rows
                 # y unit vector corresponds to columns
                 if I == 0:
-                    f[K,I,J,0] = w[K] / 2 #init x on 1st row
+                    f[K, I, J, 0] = w[K] / 2  # init x on 1st row
                 else:
-                    f[K,I,J,0] = f[K,I-1,J,0] + w[K] - overlap[K] #init x
+                    f[K, I, J, 0] = f[K, I - 1, J, 0] + w[K] - overlap[K]  # init x
                 if J == 0:
-                    f[K,I,J,1] = w[K] / 2 #init y on first column
+                    f[K, I, J, 1] = w[K] / 2  # init y on first column
                 else:
-                    f[K,I,J,1] = f[K,I,J-1,1] + w[K] - overlap[K] #init y
+                    f[K, I, J, 1] = f[K, I, J - 1, 1] + w[K] - overlap[K]  # init y
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
@@ -1069,9 +1080,9 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         print(" --residual : ", (residual/np.float(n_row[K]*n_col[K]))/residual_0)
         """
 
-        #####################################################
+        #######################################################
         # validation of the velocity vectors with 3*3 filtering
-        #####################################################
+        #######################################################
 
         if K == 0 and trust_1st_iter:#1st iteration can generally be trusted if it follows the 1/4 rule
             print("No validation: trusting 1st iteration")
@@ -1129,7 +1140,7 @@ def WiDIM(np.ndarray[DTYPEi_t, ndim=2] frame_a,
             # delete old correlation function
             del c, d_f
             # end(start_time)
-            return x, y, u, v, (<object>mask)
+            return x, y, u, v
         #############################################################################
 
         # go to next iteration: compute the predictors dpx and dpy from the current displacements
@@ -1577,8 +1588,8 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
 
             int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
-            //Index for each IW in the F array
-            int F_idx = w_idx*fourth_dim;
+            // Index for each IW in the F array
+            int F_idx = w_idx * fourth_dim;
 
             F[F_idx + 2] = F[F_idx + 0] + F[F_idx + 6];
             F[F_idx + 3] = F[F_idx + 1] + F[F_idx + 7];
@@ -1586,11 +1597,11 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
             F[F_idx + 8] = i_peak[w_idx] - nfft / 2;
             F[F_idx + 9] = j_peak[w_idx] - nfft / 2;
 
-            //get new displacement prediction
+            // get new displacement prediction
             F[F_idx + 4] = F[F_idx + 6] + F[F_idx + 8];
             F[F_idx + 5] = F[F_idx + 7] + F[F_idx + 9];
 
-            //get new velocity vectors
+            // get new velocity vectors
             F[F_idx + 10] = F[F_idx + 5] / dt;
             F[F_idx + 11] = -F[F_idx + 4] / dt;
 
@@ -1602,8 +1613,6 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
     # make all arrays the proper data type
     i_peak = i_peak.astype(np.float32)
     j_peak = j_peak.astype(np.float32)
-    print(i_peak)
-    print(j_peak)
     sig2noise = sig2noise.astype(np.float32)
     nfft = np.int32(nfft)
     dt = np.float32(dt)
@@ -1669,8 +1678,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     mod_validation = SourceModule("""
     __global__ void s2n(int *val_list, float *sig2noise, float s2n_tol, int Nrow, int Ncol)
     {
-        //val_list : list of indices to be validated
-        //sig2noise : signal to noise ratio
+        // val_list : list of indices to be validated
+        // sig2noise : signal to noise ratio
         // s2n_tol : min sig2noise value
         // Ncol : number of columns in the
 
@@ -1777,9 +1786,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
 
     # get and launch rms
     mean_validation = mod_validation.get_function("mean_validation")
-    a = d_val_list.get()
-    print(a.size)
-    d_val_list = gpuarray.to_gpu(a)
     mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol,
                     block=(block_size, 1, 1), grid=(x_blocks, 1))
 
