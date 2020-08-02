@@ -617,6 +617,7 @@ class CorrelationFunction:
                     tmp[tmp_len, self.p_row + i, self.p_col + j] = ma.masked
                 except IndexError:
                     print('########## mask index error! ##########')
+                    print(tmp_len, self.p_row + i, self.p_col + j)
 
         row2, col2, corr_max2 = self._find_peak(tmp)
 
@@ -793,7 +794,7 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
           str validation_method='mean_velocity',
           int div_validation=True,
           float sig_tol=1.5,
-          float tolerance=1.5,
+          float mean_tolerance=1.5,
           float div_tolerance=0.1,
           str subpixel_method='gaussian',
           str sig2noise_method='peak2peak',
@@ -846,7 +847,7 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         Boolean - if 1 then the data wil be validated by calculating the divergence. If 0 then it will not be done.
     sig_tol : float
         threshold for signal to noise
-    tolerance : float
+    mean_tolerance : float
         the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
     div_tolerance : float
         Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptable.
@@ -1061,7 +1062,7 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
         j_peak[0:n_row[K], 0: n_col[K]] = np.reshape(j_tmp[0:n_row[K]*n_col[K]], (n_row[K], n_col[K]))
 
         # Get signal to noise ratio
-        sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
+        # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
 
         # update the field with new values
         # TODO check for nans in i_peak and j_peak
@@ -1100,7 +1101,7 @@ def widim(np.ndarray[DTYPEi_t, ndim=2] frame_a,
                 validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
                 # get list of places that need to be validated
-                validation_list[0:n_row[K], 0:n_col[K]], d_u_mean[K, 0:n_row[K], 0:n_col[K]], d_v_mean[K, 0:n_row[K], 0:n_col[K]] = gpu_validation(d_f, K, sig2noise[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], w[K], sig_tol, tolerance, div_tolerance)
+                validation_list[0:n_row[K], 0:n_col[K]], d_u_mean[K, 0:n_row[K], 0:n_col[K]], d_v_mean[K, 0:n_row[K], 0:n_col[K]] = gpu_validation(d_f, K, sig2noise[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], w[K], sig_tol, mean_tolerance, div_tolerance)
 
                 # do the validation
                 print('Validating {} out of {} vectors...'.format(n_row[-1] * n_col[-1] - np.sum(validation_list), n_row[K] * n_col[K]))
@@ -1665,7 +1666,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     Returns
     -------
     val_list : 2D array - int
-        list of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means no correction is needed
+        array of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means no correction is needed
     d_u_mean, d_v_mean : 2D gpuarray
         mean of the velocities surrounding each point in this iteration.
 
@@ -1692,29 +1693,29 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
         // val_list: list of locations where validation is needed
         // rms_u : rms u velocity of neighbours
         // rms_v : rms v velocity of neighbours
-        // mean_u: mean u velocity of neigbours
-        // mean_v: mean v velocity of neighbours
-        // u: u velocity at that point
-        // v: v velocity at that point
-        // Nrow, Ncol: number of rows and columns
+        // mean_u : mean u velocity of neighbours
+        // mean_v : mean v velocity of neighbours
+        // u : u velocity at that point
+        // v : v velocity at that point
+        // Nrow, Ncol : number of rows and columns
         // tol : validation tolerance. usually 1.5
 
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
-        if(w_idx >= Nrow*Ncol){return;}
+        if(w_idx >= Nrow * Ncol){return;}
 
-        int u_validation = ((u[w_idx] - u_mean[w_idx])/u_rms[w_idx] < tol);
-        int v_validation = ((v[w_idx] - v_mean[w_idx])/v_rms[w_idx] < tol);
+        int u_validation = ((u[w_idx] - u_mean[w_idx]) / u_rms[w_idx] < tol);
+        int v_validation = ((v[w_idx] - v_mean[w_idx]) / v_rms[w_idx] < tol);
 
         val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
 
     }
 
-    __global__ void div_validation(int *val_list, float *div,  int Nrow, int Ncol, float div_tol)
+    __global__ void div_validation(int *val_list, float *div, int Nrow, int Ncol, float div_tol)
     {
-        // u: u velocity
-        // v: v velocity
-        // w: window size
+        // u : u velocity
+        // v : v velocity
+        // w : window size
         // Nrow, Ncol: number of rows and columns
 
         int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
@@ -1768,9 +1769,9 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     # d_sig2noise = gpuarray.to_gpu(sig2noise)
     #
     # # Launch signal to noise kernel and free sig2noise data
-    # s2n = mod_validation.get_function("s2n")
-    # s2n(d_val_list, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    # d_sig2noise.gpudata.free()
+    # s2n = mod_validation.get_function("s2n")  # disabled by eric
+    # s2n(d_val_list, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))  # disabled by eric
+    # d_sig2noise.gpudata.free()  # disabled by eric
 
     ##########################
     # mean_velocity validation
@@ -1793,8 +1794,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, mean_tol, div_to
     # d_div, d_u, d_v = gpu_divergence(d_u, d_v, w, n_row, n_col)
     #
     # # launch divergence validation kernel
-    # div_validation = mod_validation.get_function("div_validation")
-    # div_validation(d_val_list, d_div, n_row, n_col, div_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    # div_validation = mod_validation.get_function("div_validation")  # disabled by eric
+    # div_validation(d_val_list, d_div, n_row, n_col, div_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))  # disabled by eric
 
     # return the final validation list
     val_list = d_val_list.get()

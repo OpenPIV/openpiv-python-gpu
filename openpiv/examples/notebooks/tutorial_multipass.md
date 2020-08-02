@@ -88,7 +88,7 @@ tools.display_vector_field('Y4-S3_Camera000398_b.txt')
 ```
 
 ```python
-x,y,u,v, mask = process.widim(frame_a.astype(np.int32), frame_b.astype(np.int32), ones_like(frame_a).astype(np.int32), min_window_size=32, overlap_ratio=0.25, nb_refinement_iter=0, dt=0.1, validation_method='mean_velocity', trust_1st_iter=0, nb_validation_iter=0, tolerance=0.7, nb_iter_max=1, sig2noise_method='peak2peak')
+x,y,u,v, mask = process.widim(frame_a.astype(np.int32), frame_b.astype(np.int32), ones_like(frame_a).astype(np.int32), min_window_size=32, overlap_ratio=0.25, nb_refinement_iter=0, dt=0.1, validation_method='mean_velocity', trust_1st_iter=0, nb_validation_iter=0, mean_tolerance=0.7, nb_iter_max=1, sig2noise_method='peak2peak')
 ```
 
 ```python
@@ -96,7 +96,7 @@ tools.save(x, y, u, v, zeros_like(u), 'Y4-S3_Camera000398_widim1.txt' )
 ```
 
 ```python
-x,y,u,v, mask = process.widim(frame_a.astype(np.int32), frame_b.astype(np.int32), ones_like(frame_a).astype(np.int32), min_window_size=16, overlap_ratio=0.25, nb_refinement_iter=2, dt=0.1, validation_method='mean_velocity', trust_1st_iter=1, nb_validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
+x,y,u,v, mask = process.widim(frame_a.astype(np.int32), frame_b.astype(np.int32), ones_like(frame_a).astype(np.int32), min_window_size=16, overlap_ratio=0.25, nb_refinement_iter=2, dt=0.1, validation_method='mean_velocity', trust_1st_iter=1, nb_validation_iter=2, mean_tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 ```
 
 ```python
