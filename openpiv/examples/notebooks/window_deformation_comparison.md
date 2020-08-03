@@ -183,7 +183,7 @@ for I in range(mark.shape[0]):
 #main algorithm
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    x,y,u,v, mask=process.widim( frame_a.astype(np.int32), frame_b.astype(np.int32), mark, min_window_size=16, overlap_ratio=0.0, nb_refinement_iter=2, dt=1, validation_method='mean_velocity', trust_1st_iter=1, nb_validation_iter=1, mean_tolerance=0.7, nb_iter_max=3, sig2noise_method='peak2peak')
+    x,y,u,v, mask=process.widim( frame_a.astype(np.int32), frame_b.astype(np.int32), mark, min_window_size=16, overlap_ratio=0.0, nb_refinement_iter=2, dt=1, validation_method='mean_velocity', trust_1st_iter=1, nb_validation_iter=1, mean_tol=0.7, nb_iter_max=3, sig2noise_method='peak2peak')
 
 #display results
 x, y, u, v = scaling.uniform(x, y, u, v, scaling_factor = scaling_factor )
