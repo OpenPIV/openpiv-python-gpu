@@ -990,7 +990,7 @@ def widim(frame_a,
         div_tol = 0
     print(sig2n_tol, median_tol, mean_tol, div_tol)
     if nb_validation_iter > 0:
-        assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise', 'mean_velocity' and 'divergence'."
+        assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
     else:
         validation_method='None'
 
