@@ -988,14 +988,13 @@ def widim(frame_a,
         mean_tol = 0
     if validation_method.find('divergence') == -1:
         div_tol = 0
-    print(sig2n_tol, median_tol, mean_tol, div_tol)
     if nb_validation_iter > 0:
         assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
     else:
         validation_method='None'
 
     # write the parameters to the screen
-    cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
+    # cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
 
     # define the main array f that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
