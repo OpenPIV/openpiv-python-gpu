@@ -1,3 +1,5 @@
+#cython: language_level=3
+
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
 
 import pycuda.gpuarray as gpuarray
@@ -914,17 +916,15 @@ def widim(frame_a,
                 --4th index represent the type of data stored at this point:
                             | 0 --> x         |
                             | 1 --> y         |
-                            | 2 --> xb        |
-                            | 3 --> yb        |
-                            | 4 --> dx        |
-                            | 5 --> dy        |
-                            | 6 --> dpx       |
-                            | 7 --> dpy       |
-                            | 8 --> dcx       |
-                            | 9 --> dcy       |
-                            | 10 --> u        |
-                            | 11 --> v        |
-                            | 12 --> sig2noise|
+                            | 2 --> dx        |
+                            | 3 --> dy        |
+                            | 4 --> dpx       |
+                            | 5 --> dpy       |
+                            | 6 --> dcx       |
+                            | 7 --> dcy       |
+                            | 8 --> u        |
+                            | 9 --> v        |
+                            | 10 --> sig2noise|
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -995,7 +995,7 @@ def widim(frame_a,
     # cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
 
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 11], dtype=DTYPEf)
     # cdef np.ndarray[DTYPEf_t, ndim=4] f_check = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
 
     # define mask - bool arrays don't exist in cython so we go to lower level with cast
@@ -1070,8 +1070,8 @@ def widim(frame_a,
         #################################################################################
 
         # Calculate second frame displacement (shift)
-        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 6].copy().astype(np.int32)  # xb=xa+dpx
-        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 7].copy().astype(np.int32)  # yb=ya+dpy
+        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 4].copy().astype(np.int32)  # xb=xa+dpx
+        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 5].copy().astype(np.int32)  # yb=ya+dpy
 
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfftx, d_shift=d_shift[:, :n_row[K], :n_col[K]].copy())
@@ -1103,7 +1103,7 @@ def widim(frame_a,
         # validation of the velocity vectors with 3 * 3 filtering
         #########################################################
 
-        if K == 0 and trust_1st_iter:#1st iteration can generally be trusted if it follows the 1/4 rule
+        if K == 0 and trust_1st_iter:  # 1st iteration can generally be trusted if it follows the 1/4 rule
             print("No validation: trusting 1st iteration")
         elif nb_validation_iter > 0:
             print("Starting validation...")
@@ -1149,8 +1149,8 @@ def widim(frame_a,
             # assemble the u, v and x, y fields for outputs
             x = f[K, :, :, 1]
             y = f[K, ::-1, :, 0]
-            u = f[K, :, :, 10]
-            v = f[K, :, :, 11]
+            u = f[K, :, :, 8]
+            v = f[K, :, :, 9]
 
             print("...[DONE]")
             print(" ")
@@ -1169,17 +1169,17 @@ def widim(frame_a,
         print("Going to next iteration...")
         print("Performing interpolation of the displacement field for next iteration predictors")
 
-        if n_row[K+1] == n_row[K] and n_col[K+1] == n_col[K]:
-             d_f[K+1, :n_row[K+1], :n_col[K+1], 6] = gpu_round(d_f[K, :n_row[K], :n_col[K], 4].copy()) #dpx_k+1=dx_k
-             d_f[K+1, :n_row[K+1], :n_col[K+1], 7] = gpu_round(d_f[K, :n_row[K], :n_col[K], 5].copy()) #dpy_k+1=dy_k
+        if n_row[K + 1] == n_row[K] and n_col[K + 1] == n_col[K]:
+             d_f[K+1, :n_row[K+1], :n_col[K+1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
+             d_f[K+1, :n_row[K+1], :n_col[K+1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
         # interpolate if dimensions do not agree
         else:
             v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
-            #interpolate velocity onto next iterations grid. Then take the floor as the predictor for the next step
-            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 4)
-            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 5)
-            d_f[K + 1, :, :, 6] = gpu_round(d_f[K + 1, :, :, 4].copy())
-            d_f[K + 1, :, :, 7] = gpu_round(d_f[K + 1, :, :, 5].copy())
+            # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
+            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
+            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
+            d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy())
+            d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy())
 
         # delete old correlation function
         del c
@@ -1232,19 +1232,19 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         d_v_tmp = gpu_array_index(d_v_mean[k, :, :].copy(), d_indices, np.float32, retain_list=True)
 
         # update the velocity values
-        d_f[k, :, :, 10] = gpu_index_update(d_f[k, :, :, 10].copy(), d_u_tmp, d_indices, retain_indices=True)
-        d_f[k, :, :, 11] = gpu_index_update(d_f[k, :, :, 11].copy(), d_v_tmp, d_indices)
+        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)  # u
+        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)  # v
 
         # TODO, you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
-        d_f[k, :, :, 4] = - d_f[k, :, :, 11].copy() * dt
-        d_f[k, :, :, 5] = d_f[k, :, :, 10].copy() * dt
+        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
+        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
 
     # case if different dimensions: interpolation using previous iteration
     elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
-        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 10)
-        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 11)
-        d_f[k, :, :, 4] = - d_f[k, :, :, 11].copy() * dt
-        d_f[k, :, :, 5] = d_f[k, :, :, 10].copy() * dt
+        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 8)  # u
+        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 9)  # v
+        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
+        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
 
     # case if same dimensions
     elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
@@ -1255,16 +1255,16 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         # update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
         # TODO - could replace with the mean of the previous values surrounding the point
-        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 10].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
-        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 11].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
+        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 8].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
+        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 9].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
 
-        d_f[k, :, :, 10] = gpu_index_update(d_f[k, :, :, 10].copy(), d_u_tmp, d_indices, retain_indices=True)  # changed by Eric
-        d_f[k, :, :, 11] = gpu_index_update(d_f[k, :, :, 11].copy(), d_v_tmp, d_indices)  # changed by Eric
+        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)  # changed by Eric
+        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)  # changed by Eric
 
         # d_F[K,:,:,10] = gpu_index_update(d_F[K,:,:,10].copy(), d_F[K-1,:,:,10].copy(), d_indices, ReturnIndices=True)  # original
         # d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_F[K-1,:,:,11].copy(), d_indices)  # original
-        d_f[k, :, :, 4] = - d_f[k, :, :, 11].copy() * dt
-        d_f[k, :, :, 5] = d_f[k, :, :, 10].copy() * dt
+        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
+        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
 
 
 def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
@@ -1442,7 +1442,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     # LEFT
     # if(False):
     if left_ind.size > 0:
-
         # get position data
         d_low_x, d_high_x = f_dichotomy_gpu(d_f[k:k + 2, :, 0, 0].copy(), k, "x_axis", d_left_ind, w, overlap, n_row, n_col)
 
@@ -1470,7 +1469,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     # RIGHT
     # if(False):
     if right_ind.size > 0:
-
         # get position data
         d_low_x, d_high_x = f_dichotomy_gpu(d_f[k:k + 2, :, 0, 0].copy(), k, "x_axis", d_right_ind, w, overlap, n_row, n_col)
 
@@ -1495,16 +1493,16 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 
 
     # ----------------------------CORNERS-----------------------------------
-    #top left
+    # top left
     if v_list[0, 0] == 1:
         d_f[k + 1, 0, 0, dat] = d_f[k, 0, 0, dat]
-    #top right
+    # top right
     if v_list[0, n_col[k + 1] - 1] == 1:
         d_f[k + 1, 0, int(n_col[k + 1] - 1), dat] = d_f[k, 0, int(n_col[k] - 1), dat]
-    #bottom left
+    # bottom left
     if v_list[n_row[k + 1] - 1, 0] == 1:
         d_f[k + 1, int(n_row[k + 1] - 1), 0, dat] = d_f[k, int(n_row[k] - 1), 0, dat]
-    #bottom right
+    # bottom right
     if v_list[n_row[k + 1] - 1, n_col[k + 1] - 1] == 1:
         d_f[k + 1, int(n_row[k + 1] - 1), int(n_col[k + 1] - 1), dat] = d_f[k, int(n_row[k] - 1), int(n_col[k] - 1), dat]
 
@@ -1607,22 +1605,19 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
             // Index for each IW in the F array
             int F_idx = w_idx * fourth_dim;
 
-            F[F_idx + 2] = F[F_idx + 0] + F[F_idx + 6];
-            F[F_idx + 3] = F[F_idx + 1] + F[F_idx + 7];
-
-            F[F_idx + 8] = i_peak[w_idx] - nfft / 2;
-            F[F_idx + 9] = j_peak[w_idx] - nfft / 2;
+            F[F_idx + 6] = i_peak[w_idx] - nfft / 2;
+            F[F_idx + 7] = j_peak[w_idx] - nfft / 2;
 
             // get new displacement prediction
-            F[F_idx + 4] = F[F_idx + 6] + F[F_idx + 8];
-            F[F_idx + 5] = F[F_idx + 7] + F[F_idx + 9];
+            F[F_idx + 2] = F[F_idx + 4] + F[F_idx + 6];
+            F[F_idx + 3] = F[F_idx + 5] + F[F_idx + 7];
 
             // get new velocity vectors
-            F[F_idx + 10] = F[F_idx + 5] / dt;
-            F[F_idx + 11] = -F[F_idx + 4] / dt;
+            F[F_idx + 8] = F[F_idx + 3] / dt;
+            F[F_idx + 9] = -F[F_idx + 2] / dt;
 
             // get sig2noise ratio
-            F[F_idx + 12] = sig2noise[w_idx];
+            F[F_idx + 10] = sig2noise[w_idx];
         }
         """)
 
@@ -1669,7 +1664,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         main loop array
     k : int
         iteration number
-    sig2noise: 2D array - float
+    sig2noise : 2D array - float
         signal to noise ratio of each velocity
     n_row, n_col : int
         number of rows and columns in the velocity field
@@ -1791,8 +1786,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     x_blocks = int(n_col * n_row / block_size + 1)
 
     # send velocity field to GPU
-    d_u = d_f[k, 0:n_row, 0:n_col, 10].copy()
-    d_v = d_f[k, 0:n_row, 0:n_col, 11].copy()
+    d_u = d_f[k, 0:n_row, 0:n_col, 8].copy()
+    d_v = d_f[k, 0:n_row, 0:n_col, 9].copy()
 
     # get neighbours information
     d_neighbours, d_neighbours_present = gpu_get_neighbours(d_u, d_v, n_row, n_col)
@@ -1834,7 +1829,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     #     d_neighbours.gpudata.free()
     #     d_u_norm.gpudata.free()
     #     d_v_norm.gpudata.free()
-    #     del d_neighbours, d_neighbours_present, d_u_norm, d_v_norm
+    #     del d_u_norm, d_v_norm
 
     ##########################
     # mean_velocity validation
@@ -1868,18 +1863,18 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     #     d_v.gpudata.free()
     #     d_div.gpudata.free()
     #     del d_u, d_v, d_div
-    #
-    # # return the final validation list
-    # val_list = d_val_list.get()
-    #
-    # # Free gpu memory
-    # d_val_list.gpudata.free()
-    #
-    # # Free gpu memory
-    # d_neighbours_present.gpudata.free()
-    # d_neighbours.gpudata.free()
-    #
-    # del d_val_list, d_neighbours, d_neighbours_present
+
+    # return the final validation list
+    val_list = d_val_list.get()
+
+    # Free gpu memory
+    d_val_list.gpudata.free()
+
+    # Free gpu memory
+    d_neighbours_present.gpudata.free()
+    d_neighbours.gpudata.free()
+
+    del d_val_list, d_neighbours, d_neighbours_present
 
     return val_list, d_u_mean, d_v_mean
 
@@ -2523,7 +2518,7 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
 
     # define gpu parameters
     block_size = 32
-    x_blocks = int(len(d_x1)//block_size + 1)
+    x_blocks = int(len(d_x1) // block_size + 1)
     n = np.int32(len(d_x1))
 
     d_f = gpuarray.zeros_like(d_x1, dtype=np.float32)
@@ -2748,9 +2743,8 @@ def gpu_floor(d_src, return_input=False):
     n = np.int32(d_src.size)
 
     # define gpu parameters
-    # block_size = 8
     block_size = 32
-    x_blocks = int(n//block_size + 1)
+    x_blocks = int(n // block_size + 1)
 
     # get and execute kernel
     floor_gpu = mod_floor.get_function("floor_gpu")
@@ -2795,7 +2789,7 @@ def gpu_round(d_src, retain_input=False):
         // Avoid the boundary
         if(t_id >= n){return;}
 
-        dest[t_id] = roundf(src[tid]);
+        dest[t_id] = roundf(src[t_id]);
     }
     """)
 
