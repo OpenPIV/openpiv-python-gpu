@@ -361,9 +361,8 @@ class CorrelationFunction:
             window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
             # free displacement GPU memory
-            # d_shift.gpudata.free()
-            # d_dx.gpudata.free()
-            # d_dy.gpudata.free()
+            d_dx.gpudata.free()
+            d_dy.gpudata.free()
 
     def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
         """Remove the mean from each IW of a 3D stack of IWs
@@ -496,8 +495,7 @@ class CorrelationFunction:
     def _correlate_windows(self, d_win_a_zp, d_win_b_zp):
         """Compute correlation function between two interrogation windows.
 
-        The correlation function can be computed by using the correlation
-        theorem to speed up the computation.
+        The correlation function can be computed by using the correlation theorem to speed up the computation.
 
         Parameters
         ----------
@@ -951,11 +949,18 @@ def widim(frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
     ht, wd = frame_a.shape
 
+    # # window sizes list initialization - old
+    # for K in range(nb_refinement_iter + 1):
+    #     w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
+    # for K in range(nb_refinement_iter + 1, nb_iter_max):
+    #     w[K] = w[K - 1]
+
     # window sizes list initialization
-    for K in range(nb_refinement_iter + 1):
-        w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
-    for K in range(nb_refinement_iter + 1, nb_iter_max):
-        w[K] = w[K - 1]
+    for K in range(0, nb_iter_max - nb_refinement_iter):
+        w[K] = np.power(2, nb_refinement_iter) * min_window_size
+    for K in range(nb_iter_max - nb_refinement_iter, nb_iter_max):
+        w[K] = np.power(2, nb_iter_max - K - 1) * min_window_size
+    print(w)
 
     # overlap init
     for K in range(nb_iter_max):
@@ -1132,8 +1137,8 @@ def widim(frame_a,
             print("Performing interpolation of the displacement field for next iteration predictors")
 
             if n_row[K + 1] == n_row[K] and n_col[K + 1] == n_col[K]:
-                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
-                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
+                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy())  # dpx_k+1 = dx_k
+                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy())  # dpy_k+1 = dy_k
             # interpolate if dimensions do not agree
             else:
                 v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
@@ -1576,7 +1581,6 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
 
     """
     mod_update = SourceModule("""
-
         __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int fourth_dim, float dt)
         {
             // F is where all the data is stored at a particular K
@@ -1646,7 +1650,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     Parameters
     ----------
-    d_f : GPUrray - 4D float
+    d_f : GPUArray - 4D float
         main loop array
     k : int
         iteration number
@@ -1667,11 +1671,11 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     Returns
     -------
-    val_list : gpuarray - 2D int
+    val_list : GPUArray - 2D int
         array of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means no correction is needed
-    d_u_mean : gpuarray - 2D
+    d_u_mean : GPUArray - 2D
         mean of the velocities surrounding each point in this iteration.
-    d_v_mean : gpuarray - 2D
+    d_v_mean : GPUArray - 2D
         mean of the velocities surrounding each point in this iteration.
 
     """
