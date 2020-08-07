@@ -816,8 +816,8 @@ def widim(frame_a,
     This is an iterative  method to cope with  the lost of pairs due to particles
     motion and get rid of the limitation in velocity range due to the window size.
     The possibility of window size coarsening is implemented.
-    Example : minimum window size of 16*16 pixels and coarse_level of 2 gives a 1st
-    iteration with a window size of 64*64 pixels, then 32*32 then 16*16.
+    Example : minimum window size of 16 * 16 pixels and coarse_level of 2 gives a 1st
+    iteration with a window size of 64 * 64 pixels, then 32 * 32 then 16 * 16.
         ----Algorithm : At each step, a predictor of the displacement (dp) is applied based on the results of the previous iteration.
                         Each window is correlated with a shifted window.
                         The displacement obtained from this correlation is the residual displacement (dc)
@@ -827,15 +827,15 @@ def widim(frame_a,
                             dpx_k+1 = dx_k
 
     References:
-    Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIVimage processing with discrete window offset. Exp Fluids 26:513–523
-    Meunier P, Leweke T (2003) Analysis and treatment of errors due tohigh velocity gradients in particle image velocimetry. Exp Fluids35:408–421
+    Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset. Exp Fluids 26:513–523
+    Meunier P, Leweke T (2003) Analysis and treatment of errors due to high velocity gradients in particle image velocimetry. Exp Fluids 35:408–421
 
     Parameters
     ----------
-    frame_a : 2d np.ndarray, dtype=np.float32
+    frame_a : array, 2D dtype=np.float32
         an two dimensions array of integers containing grey levels of
         the first frame.
-    frame_b : 2d np.ndarray, dtype=np.float32
+    frame_b : array, 2D dtype=np.float32
         an two dimensions array of integers containing grey levels of
         the second frame.
     min_window_size : int
@@ -886,9 +886,9 @@ def widim(frame_a,
     Returns
     -------
     x : array
-        2D, the x-axis component of the interpolations locations.
+        2D, the x-axis component of the interpolation locations.
     y : array
-        2D, the y-axis component of the interpolations locations.
+        2D, the y-axis component of the interpolation locations.
     u : array
         2D, the u velocity component, in pixels/seconds.
     v : array
@@ -939,20 +939,19 @@ def widim(frame_a,
     d_frame_b_f = gpuarray.to_gpu(frame_b_f)
 
     if nb_iter_max <= nb_refinement_iter:
-        raise ValueError( "Please provide a nb_iter_max that is greater than the coarse_level" )
+        raise ValueError("Please provide a nb_iter_max that is greater than the nb_refinement_iter")
     cdef int K  # main iteration index
     cdef int I, J  # interrogation locations indices
     cdef int L, M  # inside window indices
     cdef int O, P  # frame indices corresponding to I and J
-    cdef int i, j  # dumb indices for various works
+    cdef int i, j  # indices for various works
     cdef float mean_u, mean_v, rms_u, rms_v, residual_0, div
     cdef int residual, nb_w_ind
     cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] w = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
-    # ht, wd = frame_a.shape
-    ht, wd = frame_a.astype(np.float32).shape
+    ht, wd = frame_a.shape
 
     # window sizes list initialization
     for K in range(nb_refinement_iter + 1):
@@ -1062,25 +1061,25 @@ def widim(frame_a,
         #################################################################################
 
         # Calculate second frame displacement (shift)
-        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 4].copy()  # xb = xa + dpx
-        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 5].copy()  # yb = ya + dpy
+        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4].copy()  # xb = xa + dpx
+        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5].copy()  # yb = ya + dpy
 
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfftx, d_shift=d_shift[:, :n_row[K], :n_col[K]])
 
         # Get window displacement to subpixel accuracy
-        i_tmp[0:n_row[K] * n_col[K]], j_tmp[0:n_row[K] * n_col[K]] = c.subpixel_peak_location()
+        i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
 
         # reshape the peaks
-        i_peak[0:n_row[K], 0:n_col[K]] = np.reshape(i_tmp[0:n_row[K]*n_col[K]], (n_row[K], n_col[K]))
-        j_peak[0:n_row[K], 0:n_col[K]] = np.reshape(j_tmp[0:n_row[K]*n_col[K]], (n_row[K], n_col[K]))
+        i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+        j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
 
         # Get signal to noise ratio
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
 
         # update the field with new values
         # TODO check for nans in i_peak and j_peak
-        gpu_update(d_f, sig2noise[0:n_row[K], 0:n_col[K]], i_peak[0:n_row[K], 0:n_col[K]], j_peak[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], c.nfft, dt, K)
+        gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], c.nfft, dt, K)
 
         #################################################################################
         print("...[DONE]")
@@ -1094,7 +1093,7 @@ def widim(frame_a,
         # validation of the velocity vectors with 3 * 3 filtering
         #########################################################
         if K == 0 and trust_1st_iter:  # 1st iteration can generally be trusted if it follows the 1/4 rule
-            print("No validation: trusting 1st iteration")
+            print("No validation: trusting 1st iteration.")
         elif nb_validation_iter > 0:
             print("Starting validation...")
 
@@ -1111,7 +1110,7 @@ def widim(frame_a,
                 validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
                 # get list of places that need to be validated
-                validation_list[0:n_row[K], 0:n_col[K]], d_u_mean[K, 0:n_row[K], 0:n_col[K]], d_v_mean[K, 0:n_row[K], 0:n_col[K]] = gpu_validation(d_f, K, sig2noise[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], w[K], sig2n_tol, median_tol, mean_tol, div_tol)
+                validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], sig2n_tol, median_tol, mean_tol, div_tol)
 
                 # do the validation
                 n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
@@ -1123,10 +1122,11 @@ def widim(frame_a,
 
             print("...[DONE]")
             print(" ")
+
         # end of validation
 
         ##############################################################################
-        # nesxt iteration
+        # next iteration
         ##############################################################################
         if K < nb_iter_max - 1:
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
@@ -1134,8 +1134,8 @@ def widim(frame_a,
             print("Performing interpolation of the displacement field for next iteration predictors")
 
             if n_row[K + 1] == n_row[K] and n_col[K + 1] == n_col[K]:
-                 d_f[K+1, :n_row[K+1], :n_col[K+1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
-                 d_f[K+1, :n_row[K+1], :n_col[K+1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
+                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
+                 d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
             # interpolate if dimensions do not agree
             else:
                 v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
@@ -1148,7 +1148,7 @@ def widim(frame_a,
             # delete old correlation function
             del c
 
-            print("...[DONE] -----> going to iteration ", K+1)
+            print("...[DONE] -----> going to iteration ", K + 1)
             print(" ")
 
     ##############################################################################
@@ -1158,7 +1158,6 @@ def widim(frame_a,
     print("End of iterative process. Re-arranging vector fields...")
 
     f = d_f.get()
-    d_f.gpudata.free()
 
     # assemble the u, v and x, y fields for outputs
     k = nb_iter_max - 1
@@ -1173,6 +1172,8 @@ def widim(frame_a,
     # delete images from gpu memory
     d_frame_a_f.gpudata.free()
     d_frame_b_f.gpudata.free()
+    d_f.gpudata.free()
+    d_shift.gpudata.free()
 
     # delete old correlation function
     del c, d_f
