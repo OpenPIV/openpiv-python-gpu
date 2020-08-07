@@ -165,9 +165,8 @@ class CorrelationFunction:
     def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfftx, d_shift=None):
         """A class representing a cross correlation function.
 
-        NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU.
-        The GPU is referred to as the device, and therefore "d_" signifies that it
-        is a device variable. Please adhere to this standard as it makes developing
+        NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
+        and therefore "d_" signifies that it is a device variable. Please adhere to this standard as it makes developing
         and debugging much easier.
 
         Parameters
@@ -192,7 +191,7 @@ class CorrelationFunction:
         self.window_size = np.int32(window_size)
         self.overlap = np.int32(overlap)
         self.n_rows, self.n_cols = np.int32(get_field_shape(self.shape, window_size, overlap))
-        self.batch_size = np.int32(self.n_rows*self.n_cols)
+        self.batch_size = np.int32(self.n_rows * self.n_cols)
 
         if nfftx == 0:
             self.nfft = np.int32(2 * self.window_size)
@@ -207,24 +206,24 @@ class CorrelationFunction:
 
         # Return stack of all IWs
         d_win_a = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_search_area = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_search_area, d_shift)
+        d_win_b = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
+        self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift)
 
         # normalize array by computing the norm of each IW
         d_win_a_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_search_area_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        self._normalize_intensity(d_win_a, d_search_area, d_win_a_norm, d_search_area_norm)
+        d_win_b_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
+        self._normalize_intensity(d_win_a, d_win_b, d_win_a_norm, d_win_b_norm)
 
         # zero pad arrays
         # need this to index arrays apparently...
         d_win_a_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype=np.float32)
-        d_search_area_zp = gpuarray.zeros_like(d_win_a_zp)
+        d_win_b_zp = gpuarray.zeros_like(d_win_a_zp)
         # d_win_a_zp[:, :end, :end] = d_win_a_norm.copy()
-        # d_search_area_zp[:, :end, :end] = d_search_area_norm.copy()
-        self._zero_pad(d_win_a_norm, d_search_area_norm, d_win_a_zp, d_search_area_zp)
+        # d_win_b_zp[:, :end, :end] = d_win_b_norm.copy()
+        self._zero_pad(d_win_a_norm, d_win_b_norm, d_win_a_zp, d_win_b_zp)
 
         # correlate Windows
-        self.data = self._correlate_windows(d_win_a_zp, d_search_area_zp)
+        self.data = self._correlate_windows(d_win_a_zp, d_win_b_zp)
 
         # get first peak of correlation function
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
@@ -237,13 +236,13 @@ class CorrelationFunction:
 
         Parameters
         -----------
-        d_frame_a, d_frame_b : 2D numpy arrays - float32
+        d_frame_a, d_frame_b : GPUArray - 2D float32
             PIV image pair
-        d_win_a : 3D numpy array
+        d_win_a : GPUArray - 3D
             All frame_a interrogation windows stacked on each other
-        d_win_b : 3D numpy array
+        d_win_b : GPUArray - 3D
             All frame_b interrogation windows stacked on each other
-        d_shift : gpuarray
+        d_shift : GPUArray
             shift of the second window
 
         """
@@ -258,12 +257,12 @@ class CorrelationFunction:
             int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
-            // branchloop through each interrogation window
+            // loop through each interrogation window
 
             for(int i=0; i<batch_size; i++)
             {
                 // indices of image to map from
-                f_range = (i / n_col*diff + ind_y) * w + (i%n_col) * diff + ind_x;
+                f_range = (i / n_col * diff + ind_y) * w + (i%n_col) * diff + ind_x;
 
                 // indices of new array to map to
                 w_range = i * IW_size + window_size*ind_y + ind_x;
@@ -284,8 +283,8 @@ class CorrelationFunction:
             int y_shift;
 
             int IW_size = window_size * window_size;
-            int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
+            int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
+            int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
             //loop through each interrogation window
@@ -302,8 +301,8 @@ class CorrelationFunction:
                 int outside_range = (y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
 
                 // Get rid of values outside the range
-                x_shift = x_shift*outside_range;
-                y_shift = y_shift*outside_range;
+                x_shift = x_shift * outside_range;
+                y_shift = y_shift * outside_range;
 
                 // indices of image to map from. Apply shift to pixels
                 f_range = (i / n_col * diff + y_shift) * w + (i % n_col) * diff + x_shift;
@@ -322,8 +321,8 @@ class CorrelationFunction:
         w = np.int32(self.shape[1])
 
         # for debugging
-        assert self.window_size >= 8, "Window size is too small"
-        assert self.window_size % 8 == 0, "Window size should be a multiple of 8"
+        assert self.window_size >= 8, "Window size is too small."
+        assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
 
         # gpu parameters
         # TODO this could be optimized
@@ -356,9 +355,9 @@ class CorrelationFunction:
             d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
             d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
             np.save('dy_a',d_dy_a.get())
-            np.save('dx_a',d_dy_a.get())
-            np.save('dy_b',d_dy_a.get())
-            np.save('dx_b',d_dy_a.get())
+            np.save('dx_a',d_dx_a.get())
+            np.save('dy_b',d_dy_b.get())
+            np.save('dx_b',d_dx_b.get())
             window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
             window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
@@ -411,7 +410,7 @@ class CorrelationFunction:
         d_mean_b = cu_misc.mean(d_win_b.reshape(self.batch_size, iw_size), axis=1)
 
         # gpu kernel blocksize parameters
-        if d_win_a.size%(32 ** 2)==0:
+        if d_win_a.size % (32 ** 2) == 0:
             block_size = 32
         else:
             block_size = 8
@@ -558,7 +557,7 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        array : ndarray
+        array : array
             array that is image of the correlation function
 
         Returns
@@ -651,17 +650,8 @@ class CorrelationFunction:
     def subpixel_peak_location(self):
         """Find subpixel peak approximation using Gaussian method
 
-        Inputs
+        Returns
         ------
-        corr : array - 3D float
-            stack of all correlation functions
-        row : array - 1D int
-            row location of corr max
-        col : array - 1D int
-            column location of corr max
-
-        Outputs
-        -------
         row_sp : array - 1D float
             row max location to subpixel accuracy
         col_sp : array - 1D float
@@ -836,8 +826,9 @@ def widim(frame_a,
                         The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
                             dpx_k+1 = dx_k
 
-    Reference:
-        f. Scarano & M. L. Riethmuller, Iterative multigrid approach in PIV image processing with discrete window offset, Experiments in Fluids 26 (1999) 513-523
+    References:
+    Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIVimage processing with discrete window offset. Exp Fluids 26:513–523
+    Meunier P, Leweke T (2003) Analysis and treatment of errors due tohigh velocity gradients in particle image velocimetry. Exp Fluids35:408–421
 
     Parameters
     ----------
@@ -936,7 +927,6 @@ def widim(frame_a,
     ####################################################
     # INITIALIZATIONS
     ####################################################
-
     # Initialize skcuda miscellaneous library
     cu_misc.init()
 
@@ -948,7 +938,6 @@ def widim(frame_a,
     d_frame_a_f = gpuarray.to_gpu(frame_a_f)
     d_frame_b_f = gpuarray.to_gpu(frame_b_f)
 
-    # warnings.warn("deprecated", RuntimeWarning)
     if nb_iter_max <= nb_refinement_iter:
         raise ValueError( "Please provide a nb_iter_max that is greater than the coarse_level" )
     cdef int K  # main iteration index
@@ -969,7 +958,7 @@ def widim(frame_a,
     for K in range(nb_refinement_iter + 1):
         w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
     for K in range(nb_refinement_iter + 1, nb_iter_max):
-        w[K] = w[K-1]
+        w[K] = w[K - 1]
 
     # overlap init
     for K in range(nb_iter_max):
@@ -992,7 +981,7 @@ def widim(frame_a,
     if nb_validation_iter > 0:
         assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
     else:
-        validation_method='None'
+        validation_method = 'None'
 
     # write the parameters to the screen
     # cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
@@ -1094,7 +1083,6 @@ def widim(frame_a,
         gpu_update(d_f, sig2noise[0:n_row[K], 0:n_col[K]], i_peak[0:n_row[K], 0:n_col[K]], j_peak[0:n_row[K], 0:n_col[K]], n_row[K], n_col[K], c.nfft, dt, K)
 
         #################################################################################
-
         print("...[DONE]")
         print(" ")
         # if K==0:
@@ -1105,7 +1093,6 @@ def widim(frame_a,
         #########################################################
         # validation of the velocity vectors with 3 * 3 filtering
         #########################################################
-
         if K == 0 and trust_1st_iter:  # 1st iteration can generally be trusted if it follows the 1/4 rule
             print("No validation: trusting 1st iteration")
         elif nb_validation_iter > 0:
@@ -1139,57 +1126,58 @@ def widim(frame_a,
         # end of validation
 
         ##############################################################################
-        # stop process if this is the last iteration
+        # nesxt iteration
         ##############################################################################
+        if K < nb_iter_max - 1:
+            # go to next iteration: compute the predictors dpx and dpy from the current displacements
+            print("Going to next iteration...")
+            print("Performing interpolation of the displacement field for next iteration predictors")
 
-        if K == nb_iter_max - 1:
-            print("//////////////////////////////////////////////////////////////////")
-            print("End of iterative process. Re-arranging vector fields...")
-
-            f = d_f.get()
-            d_f.gpudata.free()
-
-            # assemble the u, v and x, y fields for outputs
-            x = f[K, :, :, 1]
-            y = f[K, ::-1, :, 0]
-            u = f[K, :, :, 8]
-            v = f[K, :, :, 9]
-
-            print("...[DONE]")
-            print(" ")
-
-            # delete images from gpu memory
-            d_frame_a_f.gpudata.free()
-            d_frame_b_f.gpudata.free()
+            if n_row[K + 1] == n_row[K] and n_col[K + 1] == n_col[K]:
+                 d_f[K+1, :n_row[K+1], :n_col[K+1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
+                 d_f[K+1, :n_row[K+1], :n_col[K+1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
+            # interpolate if dimensions do not agree
+            else:
+                v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
+                # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
+                gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
+                gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
+                d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy())
+                d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy())
 
             # delete old correlation function
-            del c, d_f
-            # end(start_time)
-            return x, y, u, v, mask, sig2noise
-        #############################################################################
+            del c
 
-        # go to next iteration: compute the predictors dpx and dpy from the current displacements
-        print("Going to next iteration...")
-        print("Performing interpolation of the displacement field for next iteration predictors")
+            print("...[DONE] -----> going to iteration ", K+1)
+            print(" ")
 
-        if n_row[K + 1] == n_row[K] and n_col[K + 1] == n_col[K]:
-             d_f[K+1, :n_row[K+1], :n_col[K+1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy()) #dpx_k+1=dx_k
-             d_f[K+1, :n_row[K+1], :n_col[K+1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy()) #dpy_k+1=dy_k
-        # interpolate if dimensions do not agree
-        else:
-            v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
-            # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
-            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
-            gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
-            d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy())
-            d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy())
+    ##############################################################################
+    # return the results
+    ##############################################################################
+    print("//////////////////////////////////////////////////////////////////")
+    print("End of iterative process. Re-arranging vector fields...")
 
-        # delete old correlation function
-        del c
+    f = d_f.get()
+    d_f.gpudata.free()
 
-        print("...[DONE] -----> going to iteration ", K+1)
-        print(" ")
+    # assemble the u, v and x, y fields for outputs
+    k = nb_iter_max - 1
+    x = f[k, :, :, 1]
+    y = f[k, ::-1, :, 0]
+    u = f[k, :, :, 8]
+    v = f[k, :, :, 9]
 
+    print("...[DONE]")
+    print(" ")
+
+    # delete images from gpu memory
+    d_frame_a_f.gpudata.free()
+    d_frame_b_f.gpudata.free()
+
+    # delete old correlation function
+    del c, d_f
+    # end(start_time)
+    return x, y, u, v, mask, sig2noise
 
 def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
     """Initiate the full GPU version of the validation and interpolation.
