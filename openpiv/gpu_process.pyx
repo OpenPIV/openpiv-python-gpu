@@ -23,7 +23,7 @@ ctypedef np.uint8_t DTYPEb_t
 DTYPEf = np.float32
 ctypedef np.float32_t DTYPEf_t
 
-
+# Note: this function almost certainly won't work anymore because of changes to CorrelationFunction
 # def gpu_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
 #             np.ndarray[DTYPEi_t, ndim=2] frame_b,
 #             int window_size,
@@ -186,7 +186,6 @@ class CorrelationFunction:
         """
         ########################################################################################
         # PARAMETERS FOR CORRELATION FUNCTION
-
         self.shape = d_frame_a.shape
         self.window_size = np.int32(window_size)
         self.overlap = np.int32(overlap)
@@ -670,7 +669,6 @@ class CorrelationFunction:
         cdef np.ndarray[DTYPEf_t, ndim=1] row_sp = np.empty(self.batch_size, dtype=DTYPEf)
         cdef np.ndarray[DTYPEf_t, ndim=1] col_sp = np.empty(self.batch_size, dtype=DTYPEf)
 
-        # TODO figure out what this means
         # Move boundary peaks inward one node. Replace later in sig2noise
         row_tmp = np.copy(self.p_row)
         row_tmp[row_tmp < 1] = 1
@@ -695,8 +693,8 @@ class CorrelationFunction:
         cu[cu <= 0] = small
 
         # Do subpixel approximation. Add small to avoid zero divide.
-        row_sp = row_c + ((np.log(cl) - np.log(cr))/(2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero
-        col_sp = col_c + ((np.log(cd) - np.log(cu))/(2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero
+        row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.nfft / 2
+        col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.nfft / 2
 
         return row_sp, col_sp
 
@@ -846,7 +844,7 @@ def widim(frame_a,
         how many times the window size refining processes happens.
     dt : float
         the time delay separating the two frames.
-    mask : 2d np.ndarray, dtype=np.int32
+    mask : array, 2D dtype=np.int32
         an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     validation_method : string
         the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
@@ -1079,7 +1077,7 @@ def widim(frame_a,
 
         # update the field with new values
         # TODO check for nans in i_peak and j_peak
-        gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], c.nfft, dt, K)
+        gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
 
         #################################################################################
         print("...[DONE]")
@@ -1558,7 +1556,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 ################################################################################
 #  CUDA GPU FUNCTIONS
 ################################################################################
-def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
+def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
     Parameters
@@ -1571,8 +1569,6 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
         correlation function peak at each iteration
     n_row, n_col : int
         number of rows and columns in the current iteration
-    nfft : int
-        size of the fft window
     dt : float
         time between images
     k : int
@@ -1581,14 +1577,13 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
     """
     mod_update = SourceModule("""
 
-        __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int fourth_dim, int nfft, float dt)
+        __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int fourth_dim, float dt)
         {
             // F is where all the data is stored at a particular K
             // i_peak / j_peak is the correlation peak location
             // sig2noise = sig2noise ratio from correlation function
             // cols = number of colums of IW's
             // fourth_dim  = size of the fourth dimension of F
-            // nfft = size of the fft window
             // dt = time step between frames
             // leap = 'leaps' to where the F iteration starts
 
@@ -1597,8 +1592,8 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
             // Index for each IW in the F array
             int F_idx = w_idx * fourth_dim;
 
-            F[F_idx + 6] = i_peak[w_idx] - nfft / 2;
-            F[F_idx + 7] = j_peak[w_idx] - nfft / 2;
+            F[F_idx + 6] = i_peak[w_idx];
+            F[F_idx + 7] = j_peak[w_idx];
 
             // get new displacement prediction
             F[F_idx + 2] = F[F_idx + 4] + F[F_idx + 6];
@@ -1617,7 +1612,6 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
     i_peak = i_peak.astype(np.float32)
     j_peak = j_peak.astype(np.float32)
     sig2noise = sig2noise.astype(np.float32)
-    nfft = np.int32(nfft)
     dt = np.float32(dt)
 
     # GPU parameters
@@ -1637,7 +1631,7 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
 
     # update the values
     update_values = mod_update.get_function("update_values")
-    update_values(d_f_tmp, d_i_peak, d_j_peak, d_sig2noise, fourth_dim, nfft, dt, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    update_values(d_f_tmp, d_i_peak, d_j_peak, d_sig2noise, fourth_dim, dt, block=(block_size, 1, 1), grid=(x_blocks, 1))
     d_f[k, 0:n_row, 0:n_col, :] = d_f_tmp
 
     # Free gpu memory
