@@ -1,18 +1,15 @@
-#cython: language_level=3
-
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
 
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
 import pycuda.autoinit
+import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
-import skcuda.cublas as cu_cublas
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import fftshift
-import time
 
 cimport numpy as np
 
@@ -347,10 +344,22 @@ class CorrelationFunction:
             d_dx = d_shift[1].copy()
             window_slice_shift = mod_ws.get_function("window_slice_shift")
 
-            # shift frame b
-            d_dy_b = d_dy.astype(np.int32)
-            d_dx_b = d_dx.astype(np.int32)
-            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            # # shift frame b
+            # d_dy_b = d_dy.astype(np.int32)
+            # d_dx_b = d_dx.astype(np.int32)
+            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+
+            # shift frames symmetrically
+            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
+            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
+            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
+            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
+            np.save('dy_a',d_dy_a.get())
+            np.save('dx_a',d_dy_a.get())
+            np.save('dy_b',d_dy_a.get())
+            np.save('dx_b',d_dy_a.get())
+            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
             window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
             # free displacement GPU memory
@@ -885,18 +894,16 @@ def widim(frame_a,
 
     Returns
     -------
-    x : 2d np.ndarray
-        a two dimensional array containing the x-axis component of the interpolations locations.
-    y : 2d np.ndarray
-        a two dimensional array containing the y-axis component of the interpolations locations.
-    u : 2d np.ndarray
-        a two dimensional array containing the u velocity component,
-        in pixels/seconds.
-    v : 2d np.ndarray
-        a two dimensional array containing the v velocity component,
-        in pixels/seconds.
-    mask : 2d np.ndarray
-        a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
+    x : array
+        2D, the x-axis component of the interpolations locations.
+    y : array
+        2D, the y-axis component of the interpolations locations.
+    u : array
+        2D, the u velocity component, in pixels/seconds.
+    v : array
+        2D, the v velocity component, in pixels/seconds.
+    mask : array
+        2D, a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
 
     Example
     -------
