@@ -147,7 +147,7 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
 
     # default to a number of cores equal to 37.5% or fewer of the available CPU cores (75% of physical cores)
     if num_processes is None:
-        num_processes = max(floor(cpu_count() * 0.75), 1)  # minimum 1 in case of low-spec machine
+        num_processes = max(cpu_count() - 1, 1)  # minimum 1 in case of low-spec machine
 
     # size of each partition is computed
     if items[0] is not None:
@@ -186,7 +186,7 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
         process.start()
         process_list.append(process)
 
-        # update the process number
+        # update the number of processes
         i += 1
 
         # check to see if process stops
