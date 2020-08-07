@@ -175,15 +175,15 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_frame_a, d_frame_b : 2d gpu arrays - float32
+        d_frame_a, d_frame_b : GPUArray - 2D float32
             image pair
         window_size : int
             size of the interrogation window
-        overlap: int
+        overlap : int
             pixel overlap between interrogation windows
         nfftx : int
             window size for fft
-        d_shift : 2D gpuarray ([dx, dy])
+        d_shift : GPUArray - 2D ([dx, dy])
             dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
             This is using the x-y convention of this code where x is the row and y is the column.
 
@@ -208,7 +208,7 @@ class CorrelationFunction:
 
         # START DOING CALCULATIONS
 
-        # Return stack of all IW's
+        # Return stack of all IWs
         d_win_a = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         d_search_area = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
         self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_search_area, d_shift)
@@ -233,7 +233,7 @@ class CorrelationFunction:
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
 
 
-    def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_search_area, d_shift):
+    def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift):
         """Creates a 3D array stack of all of the interrogation windows.
 
         This is necessary to do the FFTs all at once on the GPU.
@@ -244,7 +244,7 @@ class CorrelationFunction:
             PIV image pair
         d_win_a : 3D numpy array
             All frame_a interrogation windows stacked on each other
-        d_search_area : 3D numpy array
+        d_win_b : 3D numpy array
             All frame_b interrogation windows stacked on each other
         d_shift : gpuarray
             shift of the second window
@@ -269,7 +269,7 @@ class CorrelationFunction:
                 f_range = (i / n_col*diff + ind_y) * w + (i%n_col) * diff + ind_x;
 
                 // indices of new array to map to
-                w_range = i*IW_size + window_size*ind_y + ind_x;
+                w_range = i * IW_size + window_size*ind_y + ind_x;
 
                 output[w_range] = input[f_range];
             }
@@ -302,19 +302,19 @@ class CorrelationFunction:
 
                 // Get values outside window in a sneaky way. This array is 1 if the value is inside the window,
                 // and 0 if it is outside the window. Multiply This with the shifted value at end
-                int outside_range = ( y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
+                int outside_range = (y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
 
                 // Get rid of values outside the range
                 x_shift = x_shift*outside_range;
                 y_shift = y_shift*outside_range;
 
                 // indices of image to map from. Apply shift to pixels
-                f_range = (i/n_col*diff + y_shift)*w + (i%n_col)*diff + x_shift;
+                f_range = (i / n_col * diff + y_shift) * w + (i % n_col) * diff + x_shift;
 
                 // indices of image to map to
-                w_range = i*IW_size + window_size*ind_y + ind_x;
+                w_range = i*IW_size + window_size * ind_y + ind_x;
 
-                // Apply the mapping. Mulitply by outside_range to set values outside the window to zero!
+                // Apply the mapping. Multiply by outside_range to set values outside the window to zero!
                 output[w_range] = input[f_range]*outside_range;
             }
         }
@@ -323,10 +323,6 @@ class CorrelationFunction:
         # get field shapes
         h = np.int32(self.shape[0])
         w = np.int32(self.shape[1])
-
-        # transfer data to GPU
-        #d_frame_a = gpuarray.to_gpu(frame_a)
-        #d_frame_b = gpuarray.to_gpu(frame_b)
 
         # for debugging
         assert self.window_size >= 8, "Window size is too small"
@@ -339,43 +335,47 @@ class CorrelationFunction:
 
         # slice up windows
         window_slice = mod_ws.get_function("window_slice")
-        window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
         if d_shift is None:
-            window_slice(d_frame_b, d_search_area, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
         else:
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
             # This code is in row major order
             d_dy = d_shift[0].copy()
             d_dx = d_shift[1].copy()
-
             window_slice_shift = mod_ws.get_function("window_slice_shift")
-            window_slice_shift(d_frame_b, d_search_area, d_dx, d_dy, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+
+            # shift frame b
+            d_dy_b = d_dy.astype(np.int32)
+            d_dx_b = d_dx.astype(np.int32)
+            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
             # free displacement GPU memory
-            d_shift.gpudata.free()
-            d_dx.gpudata.free()
-            d_dy.gpudata.free()
+            # d_shift.gpudata.free()
+            # d_dx.gpudata.free()
+            # d_dy.gpudata.free()
 
-    def _normalize_intensity(self, d_win_a, d_search_area, d_win_a_norm, d_search_area_norm):
-        """Remove the mean from each IW of a 3D stack of IW's
+    def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
+        """Remove the mean from each IW of a 3D stack of IWs
 
         Parameters
         ----------
-        d_win_a : 3D gpuarray - float32
-            stack of first frame IW's
-        d_search_area : 3D gpuarray - float32
-            stack of second frame IW's
-        d_win_a_norm : 3D gpuarray - float32
+        d_win_a : GPUArray - 3D float32
+            stack of first frame IWs
+        d_win_b : GPUArray - 3D float32
+            stack of second frame IWs
+        d_win_a_norm : GPUArray - 3D float32
             the normalized intensity in the first window
-        d_search_area_norm : 3D gpuarray - float32
+        d_win_b_norm : GPUArray - 3D float32
             the normalized intensity in the second window
 
         Returns
         -------
-        norm : 3D gpuarray
-            stack of IW's with mean removed
+        norm : GPUArray - 3D
+            stack of IWs with mean removed
 
         """
         mod_norm = SourceModule("""
@@ -399,7 +399,7 @@ class CorrelationFunction:
 
         # get mean of each IW using skcuda
         d_mean_a = cu_misc.mean(d_win_a.reshape(self.batch_size, iw_size), axis=1)
-        d_mean_b = cu_misc.mean(d_search_area.reshape(self.batch_size, iw_size), axis=1)
+        d_mean_b = cu_misc.mean(d_win_b.reshape(self.batch_size, iw_size), axis=1)
 
         # gpu kernel blocksize parameters
         if d_win_a.size%(32 ** 2)==0:
@@ -410,37 +410,37 @@ class CorrelationFunction:
 
         assert d_win_a.size % (block_size ** 2) == 0, 'Not all windows are being normalized. Something wrong with block or grid size.'
 
-        # get function and norm IW's
+        # get function and norm IWs
         normalize = mod_norm.get_function('normalize')
         normalize(d_win_a, d_win_a_norm, d_mean_a, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
-        normalize(d_search_area, d_search_area_norm, d_mean_b, iw_size, block=(block_size, block_size, 1), grid=(grid_size,1))
+        normalize(d_win_b, d_win_b_norm, d_mean_b, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
 
         # free GPU memory
         d_mean_a.gpudata.free()
         d_mean_b.gpudata.free()
         d_win_a.gpudata.free()
-        d_search_area.gpudata.free()
+        d_win_b.gpudata.free()
 
 
-    def _zero_pad(self, d_win_a_norm, d_search_area_norm, d_win_a_zp, d_search_area_zp):
+    def _zero_pad(self, d_win_a_norm, d_win_b_norm, d_win_a_zp, d_win_b_zp):
         """Function that zero-pads an 3D stack of arrays for use with the skcuda FFT function.
 
         Parameters
         ----------
-        d_win_a_norm : 3D gpuarray - float32
+        d_win_a_norm : GPUArray - 3D float32
             array to be zero padded
-        d_search_area_norm : 3D gpuarray - float32
+        d_win_b_norm : GPUArray - 3D float32
             arrays to be zero padded
-        d_win_a_zp : 3D gpuarray - float32
+        d_win_a_zp : GPUArray - 3D float32
             array to be zero padded
-        d_search_area_zp : 3D gpuarray - float32
+        d_win_b_zp : GPUArray - 3D float32
             arrays to be zero padded
 
         Returns
         -------
-        d_winA_zp : 3D gpuarray
+        d_winA_zp : GPUArray - 3D
             initial array that has been zero padded
-        d_search_area_zp : 3D gpuarray
+        d_search_area_zp : GPUArray - 3D
             initial array that has been zero padded
 
         """
@@ -448,11 +448,11 @@ class CorrelationFunction:
             __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int batch_size)
             {
                 // indices for each IW
-                int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
-                int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
+                int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
+                int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
 
                 // number of pixels in each IW
-                int IWsize = fft_size*fft_size;
+                int IW_size = fft_size * fft_size;
                 int arr_size = window_size*window_size;
 
                 int zp_range;
@@ -462,8 +462,8 @@ class CorrelationFunction:
                 for(i=0; i<batch_size; i++)
                 {
                     // get range of values to map
-                    arr_range = i*arr_size + window_size*ind_y + ind_x;
-                    zp_range = i*IWsize + fft_size*ind_y + ind_x;
+                    arr_range = i * arr_size + window_size * ind_y + ind_x;
+                    zp_range = i * IW_size + fft_size * ind_y + ind_x;
 
                     // apply the map
                     array_zp[zp_range] = array[arr_range];
@@ -479,14 +479,14 @@ class CorrelationFunction:
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
         zero_pad(d_win_a_zp, d_win_a_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-        zero_pad(d_search_area_zp, d_search_area_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+        zero_pad(d_win_b_zp, d_win_b_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
         # Free GPU memory
         d_win_a_norm.gpudata.free()
-        d_search_area_norm.gpudata.free()
+        d_win_b_norm.gpudata.free()
 
 
-    def _correlate_windows(self, d_win_a_zp, d_search_area_zp):
+    def _correlate_windows(self, d_win_a_zp, d_win_b_zp):
         """Compute correlation function between two interrogation windows.
 
         The correlation function can be computed by using the correlation
@@ -494,15 +494,15 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_win_a_zp : gpuarray
+        d_win_a_zp : GPUArray
             first window
-        d_search_area_zp : gpuarray
+        d_win_b_zp : GPUArray
             second window
 
         Returns
         -------
-        corr : 2d np.ndarray
-            a two dimensions array for the correlation function.
+        corr : array - 2D
+            a two dimensional array for the correlation function.
 
         """
         # FFT size
@@ -517,7 +517,7 @@ class CorrelationFunction:
         # forward FFTs
         plan_forward = cu_fft.Plan((win_h, win_w), np.float32, np.complex64, self.batch_size)
         cu_fft.fft(d_win_a_zp, d_win_fft, plan_forward)
-        cu_fft.fft(d_search_area_zp, d_search_area_fft, plan_forward)
+        cu_fft.fft(d_win_b_zp, d_search_area_fft, plan_forward)
 
         # multiply the FFTs
         d_win_fft = d_win_fft.conj()
@@ -536,7 +536,7 @@ class CorrelationFunction:
         d_search_area_fft.gpudata.free()
         d_tmp.gpudata.free()
         d_win_a_zp.gpudata.free()
-        d_search_area_zp.gpudata.free()
+        d_win_b_zp.gpudata.free()
 
         # delete classes for the plan for free any associated memory
         del plan_forward, plan_inverse
@@ -554,11 +554,11 @@ class CorrelationFunction:
 
         Returns
         -------
-        ind : 1D array - int
+        ind : array - 1D int
             flattened index of corr peak
-        row : 1D array - int
+        row : array - 1D int
             row position of corr peak
-        col : 1D array - int
+        col : array - 1D int
             column position of corr peak
 
         """
@@ -644,18 +644,18 @@ class CorrelationFunction:
 
         Inputs
         ------
-        corr : 3D numpy array - float
+        corr : array - 3D float
             stack of all correlation functions
-        row : 1D numpy array - int
+        row : array - 1D int
             row location of corr max
-        col : 1D numpy array - int
+        col : array - 1D int
             column location of corr max
 
         Outputs
         -------
-        row_sp : 1D numpy array - float
+        row_sp : array - 1D float
             row max location to subpixel accuracy
-        col_sp : 1D numpy array - float
+        col_sp : array - 1D float
             column max location to subpixel accuracy
 
         """
@@ -705,9 +705,8 @@ class CorrelationFunction:
     def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal to noise ratio.
 
-        The signal to noise ratio is computed from the correlation map with
-        one of two available method. It is a measure of the quality of the
-        matching between two interrogation windows.
+        The signal to noise ratio is computed from the correlation map with one of two available method. It is a measure
+        of the quality of the matching between two interrogation windows.
 
         Parameters
         ----------
@@ -769,21 +768,18 @@ class CorrelationFunction:
 def get_field_shape(image_size, window_size, overlap):
     """Compute the shape of the resulting flow field.
 
-    Given the image size, the interrogation window size and
-    the overlap size, it is possible to calculate the number
-    of rows and columns of the resulting flow field.
+    Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
+    rows and columns of the resulting flow field.
 
     Parameters
     ----------
     image_size : two elements tuple
-        a two dimensional tuple for the pixel size of the image
-        first element is number of rows, second element is
-        the number of columns.
+        a two dimensional tuple for the pixel size of the image first element is number of rows, second element is the
+        number of columns.
     window_size : int
         the size of the interrogation window.
     overlap : int
-        the number of pixel by which two adjacent interrogation
-        windows overlap.
+        the number of pixel by which two adjacent interrogation windows overlap.
 
     Returns
     -------
@@ -1030,7 +1026,7 @@ def widim(frame_a,
     #### GPU arrays###
 
     # define arrays to stores the displacement vector in to save displacement information
-    d_shift = gpuarray.zeros([2, n_row[-1], n_col[-1]], dtype=DTYPEi)
+    d_shift = gpuarray.zeros([2, n_row[-1], n_col[-1]], dtype=DTYPEf)
 
     # define arrays to store all the mean velocity at each point in each iteration
     d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
@@ -1070,11 +1066,11 @@ def widim(frame_a,
         #################################################################################
 
         # Calculate second frame displacement (shift)
-        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 4].copy().astype(np.int32)  # xb=xa+dpx
-        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 5].copy().astype(np.int32)  # yb=ya+dpy
+        d_shift[0, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 4].copy()  # xb = xa + dpx
+        d_shift[1, :n_row[K], :n_col[K]] = d_f[K, 0:n_row[K], 0:n_col[K], 5].copy()  # yb = ya + dpy
 
         # Get correlation function
-        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfftx, d_shift=d_shift[:, :n_row[K], :n_col[K]].copy())
+        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfftx, d_shift=d_shift[:, :n_row[K], :n_col[K]])
 
         # Get window displacement to subpixel accuracy
         i_tmp[0:n_row[K] * n_col[K]], j_tmp[0:n_row[K] * n_col[K]] = c.subpixel_peak_location()
@@ -1272,15 +1268,15 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 
     Parameters
     ----------
-    d_f : 4D gpuarray - float
+    d_f : GPUArray - 4D float
         main array that stores all velocity data
-    v_list : 2D array - bool
+    v_list : array - 2D bool
         indicates which values must be validated. True means it needs to be validated, False means no validation is needed.
-    n_row, n_col : 1D array
+    n_row, n_col : array - 1D
         Number rows and columns in each iteration
     w : int
         number of pixels between interrogation windows
-    overlap :
+    overlap : int
         overlap of the interrogation windows
     k : int
         current iteration
@@ -1571,11 +1567,11 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, nfft, dt, k):
 
     Parameters
     ---------
-    d_f : np.ndarray - 4D - float
+    d_f : GPUArray - 4D float
         main array in WiDIM algorithm
     sig2noise : 3D array
         signal to noise ratio at each IW at each iteration
-    i_peak, j_peak : 2D array - float
+    i_peak, j_peak : array - 2D float
         correlation function peak at each iteration
     n_row, n_col : int
         number of rows and columns in the current iteration
@@ -1660,11 +1656,11 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     Parameters
     ----------
-    d_f : 4D gpuarray - float
+    d_f : GPUrray - 4D float
         main loop array
     k : int
         iteration number
-    sig2noise : 2D array - float
+    sig2noise : array - 2D float
         signal to noise ratio of each velocity
     n_row, n_col : int
         number of rows and columns in the velocity field
@@ -1884,14 +1880,14 @@ def gpu_find_neighbours(n_row, n_col):
 
     Parameters
     ----------
-    n_row : 1D array - int
+    n_row : array - 1D int
         number of rows at each iteration
-    n_col : 1D array - int
+    n_col : array - 1D int
         number of columns at each iteration
 
     Returns
     -------
-    d_neighbours_present : 4D gpuarray [n_row, n_col, 3 , 3]
+    d_neighbours_present : GPUArray - 4D [n_row, n_col, 3 , 3]
 
     """
     mod_neighbours = SourceModule("""
@@ -1969,14 +1965,14 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
 
     Parameters
     ----------
-    d_u, d_v : 2D GPU array - float32
+    d_u, d_v : GPUArray - 2D float32
         u and v velocity
-    n_row, n_col : 1D array - int
+    n_row, n_col : array - 1D int
         number of rows/columns at each iteration
 
     Returns
     -------
-    neighbours : 5D array [n_row, n_col, 2, 3, 3]
+    neighbours : array - 5D [n_row, n_col, 2, 3, 3]
         stores the values of u and v of the neighbours of a point
 
     """
@@ -2077,16 +2073,16 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
 
     Parameters
     ----------
-    d_neighbours: 5D gpuarray - float32
+    d_neighbours: GPUArray - 5D float32
         all the neighbouring velocities of every point
-    d_neighbours_present: 4D gpuarray - float32
+    d_neighbours_present: GPUArray - 4D float32
         indicates if a neighbour is present
     n_row, n_col : int
         number of rows and columns of the velocity field
 
     Returns
     -------
-    u_mean, v_mean : 2D array - float32
+    u_mean, v_mean : array - 2D float32
         mean velocities at each point
 
     """
@@ -2174,16 +2170,16 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
 
     Parameters
     ----------
-    d_neighbours : 5D gpuarray - float32
+    d_neighbours : GPUArray - 5D float32
         all the neighbouring velocities of every point
-    d_neighbours_present : 4D gpuarray - float32
+    d_neighbours_present : GPUArray - 4D float32
         indicates if a neighbour is present
     n_row, n_col : int
         number of rows and columns of the velocity field
 
     Returns
     -------
-    d_u_rms, d_v_rms : 2D gpuarray - float32
+    d_u_rms, d_v_rms : GPUArray - 2D float32
         rms velocities at each point
 
     """
@@ -2275,7 +2271,7 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
 
     Parameters
     ----------
-    d_u, d_v: 2D array - float
+    d_u, d_v: array - 2D float
         velocity field
     w: int
         pixel separation between velocity vectors
@@ -2284,7 +2280,7 @@ def gpu_divergence(d_u, d_v, w, n_row, n_col):
 
     Returns
     -------
-    div : 2D array - float32
+    div : array - 2D float32
         divergence at each point
 
     """
@@ -2366,7 +2362,7 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
 
     Parameters
     ----------
-    d_range : 2D gpuarray
+    d_range : GPUArray - 2D
         The x or y locations along the grid for the current and next iteration.
         Example:
         For side = x_axis then the input looks like d_range = d_F[K:K+2, :,0,0].copy()
@@ -2376,20 +2372,20 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
         one that the code is in now. (1st index for F).
     side : string
         the axis of interest : can be either 'x_axis' or 'y_axis'
-    d_pos_index : 1D gpuarray - int
+    d_pos_index : GPUArray - 1D int
         index of the point in the frame you want to validate (along the axis 'side').
     w : 1D array - int
         array of window sizes
-    overlap : 1D array - int
+    overlap : array - 1D int
         overlap in number of pixels
-    n_row, n_col : 1D array
+    n_row, n_col : array - 1D
         number of rows and columns in the F dataset in each iteration
 
     Returns
     -------
-    d_low : gpuarray - 1D int
+    d_low : GPUArray - 1D int
         largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less than or equal to pos_now.
-    d_high : gpuarray - 1D int
+    d_high : GPUArray - 1D int
         smallest index at the iteration K along the 'side' axis so that the position of index low in the frame is greater than or equal to pos_now.
 
     """
@@ -2583,9 +2579,9 @@ def gpu_array_index(d_array, d_return_list, data_type, retain_input=False, retai
 
     Parameters
     ----------
-    d_array : nD gpuarray - float or int
+    d_array : GPUArray - nD float or int
         Array to be selected from
-    d_return_list : 1 array - int
+    d_return_list : GPUArray - 1D int
         list of indexes. That you want to index. If you are indexing more than 1 dimension, then make sure that this array is flattened.
     data_type : dtype
         either int32 or float 32. determines the datatype of the returned array
@@ -2659,12 +2655,12 @@ def gpu_index_update(d_dest, d_values, d_indices, retain_indices=False):
 
     Parameters
     ----------
-    d_dest : nD gpuarray - float
-        Array to be updated with new values
-    d_values : 1D gpuarray - float
-        Array containing the values to be updated in the destination array
-    d_indices : 1D gpuarray - int
-        Array of indices to update
+    d_dest : GPUArray - nD float
+        array to be updated with new values
+    d_values : GPUArray - 1D float
+        array containing the values to be updated in the destination array
+    d_indices : GPUArray - 1D int
+        array of indices to update
     retain_indices : bool
         whether to return the indices
 
@@ -2703,23 +2699,23 @@ def gpu_index_update(d_dest, d_values, d_indices, retain_indices=False):
     return d_dest
 
 
-def gpu_floor(d_src, return_input=False):
+def gpu_floor(d_src, retain_input=False):
     """Takes the floor of each element in the gpu array
 
     Parameters
     ----------
-    d_src : gpuarray
+    d_src : GPUArray
         array to take the floor of
-    return_input : bool
+    retain_input : bool
         whether to return the input array
 
     Returns
     -------
-    d_dest : gpuarray
+    d_dest : GPUArray
         Same size as d_src. Contains the floored values of d_src.
 
     """
-    assert type(return_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(return_input))
+    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
 
     mod_floor = SourceModule("""
     __global__ void floor_gpu(float *dest, float *src, int n)
@@ -2750,14 +2746,11 @@ def gpu_floor(d_src, return_input=False):
     floor_gpu = mod_floor.get_function("floor_gpu")
     floor_gpu(d_dst, d_src, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    if not return_input:
-        # free some gpu memory
+    # free some gpu memory
+    if not retain_input:
         d_src.gpudata.free()
-        return d_dst
-    elif return_input:
-        return d_dst, d_src
-    else:
-        raise ValueError("ReturnInput is currently {}. Must be of type boolean".format(return_input))
+
+    return d_dst
 
 
 def gpu_round(d_src, retain_input=False):
@@ -2807,8 +2800,8 @@ def gpu_round(d_src, retain_input=False):
     round_gpu = mod_round.get_function("round_gpu")
     round_gpu(d_dst, d_src, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
+    # free gpu memory
     if not retain_input:
-        # free gpu memory
         d_src.gpudata.free()
 
     return d_dst
