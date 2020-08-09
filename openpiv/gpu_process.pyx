@@ -231,7 +231,7 @@ class CorrelationFunction:
     def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift):
         """Creates a 3D array stack of all of the interrogation windows.
 
-        This is necessary to do the FFTs all at once on the GPU.
+        This is necessary to do the FFTs all at once on the GPU. Parts of this code assumes that the interrogation windows are square. This populates interrogation windows from the origin of the image.
 
         Parameters
         -----------
@@ -252,17 +252,18 @@ class CorrelationFunction:
             int f_range;
             int w_range;
             int IW_size = window_size * window_size;
+            
+            // indices of image to map from
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
             // loop through each interrogation window
-            // indices of image to map from
             f_range = (ind_i / n_col * diff + ind_y) * w + (ind_i % n_col) * diff + ind_x;
 
             // indices of new array to map to
-            w_range = ind_i * IW_size + window_size*ind_y + ind_x;
+            w_range = ind_i * IW_size + window_size * ind_y + ind_x;
 
             output[w_range] = input[f_range];
         }
@@ -279,17 +280,18 @@ class CorrelationFunction:
 
             int IW_size = window_size * window_size;
             
-            // loop through each interrogation window
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
+            
+            // loop through each interrogation window
 
-            // x index in whole image for shifted pixel
+            // x index for shifted pixel
             x_shift = ind_x + dx[ind_i];
 
-            // y index in whole image for shifted pixel
+            // y index for shifted pixel
             y_shift = ind_y + dy[ind_i];
 
             // Get values outside window. This array is 1 if the value is inside the window,
@@ -306,7 +308,7 @@ class CorrelationFunction:
             // indices of image to map to
             w_range = ind_i * IW_size + window_size * ind_y + ind_x;
 
-            // Apply the mapping. Multiply by outside_range to set values outside the window to zero!
+            // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = input[f_range] * outside_range;
         }
         """)
@@ -342,26 +344,26 @@ class CorrelationFunction:
             np.save('dy', d_dy.get())
             np.save('dx', d_dx.get())
 
-            # shift frame b
-            d_dy_b = d_dy.astype(np.int32)
-            d_dx_b = d_dx.astype(np.int32)
-            window_slice_shift = mod_ws.get_function("window_slice_shift")
-            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # # shift frame b
+            # d_dy_b = d_dy.astype(np.int32)
+            # d_dx_b = d_dx.astype(np.int32)
+            # window_slice_shift = mod_ws.get_function("window_slice_shift")
+            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # shift frames symmetrically
-            # offset = 0  # delete
-            # d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
-            # d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
-            # d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
-            # d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
-            # np.save('dy_a', d_dy_a.get())
-            # np.save('dx_a', d_dx_a.get())
-            # np.save('dy_b', d_dy_b.get())
-            # np.save('dx_b', d_dx_b.get())
-            # window_slice_shift = mod_ws.get_function("window_slice_shift")
-            # window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            offset = 0  # delete
+            d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
+            d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
+            d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
+            d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
+            np.save('dy_a', d_dy_a.get())
+            np.save('dx_a', d_dx_a.get())
+            np.save('dy_b', d_dy_b.get())
+            np.save('dx_b', d_dx_b.get())
+            window_slice_shift = mod_ws.get_function("window_slice_shift")
+            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dx.gpudata.free()
@@ -391,7 +393,7 @@ class CorrelationFunction:
             __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size)
         {
             // global thread id for 1D grid of 2D blocks
-            int threadId = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+            int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
             int meanId = threadId / iw_size;
@@ -411,10 +413,7 @@ class CorrelationFunction:
         d_mean_b = cu_misc.mean(d_win_b.reshape(self.batch_size, iw_size), axis=1)
 
         # gpu kernel blocksize parameters
-        if d_win_a.size % (32 ** 2) == 0:
-            block_size = 32
-        else:
-            block_size = 8
+        block_size = 8
         grid_size = int(d_win_a.size / block_size ** 2)
 
         assert d_win_a.size % (block_size ** 2) == 0, 'Not all windows are being normalized. Something wrong with block or grid size.'
@@ -454,41 +453,39 @@ class CorrelationFunction:
 
         """
         mod_zp = SourceModule("""
-            __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int batch_size)
+            __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size)
             {
-                // indices for each IW
-                int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
-                int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
-
                 // number of pixels in each IW
                 int IW_size = fft_size * fft_size;
-                int arr_size = window_size*window_size;
+                int arr_size = window_size * window_size;
 
                 int zp_range;
                 int arr_range;
-                int i;
+            
+                // indices for each IW
+                // x blocks are windows; y and z blocks are x and y dimensions, respectively
+                int ind_i = blockIdx.x;
+                int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
+                int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
 
-                for(i=0; i<batch_size; i++)
-                {
-                    // get range of values to map
-                    arr_range = i * arr_size + window_size * ind_y + ind_x;
-                    zp_range = i * IW_size + fft_size * ind_y + ind_x;
+                // get range of values to map
+                arr_range = ind_i * arr_size + window_size * ind_y + ind_x;
+                zp_range = ind_i * IW_size + fft_size * ind_y + ind_x;
 
-                    // apply the map
-                    array_zp[zp_range] = array[arr_range];
-                }
+                // apply the map
+                array_zp[zp_range] = array[arr_range];
             }
         """)
 
         # TODO optimize this
         # gpu parameters
-        grid_size = 8
-        block_size = int(self.window_size / grid_size)
+        block_size = 8
+        grid_size = int(self.window_size / block_size)
 
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
-        zero_pad(d_win_a_zp, d_win_a_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-        zero_pad(d_win_b_zp, d_win_b_norm, self.nfft, self.window_size, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+        zero_pad(d_win_a_zp, d_win_a_norm, self.nfft, self.window_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+        zero_pad(d_win_b_zp, d_win_b_norm, self.nfft, self.window_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
         # Free GPU memory
         d_win_a_norm.gpudata.free()
@@ -885,9 +882,9 @@ def widim(frame_a,
     Returns
     -------
     x : array
-        2D, the x-axis component of the interpolation locations.
+        2D, the x-axis component of the interpolation locations, in pixels-lengths starting from 0 at left edge.
     y : array
-        2D, the y-axis component of the interpolation locations.
+        2D, the y-axis component of the interpolation locations, in pixels starting from 0 at bottom edge.
     u : array
         2D, the u velocity component, in pixels/seconds.
     v : array
