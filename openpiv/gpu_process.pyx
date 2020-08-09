@@ -251,73 +251,26 @@ class CorrelationFunction:
         {
             int f_range;
             int w_range;
-            int IW_size = window_size*window_size;
-            int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
-            int diff = window_size - overlap;
-
-            // loop through each interrogation window
-
-            for(int i=0; i<batch_size; i++)
-            {
-                // indices of image to map from
-                f_range = (i / n_col * diff + ind_y) * w + (i%n_col) * diff + ind_x;
-
-                // indices of new array to map to
-                w_range = i * IW_size + window_size*ind_y + ind_x;
-
-                output[w_range] = input[f_range];
-            }
-        }
-
-            __global__ void window_slice_shift(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h, int batch_size)
-        {
-            // w = width (number of columns in the full image)
-            // h = height (number of rows in the image)
-            // batch_size = number of interrogations window pairs
-
-            int f_range;
-            int w_range;
-            int x_shift;
-            int y_shift;
-
             int IW_size = window_size * window_size;
-            int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
+            int ind_i = blockIdx.x;
+            int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
+            int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
             // loop through each interrogation window
-            for(int i=0; i<batch_size; i++)
-            {
-                // y index in whole image for shifted pixel
-                y_shift = ind_y + dy[i];
+            // indices of image to map from
+            f_range = (ind_i / n_col * diff + ind_y) * w + (ind_i % n_col) * diff + ind_x;
 
-                // x index in whole image for shifted pixel
-                x_shift = ind_x + dx[i];
+            // indices of new array to map to
+            w_range = ind_i * IW_size + window_size*ind_y + ind_x;
 
-                // Get values outside window. This array is 1 if the value is inside the window,
-                // and 0 if it is outside the window. Multiply This with the shifted value at end
-                int outside_range = (y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
-
-                // Get rid of values outside the range
-                x_shift = x_shift * outside_range;
-                y_shift = y_shift * outside_range;
-
-                // indices of image to map from. Apply shift to pixels
-                f_range = (i / n_col * diff + y_shift) * w + (i % n_col) * diff + x_shift;//old
-
-                // indices of image to map to
-                w_range = i * IW_size + window_size * ind_y + ind_x;
-
-                // Apply the mapping. Multiply by outside_range to set values outside the window to zero!
-                output[w_range] = input[f_range] * outside_range;
-            }
+            output[w_range] = input[f_range];
         }
         
-            __global__ void window_slice_shift_new(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h)
+            __global__ void window_slice_shift(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h)
         {
             // w = width (number of columns in the full image)
-            // h = height (number of rows in the image)
+            // h = height (number of rows in the full image)
 
             int f_range;
             int w_range;
@@ -326,6 +279,7 @@ class CorrelationFunction:
 
             int IW_size = window_size * window_size;
             
+            // loop through each interrogation window
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
@@ -377,8 +331,8 @@ class CorrelationFunction:
         window_slice = mod_ws.get_function("window_slice")
 
         if d_shift is None:
-            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size), grid=(grid_size, grid_size))
-            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size), grid=(grid_size, grid_size))
+            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
         else:
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
@@ -388,30 +342,26 @@ class CorrelationFunction:
             np.save('dy', d_dy.get())
             np.save('dx', d_dx.get())
 
-            # # shift frame b
-            # d_dy_b = d_dy.astype(np.int32)
-            # d_dx_b = d_dx.astype(np.int32)
-            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            # shift frame b
+            d_dy_b = d_dy.astype(np.int32)
+            d_dx_b = d_dx.astype(np.int32)
+            window_slice_shift = mod_ws.get_function("window_slice_shift")
+            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # shift frames symmetrically
-            offset = 4  # delete
-            d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
-            d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
-            d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
-            d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
-            np.save('dy_a', d_dy_a.get())
-            np.save('dx_a', d_dx_a.get())
-            np.save('dy_b', d_dy_b.get())
-            np.save('dx_b', d_dx_b.get())
+            # offset = 0  # delete
+            # d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
+            # d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
+            # d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
+            # d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
+            # np.save('dy_a', d_dy_a.get())
+            # np.save('dx_a', d_dx_a.get())
+            # np.save('dy_b', d_dy_b.get())
+            # np.save('dx_b', d_dx_b.get())
             # window_slice_shift = mod_ws.get_function("window_slice_shift")
-            # window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-
-            # new
-            window_slice_shift = mod_ws.get_function("window_slice_shift_new")
-            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dx.gpudata.free()
