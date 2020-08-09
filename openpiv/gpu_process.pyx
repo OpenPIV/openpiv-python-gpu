@@ -162,7 +162,7 @@ ctypedef np.float32_t DTYPEf_t
 
 
 class CorrelationFunction:
-    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfftx, d_shift=None):
+    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x, d_shift=None):
         """A class representing a cross correlation function.
 
         NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
@@ -177,7 +177,7 @@ class CorrelationFunction:
             size of the interrogation window
         overlap : int
             pixel overlap between interrogation windows
-        nfftx : int
+        nfft_x : int
             window size for fft
         d_shift : GPUArray - 2D ([dx, dy])
             dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
@@ -192,11 +192,11 @@ class CorrelationFunction:
         self.n_rows, self.n_cols = np.int32(get_field_shape(self.shape, window_size, overlap))
         self.batch_size = np.int32(self.n_rows * self.n_cols)
 
-        if nfftx == 0:
+        if nfft_x == 0:
             self.nfft = np.int32(2 * self.window_size)
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
         else:
-            self.nfft = np.int32(nfftx)
+            self.nfft = np.int32(nfft_x)
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
 
         ########################################################################################
@@ -204,13 +204,13 @@ class CorrelationFunction:
         # START DOING CALCULATIONS
 
         # Return stack of all IWs
-        d_win_a = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_win_b = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
+        d_win_a = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
+        d_win_b = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
         self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift)
 
         # normalize array by computing the norm of each IW
-        d_win_a_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
-        d_win_b_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), np.float32)
+        d_win_a_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
+        d_win_b_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
         self._normalize_intensity(d_win_a, d_win_b, d_win_a_norm, d_win_b_norm)
 
         # zero pad arrays
@@ -252,8 +252,8 @@ class CorrelationFunction:
             int f_range;
             int w_range;
             int IW_size = window_size*window_size;
-            int ind_x = blockIdx.x*blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.y*blockDim.y + threadIdx.y;
+            int ind_x = blockIdx.x * blockDim.x + threadIdx.x;
+            int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
             // loop through each interrogation window
@@ -286,7 +286,7 @@ class CorrelationFunction:
             int ind_y = blockIdx.y * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
 
-            //loop through each interrogation window
+            // loop through each interrogation window
             for(int i=0; i<batch_size; i++)
             {
                 // y index in whole image for shifted pixel
@@ -295,7 +295,7 @@ class CorrelationFunction:
                 // x index in whole image for shifted pixel
                 x_shift = ind_x + dx[i];
 
-                // Get values outside window in a sneaky way. This array is 1 if the value is inside the window,
+                // Get values outside window. This array is 1 if the value is inside the window,
                 // and 0 if it is outside the window. Multiply This with the shifted value at end
                 int outside_range = (y_shift >= 0 && y_shift < h && x_shift >= 0 && x_shift < w);
 
@@ -304,14 +304,56 @@ class CorrelationFunction:
                 y_shift = y_shift * outside_range;
 
                 // indices of image to map from. Apply shift to pixels
-                f_range = (i / n_col * diff + y_shift) * w + (i % n_col) * diff + x_shift;
+                f_range = (i / n_col * diff + y_shift) * w + (i % n_col) * diff + x_shift;//old
 
                 // indices of image to map to
-                w_range = i*IW_size + window_size * ind_y + ind_x;
+                w_range = i * IW_size + window_size * ind_y + ind_x;
 
                 // Apply the mapping. Multiply by outside_range to set values outside the window to zero!
-                output[w_range] = input[f_range]*outside_range;
+                output[w_range] = input[f_range] * outside_range;
             }
+        }
+        
+            __global__ void window_slice_shift_new(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h)
+        {
+            // w = width (number of columns in the full image)
+            // h = height (number of rows in the image)
+
+            int f_range;
+            int w_range;
+            int x_shift;
+            int y_shift;
+
+            int IW_size = window_size * window_size;
+            
+            // x blocks are windows; y and z blocks are x and y dimensions, respectively
+            int ind_i = blockIdx.x;
+            int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
+            int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+            int diff = window_size - overlap;
+
+            // x index in whole image for shifted pixel
+            x_shift = ind_x + dx[ind_i];
+
+            // y index in whole image for shifted pixel
+            y_shift = ind_y + dy[ind_i];
+
+            // Get values outside window. This array is 1 if the value is inside the window,
+            // and 0 if it is outside the window. Multiply This with the shifted value at end.
+            int outside_range = (x_shift >= 0 && x_shift < w && y_shift >= 0 && y_shift < h);
+
+            // Get rid of values outside the range
+            x_shift = x_shift * outside_range;
+            y_shift = y_shift * outside_range;
+
+            // indices of image to map from. Apply shift to pixels
+            f_range = (ind_i / n_col * diff + y_shift) * w + (ind_i % n_col) * diff + x_shift;
+
+            // indices of image to map to
+            w_range = ind_i * IW_size + window_size * ind_y + ind_x;
+
+            // Apply the mapping. Multiply by outside_range to set values outside the window to zero!
+            output[w_range] = input[f_range] * outside_range;
         }
         """)
 
@@ -324,23 +366,27 @@ class CorrelationFunction:
         assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
 
         # gpu parameters
-        # TODO this could be optimized
-        grid_size = 8  # I tested a bit and found this number to be fastest.
-        block_size = int(self.window_size / grid_size)
+        # grid_size = 8  # I tested a bit and found this number to be fastest.
+        # block_size = int(self.window_size / grid_size)
+
+        # modified
+        block_size = 8
+        grid_size = int(self.window_size / block_size)
 
         # slice up windows
         window_slice = mod_ws.get_function("window_slice")
 
         if d_shift is None:
-            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size), grid=(grid_size, grid_size))
+            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size), grid=(grid_size, grid_size))
         else:
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
             # This code is in row major order
             d_dy = d_shift[0].copy()
             d_dx = d_shift[1].copy()
-            window_slice_shift = mod_ws.get_function("window_slice_shift")
+            np.save('dy', d_dy.get())
+            np.save('dx', d_dx.get())
 
             # # shift frame b
             # d_dy_b = d_dy.astype(np.int32)
@@ -349,16 +395,23 @@ class CorrelationFunction:
             # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
 
             # shift frames symmetrically
-            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
-            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
-            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
-            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
-            np.save('dy_a',d_dy_a.get())
-            np.save('dx_a',d_dx_a.get())
-            np.save('dy_b',d_dy_b.get())
-            np.save('dx_b',d_dx_b.get())
-            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
-            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            offset = 4  # delete
+            d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
+            d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
+            d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
+            d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
+            np.save('dy_a', d_dy_a.get())
+            np.save('dx_a', d_dx_a.get())
+            np.save('dy_b', d_dy_b.get())
+            np.save('dx_b', d_dx_b.get())
+            # window_slice_shift = mod_ws.get_function("window_slice_shift")
+            # window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, self.batch_size, block=(block_size, block_size, 1), grid=(grid_size, grid_size))
+
+            # new
+            window_slice_shift = mod_ws.get_function("window_slice_shift_new")
+            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dx.gpudata.free()
@@ -805,8 +858,8 @@ def widim(frame_a,
           subpixel_method='gaussian',
           sig2noise_method='peak2peak',
           width=2,
-          nfftx=0,
-          nffty=0):
+          nfft_x=0,
+          nfft_y=0):
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
@@ -872,10 +925,10 @@ def widim(frame_a,
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-    nfftx : int
+    nfft_x : int
         the size of the 2D FFT in x-direction,
         [default: 2 x windows_a.shape[0] is recommended]
-    nffty : int
+    nfft_y : int
         the size of the 2D FFT in y-direction,
         [default: 2 x windows_a.shape[1] is recommended]
 
@@ -1068,7 +1121,7 @@ def widim(frame_a,
         d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5].copy()  # yb = ya + dpy
 
         # Get correlation function
-        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfftx, d_shift=d_shift[:, :n_row[K], :n_col[K]])
+        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfft_x, d_shift=d_shift[:, :n_row[K], :n_col[K]])
 
         # Get window displacement to subpixel accuracy
         i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
