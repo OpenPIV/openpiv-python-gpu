@@ -110,7 +110,6 @@ ctypedef np.float32_t DTYPEf_t
 #
 #     """
 #     # cast images as floats
-#     #TODO  changing dtype in the function definition gave weird errors. Find out how to change function definition to avoid this step.
 #     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
 #     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
 #
@@ -296,14 +295,16 @@ class CorrelationFunction:
 
             // Get values outside window. This array is 1 if the value is inside the window,
             // and 0 if it is outside the window. Multiply This with the shifted value at end.
-            int outside_range = (x_shift >= 0 && x_shift < w && y_shift >= 0 && y_shift < h);
+            int x = (ind_i % n_col) * diff + x_shift;
+            int y = ind_i / n_col * diff + y_shift;
+            int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
 
             // Get rid of values outside the range
-            x_shift = x_shift * outside_range;
-            y_shift = y_shift * outside_range;
+            x = x * outside_range;
+            y = y * outside_range;
 
             // indices of image to map from. Apply shift to pixels
-            f_range = (ind_i / n_col * diff + y_shift) * w + (ind_i % n_col) * diff + x_shift;
+            f_range = y * w + x;
 
             // indices of image to map to
             w_range = ind_i * IW_size + window_size * ind_y + ind_x;
@@ -322,10 +323,6 @@ class CorrelationFunction:
         assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
 
         # gpu parameters
-        # grid_size = 8  # I tested a bit and found this number to be fastest.
-        # block_size = int(self.window_size / grid_size)
-
-        # modified
         block_size = 8
         grid_size = int(self.window_size / block_size)
 
@@ -341,8 +338,6 @@ class CorrelationFunction:
             # This code is in row major order
             d_dy = d_shift[0].copy()
             d_dx = d_shift[1].copy()
-            np.save('dy', d_dy.get())
-            np.save('dx', d_dx.get())
 
             # # shift frame b
             # d_dy_b = d_dy.astype(np.int32)
@@ -352,20 +347,19 @@ class CorrelationFunction:
             # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # shift frames symmetrically
-            offset = 0  # delete
-            d_dy_a = cumath.ceil(-d_dy / 2 + offset).astype(np.int32)
-            d_dx_a = cumath.ceil(-d_dx / 2 + offset).astype(np.int32)
-            d_dy_b = cumath.ceil(d_dy / 2 + offset).astype(np.int32)
-            d_dx_b = cumath.ceil(d_dx / 2 + offset).astype(np.int32)
-            np.save('dy_a', d_dy_a.get())
-            np.save('dx_a', d_dx_a.get())
-            np.save('dy_b', d_dy_b.get())
-            np.save('dx_b', d_dx_b.get())
+            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
+            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
+            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
+            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
             window_slice_shift = mod_ws.get_function("window_slice_shift")
             window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
+            d_dy_a.gpudata.free()
+            d_dx_a.gpudata.free()
+            d_dy_b.gpudata.free()
+            d_dx_b.gpudata.free()
             d_dx.gpudata.free()
             d_dy.gpudata.free()
 
@@ -477,7 +471,6 @@ class CorrelationFunction:
             }
         """)
 
-        # TODO optimize this
         # gpu parameters
         block_size = 8
         grid_size = int(self.window_size / block_size)
@@ -786,7 +779,6 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
-# TODO make mask functional
 def widim(frame_a,
           frame_b,
           nb_iter_max=2,
@@ -915,6 +907,7 @@ def widim(frame_a,
                             | 8 --> u        |
                             | 9 --> v        |
                             | 10 --> sig2noise|
+                            | 10 --> mask|
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -1081,7 +1074,8 @@ def widim(frame_a,
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
 
         # update the field with new values
-        # TODO check for nans in i_peak and j_peak
+        assert not np.isnan(i_peak).any(), 'NaNs in correlation peaks!'
+        assert not np.isnan(j_peak).any(), 'NaNs in correlation peaks!'
         gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
 
         #################################################################################
@@ -1148,8 +1142,8 @@ def widim(frame_a,
                 d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy())
                 d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy())
 
-            # delete old correlation function
-            del c
+            # # delete old correlation function
+            # del c
 
             print("...[DONE] -----> going to iteration ", K + 1)
             print(" ")
@@ -1178,8 +1172,8 @@ def widim(frame_a,
     d_f.gpudata.free()
     d_shift.gpudata.free()
 
-    # delete old correlation function
-    del c, d_f
+    # # delete old correlation function
+    # del c, d_f
     # end(start_time)
     return x, y, u, v, mask, sig2noise
 
@@ -1800,7 +1794,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     #
     #     # Free gpu memory
     #     d_sig2noise.gpudata.free()
-    #     del d_sig2noise
+    #     # del d_sig2noise
 
     ############################
     # median_velocity validation
@@ -1819,7 +1813,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     #     d_neighbours.gpudata.free()
     #     d_u_norm.gpudata.free()
     #     d_v_norm.gpudata.free()
-    #     del d_u_norm, d_v_norm
+    #     # del d_u_norm, d_v_norm
 
     ##########################
     # mean_velocity validation
@@ -1835,7 +1829,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         # Free gpu memory
         d_u_rms.gpudata.free()
         d_v_rms.gpudata.free()
-        del d_u_rms, d_v_rms
+        # del d_u_rms, d_v_rms
 
     #######################
     # divergence validation
@@ -1852,7 +1846,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     #     d_u.gpudata.free()
     #     d_v.gpudata.free()
     #     d_div.gpudata.free()
-    #     del d_u, d_v, d_div
+    #     # del d_u, d_v, d_div
 
     # return the final validation list
     val_list = d_val_list.get()
@@ -1864,7 +1858,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     d_neighbours_present.gpudata.free()
     d_neighbours.gpudata.free()
 
-    del d_val_list, d_neighbours, d_neighbours_present
+    # del d_val_list, d_neighbours, d_neighbours_present
 
     return val_list, d_u_mean, d_v_mean
 
@@ -2461,7 +2455,7 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
 
     # free gpu data
     d_range.gpudata.free()
-    del d_range
+    # del d_range
 
     return d_low, d_high
 
