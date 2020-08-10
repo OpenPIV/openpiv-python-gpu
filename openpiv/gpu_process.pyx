@@ -896,18 +896,18 @@ def widim(frame_a,
         -- 2nd index (I) is row (of the map of the interpolations locations of iteration K) --> length (effectively used) is n_row[K]
             --3rd index (J) is column  --> length (effectively used) is n_col[K]
                 --4th index represent the type of data stored at this point:
-                            | 0 --> x         |
-                            | 1 --> y         |
-                            | 2 --> dx        |
-                            | 3 --> dy        |
-                            | 4 --> dpx       |
-                            | 5 --> dpy       |
-                            | 6 --> dcx       |
-                            | 7 --> dcy       |
-                            | 8 --> u        |
-                            | 9 --> v        |
-                            | 10 --> sig2noise|
-                            | 10 --> mask|
+                    | 0 --> x         |
+                    | 1 --> y         |
+                    | 2 --> dx        |
+                    | 3 --> dy        |
+                    | 4 --> dpx       |
+                    | 5 --> dpy       |
+                    | 6 --> dcx       |
+                    | 7 --> dcy       |
+                    | 8 --> u         |
+                    | 9 --> v         |
+                    | 10 --> sig2noise|
+                    | 11 --> mask     |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -916,6 +916,9 @@ def widim(frame_a,
     ####################################################
     # INITIALIZATIONS
     ####################################################
+    # input checks
+    ht, wd = frame_a.shape
+
     # Initialize skcuda miscellaneous library
     cu_misc.init()
 
@@ -929,18 +932,17 @@ def widim(frame_a,
 
     if nb_iter_max <= nb_refinement_iter:
         raise ValueError("Please provide a nb_iter_max that is greater than the nb_refinement_iter")
-    cdef int K  # main iteration index
-    cdef int I, J  # interrogation locations indices
-    cdef int L, M  # inside window indices
-    cdef int O, P  # frame indices corresponding to I and J
-    cdef int i, j  # indices for various works
+    cdef Py_ssize_t K  # main iteration index
+    cdef Py_ssize_t I, J  # interrogation locations indices
+    cdef Py_ssize_t L, M  # inside window indices
+    cdef Py_ssize_t O, P  # frame indices corresponding to I and J
+    cdef Py_ssize_t i, j  # indices for various works
     cdef float mean_u, mean_v, rms_u, rms_v, residual_0, div
     cdef int residual, nb_w_ind
     cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] w = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
-    ht, wd = frame_a.shape
 
     # # window sizes list initialization - old
     # for K in range(nb_refinement_iter + 1):
@@ -953,7 +955,7 @@ def widim(frame_a,
         w[K] = np.power(2, nb_refinement_iter) * min_window_size
     for K in range(nb_iter_max - nb_refinement_iter, nb_iter_max):
         w[K] = np.power(2, nb_iter_max - K - 1) * min_window_size
-    print(w)
+    print('windows sizes = {}'.format(w))
 
     # overlap init
     for K in range(nb_iter_max):
@@ -964,32 +966,8 @@ def widim(frame_a,
         n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
         n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
 
-    # validation method
-    if validation_method.find('sig2noise') == -1:
-        sig2n_tol = 0
-    if validation_method.find('median_velocity') == -1:
-        median_tol = 0
-    if validation_method.find('mean_velocity') == -1:
-        mean_tol = 0
-    if validation_method.find('divergence') == -1:
-        div_tol = 0
-    if nb_validation_iter > 0:
-        assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
-    else:
-        validation_method = 'None'
-
     # write the parameters to the screen
     # cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
-
-    # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 11], dtype=DTYPEf)
-    # cdef np.ndarray[DTYPEf_t, ndim=4] f_check = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 13], dtype=DTYPEf)
-
-    # define mask - bool arrays don't exist in cython so we go to lower level with cast
-    # you can access mask with (<object>mask)[I,J]
-    # if mask is not None:
-    #     mask = some function that maps onto the vector field
-    # cdef np.ndarray[DTYPEb_t, ndim=2, cast=True] mask = np.ones([n_row[nb_iter_max-1], n_col[nb_iter_max-1]], dtype=np.bool)  # changed type
 
     # define u, v & x, y fields (only used as outputs of this program)
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
@@ -1014,7 +992,71 @@ def widim(frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
-    #### GPU arrays###
+    # validation method
+    if validation_method.find('sig2noise') == -1:
+        sig2n_tol = 0
+    if validation_method.find('median_velocity') == -1:
+        median_tol = 0
+    if validation_method.find('mean_velocity') == -1:
+        mean_tol = 0
+    if validation_method.find('divergence') == -1:
+        div_tol = 0
+    if nb_validation_iter > 0:
+        assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
+    else:
+        validation_method = 'None'
+
+    #### GPU arrays ####
+
+    # define the main array f that contains all the data
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 12], dtype=DTYPEf)
+
+    # initialize x and y values
+    # x unit vector corresponds to rows
+    # y unit vector corresponds to columns
+    cdef float diff
+    for K in range(nb_iter_max):
+        f[K, 0, :, 0] = w[K] / 2  # init x on 1st row
+        f[K, :, 0, 1] = w[K] / 2  # init y on first column
+        diff = w[K] - overlap[K]
+
+        for I in range(1, n_row[K]):
+            for J in range(1, n_col[K]):
+                f[K, I, J, 0] = f[K, I - 1, J, 0] + diff  # init x
+                f[K, I, J, 1] = f[K, I, J - 1, 1] + diff  # init y
+
+    # mask
+    cdef DTYPEb_t [:, :] mask_view = mask
+    cdef Py_ssize_t x_idx
+    cdef Py_ssize_t y_idx
+    if mask is not None:
+        assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
+        for K in range(nb_iter_max):
+            for I in range(1, n_row[K]):
+                for J in range(1, n_col[K]):
+                    x_idx = int(f[K, I, J, 0])
+                    y_idx = int(f[K, I, J, 1])
+                    f[K, I, J, 11] = mask_view[x_idx, y_idx]
+    else:
+        f[:, :, :, 11] = 1
+
+    # # initialize x and y values
+    # for K in range(nb_iter_max):
+    #     for I in range(n_row[K]):
+    #         for J in range(n_col[K]):
+    #             # x unit vector corresponds to rows
+    #             # y unit vector corresponds to columns
+    #             if I == 0:
+    #                 f[K, I, J, 0] = w[K] / 2  # init x on 1st row
+    #             else:
+    #                 f[K, I, J, 0] = f[K, I - 1, J, 0] + w[K] - overlap[K]  # init x
+    #             if J == 0:
+    #                 f[K, I, J, 1] = w[K] / 2  # init y on first column
+    #             else:
+    #                 f[K, I, J, 1] = f[K, I, J - 1, 1] + w[K] - overlap[K]  # init y
+
+    # Move f to the GPU for the whole calculation
+    d_f = gpuarray.to_gpu(f)
 
     # define arrays to stores the displacement vector in to save displacement information
     d_shift = gpuarray.zeros([2, n_row[-1], n_col[-1]], dtype=DTYPEf)
@@ -1022,24 +1064,6 @@ def widim(frame_a,
     # define arrays to store all the mean velocity at each point in each iteration
     d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     d_v_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
-
-    # initialize x and y values
-    for K in range(nb_iter_max):
-        for I in range(n_row[K]):
-            for J in range(n_col[K]):
-                # x unit vector corresponds to rows
-                # y unit vector corresponds to columns
-                if I == 0:
-                    f[K, I, J, 0] = w[K] / 2  # init x on 1st row
-                else:
-                    f[K, I, J, 0] = f[K, I - 1, J, 0] + w[K] - overlap[K]  # init x
-                if J == 0:
-                    f[K, I, J, 1] = w[K] / 2  # init y on first column
-                else:
-                    f[K, I, J, 1] = f[K, I, J - 1, 1] + w[K] - overlap[K]  # init y
-
-    # Move f to the GPU for the whole calculation
-    d_f = gpuarray.to_gpu(f)
 
     # end of the initializations
 
@@ -1093,11 +1117,6 @@ def widim(frame_a,
             print("No validation: trusting 1st iteration.")
         elif nb_validation_iter > 0:
             print("Starting validation...")
-
-            # # init mask to False # disabled by eric
-            # for I in range(n_row[nb_iter_max-1]):
-            #     for J in range(n_col[nb_iter_max-1]):
-            #         (<object>mask)[I,J] = False
 
             # real validation starts
             for i in range(nb_validation_iter):
@@ -1591,8 +1610,8 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
             F[F_idx + 7] = j_peak[w_idx];
 
             // get new displacement prediction
-            F[F_idx + 2] = F[F_idx + 4] + F[F_idx + 6];
-            F[F_idx + 3] = F[F_idx + 5] + F[F_idx + 7];
+            F[F_idx + 2] = (F[F_idx + 4] + F[F_idx + 6]) * F[F_idx + 11];
+            F[F_idx + 3] = (F[F_idx + 5] + F[F_idx + 7]) * F[F_idx + 11];
 
             // get new velocity vectors
             F[F_idx + 8] = F[F_idx + 3] / dt;
