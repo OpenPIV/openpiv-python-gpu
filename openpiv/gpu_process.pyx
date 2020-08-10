@@ -1007,7 +1007,6 @@ def widim(frame_a,
         validation_method = 'None'
 
     #### GPU arrays ####
-
     # define the main array f that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 12], dtype=DTYPEf)
 
@@ -1019,41 +1018,28 @@ def widim(frame_a,
         f[K, 0, :, 0] = w[K] / 2  # init x on 1st row
         f[K, :, 0, 1] = w[K] / 2  # init y on first column
         diff = w[K] - overlap[K]
-
         for I in range(1, n_row[K]):
-            for J in range(1, n_col[K]):
-                f[K, I, J, 0] = f[K, I - 1, J, 0] + diff  # init x
-                f[K, I, J, 1] = f[K, I, J - 1, 1] + diff  # init y
+            f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x  on subsequent rows
+        for J in range(1, n_col[K]):
+            f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
 
-    # mask
-    cdef DTYPEb_t [:, :] mask_view = mask
+    # initialize mask
+    if mask is not None:
+        mask_b = mask.astype(np.uint8)
+    else:
+        f[:, :, :, 11] = 1
+
+    cdef DTYPEb_t [:, :] mask_view = mask.astype(np.uint8)
     cdef Py_ssize_t x_idx
     cdef Py_ssize_t y_idx
     if mask is not None:
         assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
         for K in range(nb_iter_max):
-            for I in range(1, n_row[K]):
-                for J in range(1, n_col[K]):
+            for I in range(0, n_row[K]):
+                for J in range(0, n_col[K]):
                     x_idx = int(f[K, I, J, 0])
                     y_idx = int(f[K, I, J, 1])
                     f[K, I, J, 11] = mask_view[x_idx, y_idx]
-    else:
-        f[:, :, :, 11] = 1
-
-    # # initialize x and y values
-    # for K in range(nb_iter_max):
-    #     for I in range(n_row[K]):
-    #         for J in range(n_col[K]):
-    #             # x unit vector corresponds to rows
-    #             # y unit vector corresponds to columns
-    #             if I == 0:
-    #                 f[K, I, J, 0] = w[K] / 2  # init x on 1st row
-    #             else:
-    #                 f[K, I, J, 0] = f[K, I - 1, J, 0] + w[K] - overlap[K]  # init x
-    #             if J == 0:
-    #                 f[K, I, J, 1] = w[K] / 2  # init y on first column
-    #             else:
-    #                 f[K, I, J, 1] = f[K, I, J - 1, 1] + w[K] - overlap[K]  # init y
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
