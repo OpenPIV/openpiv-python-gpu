@@ -1244,14 +1244,11 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         # update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
         # TODO - could replace with the mean of the previous values surrounding the point
-        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 8].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
-        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 9].copy(), d_indices, np.float32, retain_list=True)  # changed by Eric
+        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 8].copy(), d_indices, np.float32, retain_list=True)
+        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 9].copy(), d_indices, np.float32, retain_list=True)
 
-        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)  # changed by Eric
-        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)  # changed by Eric
-
-        # d_F[K,:,:,10] = gpu_index_update(d_F[K,:,:,10].copy(), d_F[K-1,:,:,10].copy(), d_indices, ReturnIndices=True)  # original
-        # d_F[K,:,:,11] = gpu_index_update(d_F[K,:,:,11].copy(), d_F[K-1,:,:,11].copy(), d_indices)  # original
+        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)
+        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)
         d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
         d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
 
