@@ -1117,7 +1117,7 @@ def widim(frame_a,
                 # do the validation
                 n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
                 if n_val > 0:
-                    print('Validating {} out of {} vectors...'.format(n_val, n_row[K] * n_col[K]))
+                    print('Validating {} out of {} vectors ({:.2%})...'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
                     gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
                 else:
                     print('No invalid vectors!')
@@ -1767,7 +1767,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     w = np.float32(w)
 
     # GPU settings
-    # block_size = 16
     block_size = 32
     x_blocks = int(n_col * n_row / block_size + 1)
 
@@ -1823,7 +1822,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     if mean_tol > 0:
         # get rms data and mean velocity data.
-        d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col)
+        # d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col)
+        d_u_rms, d_v_rms = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
 
         mean_validation = mod_validation.get_function("mean_validation")
         mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
@@ -1888,7 +1888,7 @@ def gpu_find_neighbours(n_row, n_col):
         // Ncol = Number of columns
 
         // references each IW
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         int row_zero = (w_idx >= Ncol);
         int row_max = (w_idx < Ncol * (Nrow - 1));
@@ -2155,6 +2155,115 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     return d_u_mean, d_v_mean
 
 
+def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col):
+    """Calculates the rms velocity in a 3x3 grid around each point in a velocity field.
+
+    Parameters
+    ----------
+    d_neighbours : GPUArray - 5D float32
+        all the neighbouring velocities of every point
+    d_neighbours_present : GPUArray - 4D float32
+        indicates if a neighbour is present
+    d_u_mean, d_v_mean : GPUArray - 2D
+        mean velocities around each point
+    n_row, n_col : int
+        number of rows and columns of the velocity field
+
+    Returns
+    -------
+    d_u_fluc, d_v_fluc : GPUArray - 2D float32
+        rms velocities at each point
+
+    """
+    mod_mean_fluc = SourceModule("""
+    __global__ void u_fluc_k(float *u_fluc, float *u_mean, float *n, int *np, int Nrow, int Ncol)
+    {
+        // u_fluc : velocity fluctuations of surrounding points
+        // u_mean : mean velocity of surrounding points
+        // n : velocity of neighbours
+        // np : neighbours present
+        // Nrow, Ncol: number of rows and columns
+
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+        if(w_idx >= Ncol * Nrow){return;}
+
+        // rms is normalized by number of terms summed
+        float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
+                            np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
+
+
+        __syncthreads();
+
+        // ensure denominator is not zero then compute fluctuations
+        if(denominator > 0){
+            float numerator = fabsf(np[w_idx * 18 + 0] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 1] - u_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 2] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 3] - u_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 5] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 6] - u_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 7] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 8] - u_mean[w_idx]);
+
+            u_fluc[w_idx] = numerator / denominator;
+        }
+
+        __syncthreads();
+    }
+
+    __global__ void v_fluc_k(float *v_fluc, float *v_mean, float *n, int *np, int Nrow, int Ncol)
+    {
+        // v_fluc : velocity fluctuations of surrounding points
+        // v_mean : mean velocity of surrounding points
+        // n : velocity of neighbours
+        // np : neighbours present
+        // Nrow, Ncol: number of rows and columns
+
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+        if(w_idx >= Ncol * Nrow){return;}
+
+        // rms is normalized by number of terms summed
+        float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
+                            np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
+
+        __syncthreads();
+
+        // ensure denominator is not zero then compute fluctuations
+        if (denominator > 0){
+            float numerator = fabsf(np[w_idx * 18 + 9] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 10] - v_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 11] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 12] - v_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 14] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 15] - v_mean[w_idx]) + \
+                              fabsf(np[w_idx * 18 + 16] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 17] - v_mean[w_idx]);
+
+            v_fluc[w_idx] = numerator / denominator;
+        }
+
+        __syncthreads();
+    }
+    """)
+
+    # allocate space for data
+    u_rms = np.zeros((n_row, n_col), dtype=np.float32)
+    v_rms = np.zeros((n_row, n_col), dtype=np.float32)
+    n_row = np.int32(n_row)
+    n_col = np.int32(n_col)
+
+    # define GPU data
+    # block_size = 16
+    block_size = 32
+    x_blocks = int(n_row * n_col // block_size + 1)
+
+    # send data to gpu
+    d_u_fluc = gpuarray.to_gpu(u_rms)
+    d_v_fluc = gpuarray.to_gpu(v_rms)
+
+    # get and launch kernel
+    mod_u_fluc = mod_mean_fluc.get_function("u_fluc_k")
+    mod_v_fluc = mod_mean_fluc.get_function("v_fluc_k")
+    mod_u_fluc(d_u_fluc, d_u_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_fluc(d_v_fluc, d_v_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return d_u_fluc, d_v_fluc
+
+
 def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
     """Calculates the rms velocity in a 3x3 grid around each point in a velocity field.
 
@@ -2176,7 +2285,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
     mod_rms = SourceModule("""
     __global__ void u_rms_k(float *u_rms, float *n, int *np, int Nrow, int Ncol)
     {
-        // u_rms : mean velocity of surrounding points
+        // u_rms : rms of surrounding points
         // n : velocity of neighbours
         // np : neighbours present
         // Nrow, Ncol: number of rows and columns
@@ -2184,27 +2293,28 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         if(w_idx >= Ncol * Nrow){return;}
-        
+
         // rms is normalized by number of terms summed
-        float denominator = np[w_idx * 9] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-        
+        float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
+                            np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
+
         __syncthreads();
-        
+
         // ensure denominator is not zero then compute rms
         if(denominator > 0){
             float numerator = (powf(n[w_idx * 18 + 0], 2) + powf(n[w_idx * 18 + 1], 2) + powf(n[w_idx * 18 + 2], 2) + \
                                powf(n[w_idx * 18 + 3], 2) + powf(n[w_idx * 18 + 5], 2) + powf(n[w_idx * 18 + 6], 2) + \
                                powf(n[w_idx * 18 + 7], 2) + powf(n[w_idx * 18 + 8], 2));
-        
+
             u_rms[w_idx] = sqrtf(numerator / denominator);
         }
-        
+
         __syncthreads();
     }
 
     __global__ void v_rms_k(float *v_rms, float *n, int *np, int Nrow, int Ncol)
     {
-        // u_rms : mean velocity of surrounding points
+        // v_rms : rms of surrounding points
         // n : velocity of neighbours
         // np : neighbours present
         // Nrow, Ncol: number of rows and columns
@@ -2212,12 +2322,13 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         if(w_idx >= Ncol * Nrow){return;}
-        
+
         // rms is normalized by number of terms summed
-        float denominator = np[w_idx * 9] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-        
+        float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
+                            np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
+
         __syncthreads();
-        
+
         // ensure denominator is not zero then compute rms
         if (denominator > 0){
             float numerator = (powf(n[w_idx * 18 + 9], 2) + powf(n[w_idx * 18 + 10], 2) + powf(n[w_idx * 18 + 11], 2) + \
@@ -2226,7 +2337,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
 
             v_rms[w_idx] = sqrtf(numerator / denominator);
         }
-        
+
         __syncthreads();
     }
     """)
