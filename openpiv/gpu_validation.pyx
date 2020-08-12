@@ -59,7 +59,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     }
 
 
-    __global__ void median_validation(int *val_list, float *u_rms, float *v_rms, float *u_mean, float *v_mean, float *u, float *v, int Nrow, int Ncol, float tol)
+    __global__ void median_validation(int *val_list, float *u, float *v, float *u_median, float *v_median, float *u_median_fluc, float *v_median_fluc, int Nrow, int Ncol, float tol)
     {
         // val_list: list of locations where validation is needed
         // rms_u : rms u velocity of neighbours
@@ -71,13 +71,12 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         // Nrow, Ncol : number of rows and columns
         // tol : validation tolerance. usually 1.5
 
-        int w_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        if(w_idx >= Nrow * Ncol){return;}
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= Nrow * Ncol) {return;}
         
         // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-        int u_validation = (fabsf(u[w_idx] - u_mean[w_idx]) / (u_rms[w_idx] + 0.1) < tol);
-        int v_validation = (fabsf(v[w_idx] - v_mean[w_idx]) / (v_rms[w_idx] + 0.1) < tol);
+        int u_validation = fabsf(u[w_idx] - u_median[w_idx]) / (u_median_fluc[w_idx] + 0.1) < tol;
+        int v_validation = fabsf(v[w_idx] - v_median[w_idx]) / (v_median_fluc[w_idx] + 0.1) < tol;
 
         val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
     }
@@ -95,12 +94,11 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         // tol : validation tolerance. usually 1.5
 
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
         if (w_idx >= Nrow * Ncol) {return;}
         
         // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-        int u_validation = (fabsf(u[w_idx] - u_mean[w_idx]) / (u_rms[w_idx] + 0.1) < tol);
-        int v_validation = (fabsf(v[w_idx] - v_mean[w_idx]) / (v_rms[w_idx] + 0.1) < tol);
+        int u_validation = fabsf(u[w_idx] - u_mean[w_idx]) / (u_rms[w_idx] + 0.1) < tol;
+        int v_validation = fabsf(v[w_idx] - v_mean[w_idx]) / (v_rms[w_idx] + 0.1) < tol;
 
         val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
     }
@@ -113,8 +111,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         // Nrow, Ncol : number of rows and columns
 
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-        if(w_idx >= Nrow*Ncol){return;}
+        if (w_idx >= Nrow*Ncol) {return;}
 
         val_list[w_idx] = val_list[w_idx] * (fabsf(div[w_idx]) < div_tol);
     }
@@ -127,6 +124,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     # cast inputs to appropriate data types
     sig2noise = sig2noise.astype(np.float32)
     s2n_tol = np.float32(s2n_tol)
+    median_tol = np.float32(median_tol)
     mean_tol = np.float32(mean_tol)
     div_tol = np.float32(div_tol)
     n_row = np.int32(n_row)
@@ -171,17 +169,17 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     if median_tol > 0:
         # get rms data and mean velocity data.
         d_u_median, d_v_median = gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col)
-        d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, n_row, n_col)
+        d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
 
         median_validation = mod_validation.get_function("median_validation")
-        median_validation(d_val_list, d_u_median_fluc, d_v_median_fluc, d_u_median, d_v_median, d_u, d_v, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        median_validation(d_val_list, d_u, d_v, d_u_median, d_v_median, d_u_median_fluc, d_v_median_fluc, n_row, n_col, median_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
         # Free gpu memory
-        d_neighbours_present.gpudata.free()
-        d_neighbours.gpudata.free()
+        d_u_median.gpudata.free()
+        d_v_median.gpudata.free()
         d_u_median_fluc.gpudata.free()
         d_v_median_fluc.gpudata.free()
-        # del d_u_norm, d_v_norm
+        # del d_u_median, d_v_median, d_u_median_fluc, d_v_median_fluc
 
     ##########################
     # mean_velocity validation
@@ -298,8 +296,6 @@ def gpu_find_neighbours(n_row, n_col):
     # GPU settings
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
 
     # allocate space for new array
     neighbours_present = np.ones([n_row, n_col, 3, 3], dtype=np.int32)
@@ -399,10 +395,6 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     }
     """)
 
-    # set dtype of inputs
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
-
     # Get GPU grid dimensions and function
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
@@ -448,9 +440,13 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
         // n : velocity of neighbours
         // np : neighbours present
         // Nrow, Ncol : number of rows and columns
-
+        
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= Ncol * Nrow) {return;}
+        
+        // ensure denominator is not zero then compute mean
+        float numerator_u = n[w_idx * 18 + 0] + n[w_idx * 18 + 1] + n[w_idx * 18 + 2] + n[w_idx * 18 + 3] + \
+                            n[w_idx * 18 + 5] + n[w_idx * 18 + 6] + n[w_idx * 18 + 7] + n[w_idx * 18 + 8];
         
         // mean is normalized by number of terms summed
         float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
@@ -458,13 +454,7 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
         
         __syncthreads();
         
-        // ensure denominator is not zero then compute mean
-        if(denominator > 0){
-            float numerator_u = n[w_idx * 18 + 0] + n[w_idx * 18 + 1] + n[w_idx * 18 + 2] + n[w_idx * 18 + 3] + \
-                                n[w_idx * 18 + 5] + n[w_idx * 18 + 6] + n[w_idx * 18 + 7] + n[w_idx * 18 + 8];
-            
-            u_mean[w_idx] = numerator_u / denominator;
-        }
+        u_mean[w_idx] = numerator_u / denominator;
         
         __syncthreads();
     }
@@ -479,20 +469,17 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= Ncol * Nrow) {return;}
         
+        // ensure denominator is not zero then compute mean
+        float numerator_v = n[w_idx * 18 + 9] + n[w_idx * 18 + 10] + n[w_idx * 18 + 11] + n[w_idx * 18 + 12] + \
+                            n[w_idx * 18 + 14] + n[w_idx * 18 + 15] + n[w_idx * 18 + 16] + n[w_idx * 18 + 17];
+        
         // mean is normalized by number of terms summed
         float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
                             np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
         
         __syncthreads();
         
-        // ensure denominator is not zero then compute mean
-        if (denominator > 0)
-        {
-            float numerator_v = n[w_idx * 18 + 9] + n[w_idx * 18 + 10] + n[w_idx * 18 + 11] + n[w_idx * 18 + 12] + \
-                                n[w_idx * 18 + 14] + n[w_idx * 18 + 15] + n[w_idx * 18 + 16] + n[w_idx * 18 + 17];
-            
-            v_mean[w_idx] = numerator_v / denominator;
-        }
+        v_mean[w_idx] = numerator_v / denominator;
         
         __syncthreads();
     }
@@ -501,8 +488,6 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     # allocate space for arrays
     u_mean = np.zeros((n_row, n_col), dtype=np.float32)
     v_mean = np.zeros((n_row, n_col), dtype=np.float32)
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
 
     # define GPU data
     # block_size = 16
@@ -555,22 +540,19 @@ def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row,
 
         if (w_idx >= Ncol * Nrow) {return;}
 
+        // ensure denominator is not zero then compute fluctuations
+        float numerator = fabsf(np[w_idx * 18 + 0] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 1] - u_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 2] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 3] - u_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 5] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 6] - u_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 7] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 8] - u_mean[w_idx]);
+        
         // rms is normalized by number of terms summed
         float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
                             np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
 
         __syncthreads();
 
-        // ensure denominator is not zero then compute fluctuations
-        if(denominator > 0)
-        {
-            float numerator = fabsf(np[w_idx * 18 + 0] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 1] - u_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 2] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 3] - u_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 5] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 6] - u_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 7] - u_mean[w_idx]) + fabsf(np[w_idx * 18 + 8] - u_mean[w_idx]);
-
-            u_fluc[w_idx] = numerator / denominator;
-        }
+        u_fluc[w_idx] = numerator / denominator;
 
         __syncthreads();
     }
@@ -591,18 +573,15 @@ def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row,
         float denominator = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
                             np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
 
+        // ensure denominator is not zero then compute fluctuations
+        float numerator = fabsf(np[w_idx * 18 + 9] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 10] - v_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 11] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 12] - v_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 14] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 15] - v_mean[w_idx]) + \
+                          fabsf(np[w_idx * 18 + 16] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 17] - v_mean[w_idx]);
+
         __syncthreads();
 
-        // ensure denominator is not zero then compute fluctuations
-        if (denominator > 0)
-        {
-            float numerator = fabsf(np[w_idx * 18 + 9] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 10] - v_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 11] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 12] - v_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 14] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 15] - v_mean[w_idx]) + \
-                              fabsf(np[w_idx * 18 + 16] - v_mean[w_idx]) + fabsf(np[w_idx * 18 + 17] - v_mean[w_idx]);
-
-            v_fluc[w_idx] = numerator / denominator;
-        }
+        v_fluc[w_idx] = numerator / denominator;
 
         __syncthreads();
     }
@@ -611,8 +590,6 @@ def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row,
     # allocate space for data
     u_rms = np.zeros((n_row, n_col), dtype=np.float32)
     v_rms = np.zeros((n_row, n_col), dtype=np.float32)
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
 
     # define GPU data
     block_size = 32
@@ -650,8 +627,53 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
 
     """
     mod_median_vel = SourceModule("""
-    #include <thrust/sort.h>
-    
+    // device-side function to swap elements of two arrays
+    __device__ void swap(float *A, int a, int b)
+    {
+        float tmp_A = A[a];
+        A[a] = A[b];
+        A[b] = tmp_A;
+    }
+
+    // device-side function to compare and swap elements of two arrays
+    __device__ void compare(float *A, float *B, int a, int b)
+    {
+        if (B[a] < B[b])
+        {
+            swap(A, a, b);
+            swap(B, a, b);
+        }
+        else if (A[a] > A[b] && B[a] == B[b] == 1)
+        {
+            swap(A, a, b);
+            swap(B, a, b);
+        }
+    }
+
+    // device-side function to do an 8-wire sorting network
+    __device__ void sort(float *A, float *B)
+    {
+        compare(A, B, 0, 1);
+        compare(A, B, 2, 3);
+        compare(A, B, 4, 5);
+        compare(A, B, 6, 7);
+        compare(A, B, 0, 2);
+        compare(A, B, 1, 3);
+        compare(A, B, 4, 6);
+        compare(A, B, 5, 7);
+        compare(A, B, 1, 2);
+        compare(A, B, 5, 6);
+        compare(A, B, 0, 4);
+        compare(A, B, 3, 7);
+        compare(A, B, 1, 5);
+        compare(A, B, 2, 6);
+        compare(A, B, 1, 4);
+        compare(A, B, 3, 6);
+        compare(A, B, 2, 4);
+        compare(A, B, 3, 5);
+        compare(A, B, 3, 4);
+    }
+
     __global__ void u_median_vel(float *u_median, float *n, int *np, int Nrow, int Ncol)
     {
         // u_median : median velocity of surrounding points
@@ -661,32 +683,35 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
 
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= Ncol * Nrow) {return;}
-        
-        // count the neighbouring points
-        int N = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
-                np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-                                
-        __syncthreads();
-        
+
         // loop through neighbours to populate an array to sort
-        int i
-        int j = 0
-        float array[N]
-        for (i = 0; i < 8; i++)
+        int i;
+        int j = 0;
+        float A[8];
+        float B[8];
+        for (i = 0; i < 9; i++)
         {
-            if (i = 4) {continue;}
-            if (np[w_idx * 9 + i]) {A[j++] = n[w_idx * 18 + i];}
+            if (i != 4)
+            {
+                A[j] = n[w_idx * 18 + i];
+                B[j++] = np[w_idx * 9 + i];
+            }
         }
-        
+
         __syncthreads();
-        
+
         // sort the array
-        thrust::sort(A, A + N);
-        
+        sort(A, B);
+
+        __syncthreads();
+
+        // count the neighbouring points
+        int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
+
         // return the median
-        if (N % 2 = 0) {u_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
-        else {u_median[w_idx] = A[(num / 2];}
-        
+        if (N % 2 == 0) {u_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
+        else {u_median[w_idx] = A[N / 2];}
+
         __syncthreads();
     }
 
@@ -696,35 +721,40 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
         // n : velocity of neighbours
         // np : neighbours present
         // Nrow, Ncol : number of rows and columns
-        
+
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= Ncol * Nrow) {return;}
         
-        // count the neighbouring points
-        int N = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
-                np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-                                
         __syncthreads();
-        
+
         // loop through neighbours to populate an array to sort
-        int i
-        int j = 0
-        float array[N]
-        for (i = 0; i < 8; i++)
+        int i;
+        int j = 0;
+        float A[8];
+        float B[8];
+        for (i = 0; i < 9; i++)
         {
-            if (i = 4) {continue;}
-            if (np[w_idx * 9 + i]) {A[j++] = n[w_idx * 18 + 9 + i];}
+            if (i != 4)
+            {
+                A[j] = n[w_idx * 18 + 9 + i];
+                B[j++] = np[w_idx * 9 + i];
+            }
         }
-        
+
         __syncthreads();
-        
+
         // sort the array
-        thrust::sort(A, A + N);
-        
+        sort(A, B);
+
+        __syncthreads();
+
+        // count the neighbouring points
+        int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
+
         // return the median
-        if (N % 2 = 0) {u_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
-        else {u_median[w_idx] = A[(num / 2];}
-        
+        if (N % 2 == 0) {v_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
+        else {v_median[w_idx] = A[N / 2];}
+
         __syncthreads();
     }
     """)
@@ -732,8 +762,6 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     # allocate space for arrays
     u_median = np.zeros((n_row, n_col), dtype=np.float32)
     v_median = np.zeros((n_row, n_col), dtype=np.float32)
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
 
     # define GPU data
     block_size = 32
@@ -744,10 +772,10 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     d_v_median = gpuarray.to_gpu(v_median)
 
     # get and launch kernel
-    u_mean_vel = mod_median_vel.get_function("u_median_vel")
-    v_mean_vel = mod_median_vel.get_function("v_median_vel")
-    u_mean_vel(d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    v_mean_vel(d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    u_median_vel = mod_median_vel.get_function("u_median_vel")
+    v_median_vel = mod_median_vel.get_function("v_median_vel")
+    u_median_vel(d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    v_median_vel(d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return d_u_median, d_v_median
 
@@ -768,13 +796,58 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
 
     Returns
     -------
-    d_u_fluc, d_v_fluc : GPUArray - 2D float32
+    d_u_median_fluc, d_v_median_fluc : GPUArray - 2D float32
         rms velocities at each point
 
     """
     mod_median_fluc = SourceModule("""
-    #include <thrust/sort.h>
-    
+    // device-side function to swap elements of two arrays
+    __device__ void swap(float *A, int a, int b)
+    {
+        float tmp_A = A[a];
+        A[a] = A[b];
+        A[b] = tmp_A;
+    }
+
+    // device-side function to compare and swap elements of two arrays
+    __device__ void compare(float *A, float *B, int a, int b)
+    {
+        if (B[a] < B[b])
+        {
+            swap(A, a, b);
+            swap(B, a, b);
+        }
+        else if (A[a] > A[b] && B[a] == B[b] == 1)
+        {
+            swap(A, a, b);
+            swap(B, a, b);
+        }
+    }
+
+    // device-side function to do an 8-wire sorting network
+    __device__ void sort(float *A, float *B)
+    {
+        compare(A, B, 0, 1);
+        compare(A, B, 2, 3);
+        compare(A, B, 4, 5);
+        compare(A, B, 6, 7);
+        compare(A, B, 0, 2);
+        compare(A, B, 1, 3);
+        compare(A, B, 4, 6);
+        compare(A, B, 5, 7);
+        compare(A, B, 1, 2);
+        compare(A, B, 5, 6);
+        compare(A, B, 0, 4);
+        compare(A, B, 3, 7);
+        compare(A, B, 1, 5);
+        compare(A, B, 2, 6);
+        compare(A, B, 1, 4);
+        compare(A, B, 3, 6);
+        compare(A, B, 2, 4);
+        compare(A, B, 3, 5);
+        compare(A, B, 3, 4);
+    }
+
     __global__ void u_fluc_k(float *u_median_fluc, float *u_median, float *n, int *np, int Nrow, int Ncol)
     {
         // u_fluc : velocity fluctuations of surrounding points
@@ -784,34 +857,40 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
         // Nrow, Ncol : number of rows and columns
 
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
         if (w_idx >= Ncol * Nrow) {return;}
-        
-        // count the neighbouring points
-        int N = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
-                np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-                                
+
         __syncthreads();
-        
+
+        float u_m = u_median[w_idx];
+
         // loop through neighbours to populate an array to sort
-        int i
-        int j = 0
-        float array[N]
-        for (i = 0; i < 8; i++)
+        int i;
+        int j = 0;
+        float A[8];
+        float B[8];
+        for (i = 0; i < 9; i++)
         {
-            if (i = 4) {continue;}
-            if (np[w_idx * 9 + i]) {A[j++] = n[w_idx * 18 + i] - u_median[w_idx];}
+            if (i != 4)
+            {
+                A[j] = fabsf(n[w_idx * 18 + i] - u_m);
+                B[j++] = np[w_idx * 9 + i];
+            }
         }
-        
+
         __syncthreads();
-        
+
         // sort the array
-        thrust::sort(A, A + N);
-        
+        sort(A, B);
+
+        __syncthreads();
+
+        // count the neighbouring points
+        int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
+
         // return the median
-        if (N % 2 = 0) {u_median[w_idx] = fabsf((A[N / 2 - 1] + A[N / 2]) / 2);}
-        else {u_median[w_idx] = fabsf(A[(num / 2]);}
-        
+        if (N % 2 == 0) {u_median_fluc[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
+        else {u_median_fluc[w_idx] = A[N / 2];}
+
         __syncthreads();
     }
 
@@ -824,34 +903,40 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
         // Nrow, Ncol : number of rows and columns
 
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
         if (w_idx >= Ncol * Nrow) {return;}
 
-        // count the neighbouring points
-        int N = np[w_idx * 9 + 0] + np[w_idx * 9 + 1] + np[w_idx * 9 + 2] + np[w_idx * 9 + 3] + \
-                np[w_idx * 9 + 5] + np[w_idx * 9 + 6] + np[w_idx * 9 + 7] + np[w_idx * 9 + 8];
-                                
         __syncthreads();
-        
+
+        float v_m = v_median[w_idx];
+
         // loop through neighbours to populate an array to sort
-        int i
-        int j = 0
-        float array[N]
-        for (i = 0; i < 8; i++)
+        int i;
+        int j = 0;
+        float A[8];
+        float B[8];
+        for (i = 0; i < 9; i++)
         {
-            if (i = 4) {continue;}
-            if (np[w_idx * 9 + i]) {A[j++] = n[w_idx * 18 + 9 + i] - u_median[w_idx];}
+            if (i != 4)
+            {
+                A[j] = fabsf(n[w_idx * 18 + 9 + i] - v_m);
+                B[j++] = np[w_idx * 9 + i];
+            }
         }
-        
+
         __syncthreads();
-        
+
         // sort the array
-        thrust::sort(A, A + N);
-        
+        sort(A, B);
+
+        __syncthreads();
+
+        // count the neighbouring points
+        int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
+
         // return the median
-        if (N % 2 = 0) {u_median[w_idx] = fabsf((A[N / 2 - 1] + A[N / 2]) / 2));}
-        else {u_median[w_idx] = fabsf(A[(num / 2]);}
-        
+        if (N % 2 == 0) {v_median_fluc[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
+        else {v_median_fluc[w_idx] = A[N / 2];}
+
         __syncthreads();
     }
     """)
@@ -859,24 +944,22 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
     # allocate space for data
     u_median_fluc = np.zeros((n_row, n_col), dtype=np.float32)
     v_median_fluc = np.zeros((n_row, n_col), dtype=np.float32)
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
 
     # define GPU data
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
     # send data to gpu
-    d_u_fluc = gpuarray.to_gpu(u_median_fluc)
-    d_v_fluc = gpuarray.to_gpu(v_median_fluc)
+    d_u_median_fluc = gpuarray.to_gpu(u_median_fluc)
+    d_v_median_fluc = gpuarray.to_gpu(v_median_fluc)
 
     # get and launch kernel
     mod_u_fluc = mod_median_fluc.get_function("u_fluc_k")
     mod_v_fluc = mod_median_fluc.get_function("v_fluc_k")
-    mod_u_fluc(d_u_fluc, d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    mod_v_fluc(d_v_fluc, d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_u_fluc(d_u_median_fluc, d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_fluc(d_v_median_fluc, d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_fluc, d_v_fluc
+    return d_u_median_fluc, d_v_median_fluc
 
 
 # def gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col):
