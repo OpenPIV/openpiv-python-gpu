@@ -1183,6 +1183,7 @@ def widim(frame_a,
     # end(start_time)
     return x, y, u, v, mask, sig2noise
 
+
 def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
     """Initiate the full GPU version of the validation and interpolation.
 
@@ -1333,9 +1334,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     drv.Context.synchronize()
 
     #--------------------------INTERIOR GRID---------------------------------
-
     if interior_ind.size != 0:
-
         # get gpu data for position now
         d_low_x, d_high_x = f_dichotomy_gpu(d_f[k:k + 2, :, 0, 0].copy(), k, "x_axis", d_interior_ind_x, w, overlap, n_row, n_col)
         d_low_y, d_high_y = f_dichotomy_gpu(d_f[k:k + 2, 0, :, 1].copy(), k, "y_axis", d_interior_ind_y, w, overlap, n_row, n_col)
@@ -1378,7 +1377,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 
     #------------------------------SIDES-----------------------------------
     if top_ind.size > 0:
-
         # get now position and surrounding points
         d_low_y, d_high_y = f_dichotomy_gpu(d_f[k:k + 2, 0, :, 1].copy(), k, "y_axis", d_top_ind, w, overlap, n_row, n_col)
 
@@ -1404,9 +1402,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         drv.Context.synchronize()
 
     # BOTTOM
-    # if(False):
     if bottom_ind.size > 0:
-
         # get position data
         d_low_y, d_high_y = f_dichotomy_gpu(d_f[k:k + 2, 0, :, 1].copy(), k, "y_axis", d_bottom_ind, w, overlap, n_row, n_col)
 
@@ -1432,7 +1428,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         drv.Context.synchronize()
 
     # LEFT
-    # if(False):
     if left_ind.size > 0:
         # get position data
         d_low_x, d_high_x = f_dichotomy_gpu(d_f[k:k + 2, :, 0, 0].copy(), k, "x_axis", d_left_ind, w, overlap, n_row, n_col)
@@ -1459,7 +1454,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         drv.Context.synchronize()
 
     # RIGHT
-    # if(False):
     if right_ind.size > 0:
         # get position data
         d_low_x, d_high_x = f_dichotomy_gpu(d_f[k:k + 2, :, 0, 0].copy(), k, "x_axis", d_right_ind, w, overlap, n_row, n_col)
