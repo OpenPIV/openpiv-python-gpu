@@ -1,8 +1,5 @@
 openpiv/docs/sphinx-docs/downloads/tutorial-part1
 *.m
-openpiv/process.c
-openpiv/gpu_process.c
-openpiv/lib.c
 *.jvc
 *.pyc
 build/
@@ -41,5 +38,6 @@ openpiv/masking_tutorial/.ipynb_checkpoints
 OpenPIV.egg-info
 *.ipynb_checkpoints*
 .vscode/settings.json
+*.c
 *.so
 .idea/*

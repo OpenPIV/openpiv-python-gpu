@@ -21,12 +21,17 @@ except ImportError:
 extensions = [
     Extension("openpiv.process", ["./openpiv/process.pyx"], include_dirs=[numpy.get_include()])]
 
-if GPU_SUPPORT == True:
+if GPU_SUPPORT:
     gpu_module = Extension(name="openpiv.gpu_process",
                            sources=["openpiv/gpu_process.pyx"],
                            include_dirs=[numpy.get_include()],
                            )
     extensions.append(gpu_module)
+    gpu_validation_module = Extension(name="openpiv.gpu_validation",
+                                      sources=["openpiv/gpu_validation.pyx"],
+                                      include_dirs=[numpy.get_include()],
+                                      )
+    extensions.append(gpu_validation_module)
 
 extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_directives={'language_level': "3"})
 
