@@ -156,9 +156,8 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
         partition_size = None
 
     # print information about the multiprocessing
-    print('Multiprocessing: Number of processes requested =', num_processes,
-          '. Number of CPU cores available =', cpu_count())
-    print('Multiprocessing: Number of physical GPUs to use =', num_gpus, '. Number of GPUs available =', 'unknown')
+    print('Multiprocessing: Number of processes requested = {}. Number of CPU cores available = {}'.format(num_processes, cpu_count()))
+    print('Multiprocessing: Number of physical GPUs to use = {}. Number of GPUs available = {}'.format(num_gpus, 'unknown'))
     print('Multiprocessing: Size of each partition =', partition_size)
 
     # loop through each partition to spawn processes

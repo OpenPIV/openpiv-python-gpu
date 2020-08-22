@@ -10,6 +10,7 @@ import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
 from numpy.fft import fftshift
+from math import sqrt
 from openpiv.gpu_validation import gpu_validation
 
 cimport numpy as np
@@ -919,6 +920,7 @@ def widim(frame_a,
     ####################################################
     # input checks
     ht, wd = frame_a.shape
+    dt = np.float32(dt)
 
     # Initialize skcuda miscellaneous library
     cu_misc.init()
@@ -945,18 +947,18 @@ def widim(frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=1] w = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
 
-    # # window sizes list initialization - old
-    # for K in range(nb_refinement_iter + 1):
-    #     w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
-    # for K in range(nb_refinement_iter + 1, nb_iter_max):
-    #     w[K] = w[K - 1]
+    # window sizes list initialization - old
+    for K in range(nb_refinement_iter + 1):
+        w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
+    for K in range(nb_refinement_iter + 1, nb_iter_max):
+        w[K] = w[K - 1]
 
-    # window sizes list initialization
-    for K in range(0, nb_iter_max - nb_refinement_iter):
-        w[K] = np.power(2, nb_refinement_iter) * min_window_size
-    for K in range(nb_iter_max - nb_refinement_iter, nb_iter_max):
-        w[K] = np.power(2, nb_iter_max - K - 1) * min_window_size
-    print('windows sizes = {}'.format(w))
+    # # window sizes list initialization
+    # for K in range(0, nb_iter_max - nb_refinement_iter):
+    #     w[K] = np.power(2, nb_refinement_iter) * min_window_size
+    # for K in range(nb_iter_max - nb_refinement_iter, nb_iter_max):
+    #     w[K] = np.power(2, nb_iter_max - K - 1) * min_window_size
+    # print('windows sizes = {}'.format(w))
 
     # overlap init
     for K in range(nb_iter_max):
@@ -982,7 +984,7 @@ def widim(frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
-    # define array for signal to noise ratio
+    # define arrays for signal to noise ratio
     cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
 
     # define arrays used for the validation process
@@ -1025,12 +1027,11 @@ def widim(frame_a,
             f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
 
     # initialize mask
+    mask_b = np.ones((ht, wd))
     if mask is not None:
-        mask_b = mask.astype(np.uint8)
-    else:
-        f[:, :, :, 11] = 1
+        mask_b = mask
 
-    cdef DTYPEb_t [:, :] mask_view = mask.astype(np.uint8)
+    cdef DTYPEb_t [:, :] mask_view = mask_b.astype(np.uint8)
     cdef Py_ssize_t x_idx
     cdef Py_ssize_t y_idx
     if mask is not None:
@@ -1041,6 +1042,8 @@ def widim(frame_a,
                     x_idx = int(f[K, I, J, 0])
                     y_idx = int(f[K, I, J, 1])
                     f[K, I, J, 11] = mask_view[x_idx, y_idx]
+    else:
+        f[:, :, :, 11] = 1
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
@@ -1088,14 +1091,14 @@ def widim(frame_a,
         assert not np.isnan(i_peak).any(), 'NaNs in correlation peaks!'
         assert not np.isnan(j_peak).any(), 'NaNs in correlation peaks!'
         gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
-
-        #################################################################################
         print("...[DONE]")
-        print(" ")
-        # if K==0:
-        #     residual_0 = residual/np.float(n_row[K]*n_col[K])
-        #     print(residual_0)
-        # print(" --residual : ", (residual/np.float(n_row[K]*n_col[K]))/residual_0)
+
+        # normalize the residual by the maximum quantization error of 0.5 pixel
+        try:
+            residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
+            print("--normalized residual : {}\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
+        except OverflowError:
+            print('Overflow')
 
         #########################################################
         # validation of the velocity vectors with 3 * 3 filtering
@@ -1123,8 +1126,7 @@ def widim(frame_a,
                 else:
                     print('No invalid vectors!')
 
-            print("...[DONE]")
-            print(" ")
+            print("...[DONE]\n")
 
         # end of validation
 
@@ -1151,8 +1153,7 @@ def widim(frame_a,
             # # delete old correlation function
             # del c
 
-            print("...[DONE] -----> going to iteration ", K + 1)
-            print(" ")
+            print("...[DONE] -----> going to iteration {}\n".format(K + 1))
 
     ##############################################################################
     # return the results
@@ -1169,8 +1170,7 @@ def widim(frame_a,
     u = f[k, :, :, 8]
     v = f[k, :, :, 9]
 
-    print("...[DONE]")
-    print(" ")
+    print("...[DONE]\n")
 
     # delete images from gpu memory
     d_frame_a_f.gpudata.free()
@@ -1577,7 +1577,7 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
             // F is where all the data is stored at a particular K
             // i_peak / j_peak is the correlation peak location
             // sig2noise = sig2noise ratio from correlation function
-            // cols = number of colums of IW's
+            // cols = number of columns of IWs
             // fourth_dim  = size of the fourth dimension of F
             // dt = time step between frames
             // leap = 'leaps' to where the F iteration starts
@@ -1603,15 +1603,7 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
         }
         """)
 
-    # make all arrays the proper data type
-    i_peak = i_peak.astype(np.float32)
-    j_peak = j_peak.astype(np.float32)
-    sig2noise = sig2noise.astype(np.float32)
-    dt = np.float32(dt)
-
     # GPU parameters
-    n_col = np.int32(n_col)
-    n_row = np.int32(n_row)
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
 
@@ -1630,10 +1622,10 @@ def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
     d_f[k, 0:n_row, 0:n_col, :] = d_f_tmp
 
     # Free gpu memory
+    d_f_tmp.gpudata.free()
     d_i_peak.gpudata.free()
     d_j_peak.gpudata.free()
     d_sig2noise.gpudata.free()
-    d_f_tmp.gpudata.free()
 
 
 # gpu validation algorithms removed from here
