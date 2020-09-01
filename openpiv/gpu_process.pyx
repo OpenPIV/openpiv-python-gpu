@@ -1094,8 +1094,11 @@ def widim(frame_a,
         print("...[DONE]")
 
         # normalize the residual by the maximum quantization error of 0.5 pixel
-        residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
-        print("--normalized residual : {}\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
+        try:
+            residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
+            print("--normalized residual : {}\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
+        except OverflowError:
+            print('Overflow')
 
         #########################################################
         # validation of the velocity vectors with 3 * 3 filtering
