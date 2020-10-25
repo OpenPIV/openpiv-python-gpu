@@ -42,10 +42,10 @@ with open(path.join(this_directory, 'README.md')) as f:
     long_description = f.read()
 
 setup(
-    name="OpenPIV",
-    version='0.22.2',
-    cmdclass={'build_ext': build_ext},
-    ext_modules=extensions,
+    name = "OpenPIV",
+    version ='0.22.3',
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = extensions,
     packages=find_packages(),
     include_package_data=True,
     setup_requires=[
@@ -63,9 +63,10 @@ setup(
         'scipy',
         'natsort',
         'GitPython',
-        'pytest'
+        'pytest',
+		'tqdm'
     ],
-    classifiers=[
+    classifiers = [
         # PyPI-specific version type. The number specified here is a magic constant
         # with no relation to this application's version numbering scheme. *sigh*
         'Development Status :: 4 - Beta',
