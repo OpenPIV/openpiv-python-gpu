@@ -5,20 +5,18 @@ Created on Fri Oct  4 14:04:04 2019
 @author: Theo
 """
 
-
 import os
 import numpy as np
 from numpy.fft import rfft2, irfft2, fftshift
 import scipy.ndimage as scn
 from scipy.interpolate import RectBivariateSpline
-from openpiv import process, validation, filters, pyprocess, tools, preprocess,scaling
+from openpiv import process, validation, filters, pyprocess, tools, preprocess, scaling
 from openpiv import smoothn
 import matplotlib.pyplot as plt
 
-def piv(settings):
-    
 
-#    '''the func fuction is the "frame" in which the PIV evaluation is done'''
+def piv(settings):
+    #    '''the func fuction is the "frame" in which the PIV evaluation is done'''
 
     def func(args):
         """A function to process each image pair."""
@@ -37,29 +35,36 @@ def piv(settings):
         frame_a = tools.imread(os.path.join(settings.filepath_images, file_a))
         frame_b = tools.imread(os.path.join(settings.filepath_images, file_b))
 
-        
         ## Miguel: I just had a quick look, and I do not understand the reason for this step.
         #  I propose to remove it.
-        #frame_a = (frame_a*1024).astype(np.int32)
-        #frame_b = (frame_b*1024).astype(np.int32)
+        # frame_a = (frame_a*1024).astype(np.int32)
+        # frame_b = (frame_b*1024).astype(np.int32)
 
         ' crop to ROI'
-        if settings.ROI=='full':
-            frame_a=frame_a
-            frame_b=frame_b
-        else:     
-            frame_a =  frame_a[settings.ROI[0]:settings.ROI[1],settings.ROI[2]:settings.ROI[3]]
-            frame_b =  frame_b[settings.ROI[0]:settings.ROI[1],settings.ROI[2]:settings.ROI[3]]
-        if settings.dynamic_masking_method=='edge' or 'intensity':    
-            frame_a = preprocess.dynamic_masking(frame_a,method=settings.dynamic_masking_method,filter_size=settings.dynamic_masking_filter_size,threshold=settings.dynamic_masking_threshold)
-            frame_b = preprocess.dynamic_masking(frame_b,method=settings.dynamic_masking_method,filter_size=settings.dynamic_masking_filter_size,threshold=settings.dynamic_masking_threshold)
+        if settings.ROI == 'full':
+            frame_a = frame_a
+            frame_b = frame_b
+        else:
+            frame_a = frame_a[settings.ROI[0]:settings.ROI[1], settings.ROI[2]:settings.ROI[3]]
+            frame_b = frame_b[settings.ROI[0]:settings.ROI[1], settings.ROI[2]:settings.ROI[3]]
+        if settings.dynamic_masking_method == 'edge' or 'intensity':
+            frame_a = preprocess.dynamic_masking(frame_a, method=settings.dynamic_masking_method,
+                                                 filter_size=settings.dynamic_masking_filter_size,
+                                                 threshold=settings.dynamic_masking_threshold)
+            frame_b = preprocess.dynamic_masking(frame_b, method=settings.dynamic_masking_method,
+                                                 filter_size=settings.dynamic_masking_filter_size,
+                                                 threshold=settings.dynamic_masking_threshold)
 
         '''%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%'''
         'first pass'
-        x, y, u, v, sig2noise_ratio = first_pass(frame_a,frame_b,settings.windowsizes[0], settings.overlap[0],settings.iterations,
-                                      correlation_method=settings.correlation_method, subpixel_method=settings.subpixel_method, do_sig2noise=settings.extract_sig2noise,
-                                      sig2noise_method=settings.sig2noise_method, sig2noise_mask=settings.sig2noise_mask,)
-    
+        x, y, u, v, sig2noise_ratio = first_pass(frame_a, frame_b, settings.windowsizes[0], settings.overlap[0],
+                                                 settings.iterations,
+                                                 correlation_method=settings.correlation_method,
+                                                 subpixel_method=settings.subpixel_method,
+                                                 do_sig2noise=settings.extract_sig2noise,
+                                                 sig2noise_method=settings.sig2noise_method,
+                                                 sig2noise_mask=settings.sig2noise_mask, )
+
         'validation using gloabl limits and std and local median'
         '''MinMaxU : two elements tuple
             sets the limits of the u displacment component
@@ -88,111 +93,122 @@ def piv(settings):
         filter_kernel_size : int
             size of the kernel used for the filtering'''
 
-        mask=np.full_like(x,False)
-        if settings.validation_first_pass==True:    
-            u, v, mask_g = validation.global_val( u, v, settings.MinMax_U_disp, settings.MinMax_V_disp)
-            u,v, mask_s = validation.global_std( u, v, std_threshold = settings.std_threshold )
-            u, v, mask_m = validation.local_median_val( u, v, u_threshold=settings.median_threshold, v_threshold=settings.median_threshold, size=settings.median_size )
-            if settings.extract_sig2noise==True and settings.iterations==1 and settings.do_sig2noise_validation==True:
-                u,v, mask_s2n = validation.sig2noise_val( u, v, sig2noise_ratio, threshold = settings.sig2noise_threshold)
-                mask=mask+mask_g+mask_m+mask_s+mask_s2n
+        mask = np.full_like(x, False)
+        if settings.validation_first_pass == True:
+            u, v, mask_g = validation.global_val(u, v, settings.MinMax_U_disp, settings.MinMax_V_disp)
+            u, v, mask_s = validation.global_std(u, v, std_threshold=settings.std_threshold)
+            u, v, mask_m = validation.local_median_val(u, v, u_threshold=settings.median_threshold,
+                                                       v_threshold=settings.median_threshold, size=settings.median_size)
+            if settings.extract_sig2noise == True and settings.iterations == 1 and settings.do_sig2noise_validation == True:
+                u, v, mask_s2n = validation.sig2noise_val(u, v, sig2noise_ratio, threshold=settings.sig2noise_threshold)
+                mask = mask + mask_g + mask_m + mask_s + mask_s2n
             else:
-                mask=mask+mask_g+mask_m+mask_s
+                mask = mask + mask_g + mask_m + mask_s
         'filter to replace the values that where marked by the validation'
-        if settings.iterations>1:
-             u, v = filters.replace_outliers( u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration, kernel_size=settings.filter_kernel_size)
-             'adding masks to add the effect of all the validations'
-             if settings.smoothn==True:
-                  u,dummy_u1,dummy_u2,dummy_u3=smoothn.smoothn(u,s=settings.smoothn_p)
-                  v,dummy_v1,dummy_v2,dummy_v3=smoothn.smoothn(v,s=settings.smoothn_p)        
-        elif settings.iterations==1 and settings.replace_vectors==True:    
-             u, v = filters.replace_outliers( u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration, kernel_size=settings.filter_kernel_size)
-             'adding masks to add the effect of all the validations'
-             if settings.smoothn==True:
-                  u, v = filters.replace_outliers( u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration, kernel_size=settings.filter_kernel_size)
-                  u,dummy_u1,dummy_u2,dummy_u3=smoothn.smoothn(u,s=settings.smoothn_p)
-                  v,dummy_v1,dummy_v2,dummy_v3=smoothn.smoothn(v,s=settings.smoothn_p)        
-     
-
-
-
+        if settings.iterations > 1:
+            u, v = filters.replace_outliers(u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration,
+                                            kernel_size=settings.filter_kernel_size)
+            'adding masks to add the effect of all the validations'
+            if settings.smoothn == True:
+                u, dummy_u1, dummy_u2, dummy_u3 = smoothn.smoothn(u, s=settings.smoothn_p)
+                v, dummy_v1, dummy_v2, dummy_v3 = smoothn.smoothn(v, s=settings.smoothn_p)
+        elif settings.iterations == 1 and settings.replace_vectors == True:
+            u, v = filters.replace_outliers(u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration,
+                                            kernel_size=settings.filter_kernel_size)
+            'adding masks to add the effect of all the validations'
+            if settings.smoothn == True:
+                u, v = filters.replace_outliers(u, v, method=settings.filter_method,
+                                                max_iter=settings.max_filter_iteration,
+                                                kernel_size=settings.filter_kernel_size)
+                u, dummy_u1, dummy_u2, dummy_u3 = smoothn.smoothn(u, s=settings.smoothn_p)
+                v, dummy_v1, dummy_v2, dummy_v3 = smoothn.smoothn(v, s=settings.smoothn_p)
 
         i = 1
         'all the following passes'
-        for i in range(2, settings.iterations+1):
-            x, y, u, v, sig2noise_ratio, mask = multipass_img_deform(frame_a, frame_b, settings.windowsizes[i-1], settings.overlap[i-1],settings.iterations,i,
-                                                    x, y, u, v, correlation_method=settings.correlation_method,
-                                                    subpixel_method=settings.subpixel_method, do_sig2noise=settings.extract_sig2noise,
-                                                    sig2noise_method=settings.sig2noise_method, sig2noise_mask=settings.sig2noise_mask,
-                                                    MinMaxU=settings.MinMax_U_disp,
-                                                    MinMaxV=settings.MinMax_V_disp,std_threshold=settings.std_threshold,
-                                                    median_threshold=settings.median_threshold,median_size=settings.median_size,filter_method=settings.filter_method,
-                                                    max_filter_iteration=settings.max_filter_iteration, filter_kernel_size=settings.filter_kernel_size,
-                                                    interpolation_order=settings.interpolation_order)
+        for i in range(2, settings.iterations + 1):
+            x, y, u, v, sig2noise_ratio, mask = multipass_img_deform(frame_a, frame_b, settings.windowsizes[i - 1],
+                                                                     settings.overlap[i - 1], settings.iterations, i,
+                                                                     x, y, u, v,
+                                                                     correlation_method=settings.correlation_method,
+                                                                     subpixel_method=settings.subpixel_method,
+                                                                     do_sig2noise=settings.extract_sig2noise,
+                                                                     sig2noise_method=settings.sig2noise_method,
+                                                                     sig2noise_mask=settings.sig2noise_mask,
+                                                                     MinMaxU=settings.MinMax_U_disp,
+                                                                     MinMaxV=settings.MinMax_V_disp,
+                                                                     std_threshold=settings.std_threshold,
+                                                                     median_threshold=settings.median_threshold,
+                                                                     median_size=settings.median_size,
+                                                                     filter_method=settings.filter_method,
+                                                                     max_filter_iteration=settings.max_filter_iteration,
+                                                                     filter_kernel_size=settings.filter_kernel_size,
+                                                                     interpolation_order=settings.interpolation_order)
             # If the smoothing is active, we do it at each pass
-            if settings.smoothn==True:
-                 u,dummy_u1,dummy_u2,dummy_u3= smoothn.smoothn(u,s=settings.smoothn_p)
-                 v,dummy_v1,dummy_v2,dummy_v3= smoothn.smoothn(v,s=settings.smoothn_p)        
-   
-        
+            if settings.smoothn == True:
+                u, dummy_u1, dummy_u2, dummy_u3 = smoothn.smoothn(u, s=settings.smoothn_p)
+                v, dummy_v1, dummy_v2, dummy_v3 = smoothn.smoothn(v, s=settings.smoothn_p)
+
         '''%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%'''
-        if settings.extract_sig2noise==True and i==settings.iterations and settings.iterations!=1 and settings.do_sig2noise_validation==True:
-            u,v, mask_s2n = validation.sig2noise_val( u, v, sig2noise_ratio, threshold = settings.sig2noise_threshold)
-            mask=mask+mask_s2n
-        if settings.replace_vectors==True:
-            u, v = filters.replace_outliers( u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration, kernel_size=settings.filter_kernel_size)
+        if settings.extract_sig2noise == True and i == settings.iterations and settings.iterations != 1 and settings.do_sig2noise_validation == True:
+            u, v, mask_s2n = validation.sig2noise_val(u, v, sig2noise_ratio, threshold=settings.sig2noise_threshold)
+            mask = mask + mask_s2n
+        if settings.replace_vectors == True:
+            u, v = filters.replace_outliers(u, v, method=settings.filter_method, max_iter=settings.max_filter_iteration,
+                                            kernel_size=settings.filter_kernel_size)
         'pixel/frame->pixel/sec'
-        u=u/settings.dt
-        v=v/settings.dt
+        u = u / settings.dt
+        v = v / settings.dt
         'scales the results pixel-> meter'
-        x, y, u, v = scaling.uniform(x, y, u, v, scaling_factor = settings.scaling_factor )     
-        'save to a file'
-        save(x, y, u, v,sig2noise_ratio, mask ,os.path.join(save_path,'field_A%03d.txt' % counter), delimiter='\t')
-        'some messages to check if it is still alive'
-        
+        x, y, u, v = scaling.uniform(x, y, u, v, scaling_factor=settings.scaling_factor)
 
-        'some other stuff that one might want to use'
-        if settings.show_plot==True or settings.save_plot==True:
-            plt.close('all')
-            plt.ioff()
-            Name = os.path.join(save_path, 'Image_A%03d.png' % counter)
-            display_vector_field(os.path.join(save_path, 'field_A%03d.txt' % counter), scale=settings.scale_plot)
-            if settings.save_plot==True:
-                plt.savefig(Name)
-            if settings.show_plot==True:
-                plt.show()
+        return x, y, u, v
 
-        print('Image Pair ' + str(counter+1))
-        
+        # 'save to a file'
+        # save(x, y, u, v, sig2noise_ratio, mask, os.path.join(save_path, 'field_A%03d.txt' % counter), delimiter='\t')
+        # 'some messages to check if it is still alive'
+        #
+        # 'some other stuff that one might want to use'
+        # if settings.show_plot == True or settings.save_plot == True:
+        #     plt.close('all')
+        #     plt.ioff()
+        #     Name = os.path.join(save_path, 'Image_A%03d.png' % counter)
+        #     display_vector_field(os.path.join(save_path, 'field_A%03d.txt' % counter), scale=settings.scale_plot)
+        #     if settings.save_plot == True:
+        #         plt.savefig(Name)
+        #     if settings.show_plot == True:
+        #         plt.show()
+        #
+        # print('Image Pair ' + str(counter + 1))
+
     'Below is code to read files and create a folder to store the results'
-    save_path=os.path.join(settings.save_path,'Open_PIV_results_'+str(settings.windowsizes[settings.iterations-1])+'_'+settings.save_folder_suffix)
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-    task = tools.Multiprocesser(
-        data_dir=settings.filepath_images, pattern_a=settings.frame_pattern_a, pattern_b=settings.frame_pattern_b)
-    task.run(func=func, n_cpus=1)
+    # save_path = os.path.join(settings.save_path, 'Open_PIV_results_' + str(settings.windowsizes[settings.iterations - 1]) + '_' + settings.save_folder_suffix)
+    # if not os.path.exists(save_path):
+    #     os.makedirs(save_path)
+    # task = tools.Multiprocesser(data_dir=settings.filepath_images, pattern_a=settings.frame_pattern_a, pattern_b=settings.frame_pattern_b)
+    # task.run(func=func, n_cpus=1)
+    return func((settings.frame_pattern_a, settings.frame_pattern_b, 0))
 
 
-def correlation_func(cor_win_1, cor_win_2, window_size,correlation_method='circular'):
+def correlation_func(cor_win_1, cor_win_2, window_size, correlation_method='circular'):
     '''This function is doing the cross-correlation. Right now circular cross-correlation
     That means no zero-padding is done
     the .real is to cut off possible imaginary parts that remains due to finite numerical accuarcy
      '''
-    if correlation_method=='linear':
-        cor_win_1 = cor_win_1-cor_win_1.mean(axis=(1,2)).reshape(cor_win_1.shape[0],1,1)
-        cor_win_2 = cor_win_2-cor_win_2.mean(axis=(1,2)).reshape(cor_win_1.shape[0],1,1)
-        cor_win_1[cor_win_1<0]=0
-        cor_win_2[cor_win_2<0]=0
+    if correlation_method == 'linear':
+        cor_win_1 = cor_win_1 - cor_win_1.mean(axis=(1, 2)).reshape(cor_win_1.shape[0], 1, 1)
+        cor_win_2 = cor_win_2 - cor_win_2.mean(axis=(1, 2)).reshape(cor_win_1.shape[0], 1, 1)
+        cor_win_1[cor_win_1 < 0] = 0
+        cor_win_2[cor_win_2 < 0] = 0
 
-     
-        corr = fftshift(irfft2(np.conj(rfft2(cor_win_1,s=(2*window_size,2*window_size))) *
-                                  rfft2(cor_win_2,s=(2*window_size,2*window_size))).real, axes=(1, 2))
-        corr=corr[:,window_size//2:3*window_size//2,window_size//2:3*window_size//2]
-        
+        corr = fftshift(irfft2(np.conj(rfft2(cor_win_1, s=(2 * window_size, 2 * window_size))) *
+                               rfft2(cor_win_2, s=(2 * window_size, 2 * window_size))).real, axes=(1, 2))
+        corr = corr[:, window_size // 2:3 * window_size // 2, window_size // 2:3 * window_size // 2]
+
     else:
         corr = fftshift(irfft2(np.conj(rfft2(cor_win_1)) *
-                                  rfft2(cor_win_2)).real, axes=(1, 2))
+                               rfft2(cor_win_2)).real, axes=(1, 2))
     return corr
+
 
 def frame_interpolation(frame, x, y, u, v, interpolation_order=1):
     '''This one is doing the image deformation also known as window deformation
@@ -205,35 +221,37 @@ def frame_interpolation(frame, x, y, u, v, interpolation_order=1):
     to be inverted since the image origin is in the upper left corner and the
     y-axis goes downwards. The x-axis goes to the right.
     '''
-    frame=frame.astype(np.float32)
-    y1 = y[:, 0] # extract first coloumn from meshgrid
-    y1 = y1[::-1] #flip 
-    x1 = x[0, :] #extract first row from meshgrid
-    side_x = np.arange(0, np.size(frame[0, :]), 1) #extract the image grid
+    frame = frame.astype(np.float32)
+    y1 = y[:, 0]  # extract first coloumn from meshgrid
+    y1 = y1[::-1]  # flip
+    x1 = x[0, :]  # extract first row from meshgrid
+    side_x = np.arange(0, np.size(frame[0, :]), 1)  # extract the image grid
     side_y = np.arange(0, np.size(frame[:, 0]), 1)
 
-    ip = RectBivariateSpline(y1, x1, u) #interpolate the diplacement on the image grid
-    ut = ip(side_y, side_x)# the way how to use the interpolation functions differs
-                            #from matlab 
+    ip = RectBivariateSpline(y1, x1, u)  # interpolate the diplacement on the image grid
+    ut = ip(side_y, side_x)  # the way how to use the interpolation functions differs
+    # from matlab
     ip2 = RectBivariateSpline(y1, x1, v)
     vt = ip2(side_y, side_x)
-    
+
     '''This lines are interpolating the displacement from the interrogation window
     grid onto the image grid. The result is displacment meshgrid with the size of the image.
     '''
-    x, y = np.meshgrid(side_x, side_y)#create a meshgrid 
+    x, y = np.meshgrid(side_x, side_y)  # create a meshgrid
     frame_def = scn.map_coordinates(
-        frame, ((y+vt, x+ut,)), order=interpolation_order,mode='nearest')
-    #deform the image by using the map coordinates function
+        frame, ((y + vt, x + ut,)), order=interpolation_order, mode='nearest')
+    # deform the image by using the map coordinates function
     '''This spline interpolation is doing the image deformation. This one likes meshgrids
     new grid is defined by the old grid + the displacement.
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%5
     This function returns the deformed image.
     '''
-    #print('stop')
+    # print('stop')
     return frame_def
 
-def first_pass(frame_a, frame_b, window_size, overlap,iterations,correlation_method='circular', subpixel_method='gaussian',do_sig2noise=False, sig2noise_method='peak2peak', sig2noise_mask=2):
+
+def first_pass(frame_a, frame_b, window_size, overlap, iterations, correlation_method='circular',
+               subpixel_method='gaussian', do_sig2noise=False, sig2noise_method='peak2peak', sig2noise_mask=2):
     """
     First pass of the PIV evaluation.
 
@@ -288,7 +306,7 @@ def first_pass(frame_a, frame_b, window_size, overlap,iterations,correlation_met
 
     correlation = correlation_func(cor_win_1, cor_win_2, window_size, correlation_method=correlation_method)
     'do the correlation'
-    disp = np.zeros((np.size(correlation, 0), 2))#create a dummy for the loop to fill
+    disp = np.zeros((np.size(correlation, 0), 2))  # create a dummy for the loop to fill
     for i in range(0, np.size(correlation, 0)):
         ''' determine the displacment on subpixel level '''
         disp[i, :] = find_subpixel_peak_position(
@@ -300,19 +318,22 @@ def first_pass(frame_a, frame_b, window_size, overlap,iterations,correlation_met
     u = disp[:, 1].reshape(shapes)
     v = -disp[:, 0].reshape(shapes)
     'reshaping the interrogation window to vector field shape'
-    
+
     x, y = get_coordinates(frame_a.shape, window_size, overlap)
     'get coordinates for to map the displacement'
-    if do_sig2noise==True and iterations==1:
+    if do_sig2noise == True and iterations == 1:
         sig2noise_ratio = sig2noise_ratio_function(correlation, sig2noise_method=sig2noise_method, width=sig2noise_mask)
         sig2noise_ratio = sig2noise_ratio.reshape(shapes)
     else:
-        sig2noise_ratio=np.full_like(u,np.nan)
+        sig2noise_ratio = np.full_like(u, np.nan)
     return x, y, u, v, sig2noise_ratio
 
-def multipass_img_deform(frame_a, frame_b, window_size, overlap,iterations,current_iteration, x_old, y_old, u_old, v_old,correlation_method='circular',
+
+def multipass_img_deform(frame_a, frame_b, window_size, overlap, iterations, current_iteration, x_old, y_old, u_old,
+                         v_old, correlation_method='circular',
                          subpixel_method='gaussian', do_sig2noise=False, sig2noise_method='peak2peak', sig2noise_mask=2,
-                         MinMaxU=(-100, 50), MinMaxV=(-50, 50), std_threshold=5, median_threshold=2,median_size=1, filter_method='localmean',
+                         MinMaxU=(-100, 50), MinMaxV=(-50, 50), std_threshold=5, median_threshold=2, median_size=1,
+                         filter_method='localmean',
                          max_filter_iteration=10, filter_kernel_size=2, interpolation_order=3):
     """
     First pass of the PIV evaluation.
@@ -438,7 +459,7 @@ def multipass_img_deform(frame_a, frame_b, window_size, overlap,iterations,curre
     in a 3d array with number of interrogation window *window_size*window_size
     this way is much faster then using a loop'''
 
-    correlation = correlation_func(cor_win_1, cor_win_2, window_size,correlation_method=correlation_method)
+    correlation = correlation_func(cor_win_1, cor_win_2, window_size, correlation_method=correlation_method)
     'do the correlation'
     disp = np.zeros((np.size(correlation, 0), 2))
     for i in range(0, np.size(correlation, 0)):
@@ -454,30 +475,31 @@ def multipass_img_deform(frame_a, frame_b, window_size, overlap,iterations,curre
     v = -disp[:, 0].reshape(shapes)
 
     'adding the recent displacment on to the displacment of the previous pass'
-    u = u+u_pre
-    v = v+v_pre
+    u = u + u_pre
+    v = v + v_pre
     'validation using gloabl limits and local median'
     u, v, mask_g = validation.global_val(u, v, MinMaxU, MinMaxV)
     u, v, mask_s = validation.global_std(u, v, std_threshold=std_threshold)
-    u, v, mask_m = validation.local_median_val(u, v, u_threshold=median_threshold, v_threshold=median_threshold, size=median_size)
-    mask = mask_g+mask_m+mask_s
+    u, v, mask_m = validation.local_median_val(u, v, u_threshold=median_threshold, v_threshold=median_threshold,
+                                               size=median_size)
+    mask = mask_g + mask_m + mask_s
     'adding masks to add the effect of alle the validations'
-    #mask=np.zeros_like(u)
+    # mask=np.zeros_like(u)
     'filter to replace the values that where marked by the validation'
     if current_iteration != iterations:
         'filter to replace the values that where marked by the validation'
         u, v = filters.replace_outliers(
-                    u, v, method=filter_method, max_iter=max_filter_iteration, kernel_size=filter_kernel_size) 
-    if do_sig2noise==True and current_iteration==iterations and iterations!=1:
-        sig2noise_ratio=sig2noise_ratio_function(correlation, sig2noise_method=sig2noise_method, width=sig2noise_mask)
+            u, v, method=filter_method, max_iter=max_filter_iteration, kernel_size=filter_kernel_size)
+    if do_sig2noise == True and current_iteration == iterations and iterations != 1:
+        sig2noise_ratio = sig2noise_ratio_function(correlation, sig2noise_method=sig2noise_method, width=sig2noise_mask)
         sig2noise_ratio = sig2noise_ratio.reshape(shapes)
     else:
-        sig2noise_ratio=np.full_like(u,np.nan)
+        sig2noise_ratio = np.full_like(u, np.nan)
 
-    return x, y, u, v,sig2noise_ratio, mask
+    return x, y, u, v, sig2noise_ratio, mask
 
 
-def save( x, y, u, v, sig2noise_ratio, mask, filename, fmt='%8.4f', delimiter='\t' ):
+def save(x, y, u, v, sig2noise_ratio, mask, filename, fmt='%8.4f', delimiter='\t'):
     """Save flow field to an ascii file.
     
     Parameters
@@ -519,12 +541,14 @@ def save( x, y, u, v, sig2noise_ratio, mask, filename, fmt='%8.4f', delimiter='\
     
     """
     # build output array
-    out = np.vstack( [m.ravel() for m in [x, y, u, v,sig2noise_ratio, mask] ] )
-            
+    out = np.vstack([m.ravel() for m in [x, y, u, v, sig2noise_ratio, mask]])
+
     # save data to file.
-    np.savetxt( filename, out.T, fmt=fmt, delimiter=delimiter, header='x'+delimiter+'y'+delimiter+'u'+delimiter+'v'+delimiter+'s2n'+delimiter+'mask' )
-    
-def display_vector_field( filename, on_img=False, image_name='None', window_size=32, scaling_factor=1,skiprows=1, **kw):
+    np.savetxt(filename, out.T, fmt=fmt, delimiter=delimiter,
+               header='x' + delimiter + 'y' + delimiter + 'u' + delimiter + 'v' + delimiter + 's2n' + delimiter + 'mask')
+
+
+def display_vector_field(filename, on_img=False, image_name='None', window_size=32, scaling_factor=1, skiprows=1, **kw):
     """ Displays quiver plot of the data stored in the file 
     
     
@@ -564,22 +588,22 @@ def display_vector_field( filename, on_img=False, image_name='None', window_size
     >>> openpiv.tools.display_vector_field('./exp1_0000.txt', on_img=True, image_name='exp1_001_a.bmp', window_size=32, scaling_factor=70, scale=100, width=0.0025)
     
     """
-    
+
     a = np.loadtxt(filename)
-    fig=plt.figure()
-    if on_img: # plot a background image
+    fig = plt.figure()
+    if on_img:  # plot a background image
         im = fig.imread(image_name)
-        im = fig.negative(im) #plot negative of the image for more clarity
+        im = fig.negative(im)  # plot negative of the image for more clarity
         fig.imsave('neg.tif', im)
         im = fig.imread('neg.tif')
-        xmax = np.amax(a[:,0])+window_size/(2*scaling_factor)
-        ymax = np.amax(a[:,1])+window_size/(2*scaling_factor)
-        implot = plt.imshow(im, origin='lower', cmap="Greys_r",extent=[0.,xmax,0.,ymax])
-    invalid = a[:,5].astype('bool')
-    fig.canvas.set_window_title('Vector field, '+str(np.count_nonzero(invalid))+' wrong vectors')
+        xmax = np.amax(a[:, 0]) + window_size / (2 * scaling_factor)
+        ymax = np.amax(a[:, 1]) + window_size / (2 * scaling_factor)
+        implot = plt.imshow(im, origin='lower', cmap="Greys_r", extent=[0., xmax, 0., ymax])
+    invalid = a[:, 5].astype('bool')
+    fig.canvas.set_window_title('Vector field, ' + str(np.count_nonzero(invalid)) + ' wrong vectors')
     valid = ~invalid
-    plt.quiver(a[invalid,0],a[invalid,1],a[invalid,2],a[invalid,3],color='r',width=0.001,headwidth=3,**kw)
-    plt.quiver(a[valid,0],a[valid,1],a[valid,2],a[valid,3],color='b',width=0.001,headwidth=3,**kw)
+    plt.quiver(a[invalid, 0], a[invalid, 1], a[invalid, 2], a[invalid, 3], color='r', width=0.001, headwidth=3, **kw)
+    plt.quiver(a[valid, 0], a[valid, 1], a[valid, 2], a[valid, 3], color='b', width=0.001, headwidth=3, **kw)
     plt.draw()
 
 
@@ -609,9 +633,8 @@ def get_field_shape(image_size, window_size, overlap):
             (image_size[1] - window_size) // (window_size - overlap) + 1)
 
 
-
 def get_coordinates(image_size, window_size, overlap):
-        """Compute the x, y coordinates of the centers of the interrogation windows.
+    """Compute the x, y coordinates of the centers of the interrogation windows.
 
         Parameters
         ----------
@@ -640,8 +663,8 @@ def get_coordinates(image_size, window_size, overlap):
 
         """
 
-        # get shape of the resulting flow field
-        '''%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    # get shape of the resulting flow field
+    '''%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         The get_field_shape function calculates how many interrogation windows
         fit in the image in each dimension output is a 
@@ -655,17 +678,17 @@ def get_coordinates(image_size, window_size, overlap):
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         '''
 
-        field_shape = get_field_shape(image_size, window_size, overlap)
+    field_shape = get_field_shape(image_size, window_size, overlap)
 
-        # compute grid coordinates of the interrogation window centers
-        x = np.arange(field_shape[1])*(window_size-overlap) + (window_size)/2.0
-        y = np.arange(field_shape[0])*(window_size-overlap) + (window_size)/2.0
+    # compute grid coordinates of the interrogation window centers
+    x = np.arange(field_shape[1]) * (window_size - overlap) + (window_size) / 2.0
+    y = np.arange(field_shape[0]) * (window_size - overlap) + (window_size) / 2.0
 
-        return np.meshgrid(x, y[::-1])
+    return np.meshgrid(x, y[::-1])
 
 
 def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
-        """
+    """
         Find subpixel approximation of the correlation peak.
 
         This function returns a subpixels approximation of the correlation
@@ -691,59 +714,59 @@ def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
             approximation of the correlation peak.
         """
 
-        # initialization
-        default_peak_position = (
-                np.floor(corr.shape[0] / 2.), np.floor(corr.shape[1] / 2.))
-        '''this calculates the default peak position (peak of the autocorrelation).
+    # initialization
+    default_peak_position = (
+        np.floor(corr.shape[0] / 2.), np.floor(corr.shape[1] / 2.))
+    '''this calculates the default peak position (peak of the autocorrelation).
         It is window_size/2. It needs to be subtracted to from the peak found to determin the displacment
         '''
-        #default_peak_position = (0,0)
+    # default_peak_position = (0,0)
 
-        # the peak locations
-        peak1_i, peak1_j, dummy = pyprocess.find_first_peak(corr)
-        '''
+    # the peak locations
+    peak1_i, peak1_j, dummy = pyprocess.find_first_peak(corr)
+    '''
         The find_first_peak function returns the coordinates of the correlation peak
         and the value of the peak. Here only the coordinates are needed.
         '''
 
+    try:
+        # the peak and its neighbours: left, right, down, up
+        c = corr[peak1_i, peak1_j]
+        cl = corr[peak1_i - 1, peak1_j]
+        cr = corr[peak1_i + 1, peak1_j]
+        cd = corr[peak1_i, peak1_j - 1]
+        cu = corr[peak1_i, peak1_j + 1]
+
+        # gaussian fit
+        if np.any(np.array([c, cl, cr, cd, cu]) < 0) and subpixel_method == 'gaussian':
+            subpixel_method = 'centroid'
+
         try:
-            # the peak and its neighbours: left, right, down, up
-            c = corr[peak1_i,   peak1_j]
-            cl = corr[peak1_i - 1, peak1_j]
-            cr = corr[peak1_i + 1, peak1_j]
-            cd = corr[peak1_i,   peak1_j - 1]
-            cu = corr[peak1_i,   peak1_j + 1]
+            if subpixel_method == 'centroid':
+                subp_peak_position = (((peak1_i - 1) * cl + peak1_i * c + (peak1_i + 1) * cr) / (cl + c + cr),
+                                      ((peak1_j - 1) * cd + peak1_j * c + (peak1_j + 1) * cu) / (cd + c + cu))
 
-            # gaussian fit
-            if np.any(np.array([c, cl, cr, cd, cu]) < 0) and subpixel_method == 'gaussian':
-                subpixel_method = 'centroid'
+            elif subpixel_method == 'gaussian':
+                subp_peak_position = (
+                peak1_i + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr))),
+                peak1_j + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu))))
 
-            try:
-                if subpixel_method == 'centroid':
-                    subp_peak_position = (((peak1_i - 1) * cl + peak1_i * c + (peak1_i + 1) * cr) / (cl + c + cr),
-                                          ((peak1_j - 1) * cd + peak1_j * c + (peak1_j + 1) * cu) / (cd + c + cu))
+            elif subpixel_method == 'parabolic':
+                subp_peak_position = (peak1_i + (cl - cr) / (2 * cl - 4 * c + 2 * cr),
+                                      peak1_j + (cd - cu) / (2 * cd - 4 * c + 2 * cu))
 
-                elif subpixel_method == 'gaussian':
-                    subp_peak_position = (peak1_i + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr))),
-                                          peak1_j + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu))))
-
-                elif subpixel_method == 'parabolic':
-                    subp_peak_position = (peak1_i + (cl - cr) / (2 * cl - 4 * c + 2 * cr),
-                                          peak1_j + (cd - cu) / (2 * cd - 4 * c + 2 * cu))
-
-            except:
-                subp_peak_position = default_peak_position
-
-        except IndexError:
+        except:
             subp_peak_position = default_peak_position
 
-            '''This block is looking for the neighbouring pixels. The subpixelposition is calculated based one
+    except IndexError:
+        subp_peak_position = default_peak_position
+
+        '''This block is looking for the neighbouring pixels. The subpixelposition is calculated based one
             the correlation values. Different methods can be choosen.
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             This function returns the displacement in u and v
             '''
-        return subp_peak_position[0] - default_peak_position[0], subp_peak_position[1] - default_peak_position[1]
-    
+    return subp_peak_position[0] - default_peak_position[0], subp_peak_position[1] - default_peak_position[1]
 
 
 def sig2noise_ratio_function(corr, sig2noise_method='peak2peak', width=2):
@@ -776,46 +799,46 @@ def sig2noise_ratio_function(corr, sig2noise_method='peak2peak', width=2):
 
     """
 
-    corr_max1=np.zeros(corr.shape[0])
-    corr_max2=np.zeros(corr.shape[0])
-    peak1_i=np.zeros(corr.shape[0])
-    peak1_j=np.zeros(corr.shape[0])
-    peak2_i=np.zeros(corr.shape[0])
+    corr_max1 = np.zeros(corr.shape[0])
+    corr_max2 = np.zeros(corr.shape[0])
+    peak1_i = np.zeros(corr.shape[0])
+    peak1_j = np.zeros(corr.shape[0])
+    peak2_i = np.zeros(corr.shape[0])
     peak2_j = np.zeros(corr.shape[0])
-    for i in range(0,corr.shape[0]):
+    for i in range(0, corr.shape[0]):
         # compute first peak position
-        peak1_i[i], peak1_j[i], corr_max1[i] = pyprocess.find_first_peak(corr[i,:,:])
+        peak1_i[i], peak1_j[i], corr_max1[i] = pyprocess.find_first_peak(corr[i, :, :])
         if sig2noise_method == 'peak2peak':
             # now compute signal to noise ratio
-            
-                # find second peak height
-                peak2_i[i], peak2_j[i], corr_max2[i] = pyprocess.find_second_peak(
-                    corr[i,:,:], int(peak1_i[i]), int(peak1_j[i]), width=width)
-        
-                # if it's an empty interrogation window
-                # if the image is lacking particles, totally black it will correlate to very low value, but not zero
-                # if the first peak is on the borders, the correlation map is also
-                # wrong
-                if corr_max1[i] < 1e-3 or (peak1_i[i] == 0 or peak1_j[i] == corr.shape[1] or peak1_j[i] == 0 or peak1_j[i] == corr.shape[2] or
-                                        peak2_i[i] == 0 or peak2_j[i] == corr.shape[1] or peak2_j[i] == 0 or peak2_j[i] == corr.shape[2]):
-                    # return zero, since we have no signal.
-                    corr_max1[i]=0
-        
-    
+
+            # find second peak height
+            peak2_i[i], peak2_j[i], corr_max2[i] = pyprocess.find_second_peak(
+                corr[i, :, :], int(peak1_i[i]), int(peak1_j[i]), width=width)
+
+            # if it's an empty interrogation window
+            # if the image is lacking particles, totally black it will correlate to very low value, but not zero
+            # if the first peak is on the borders, the correlation map is also
+            # wrong
+            if corr_max1[i] < 1e-3 or (
+                    peak1_i[i] == 0 or peak1_j[i] == corr.shape[1] or peak1_j[i] == 0 or peak1_j[i] == corr.shape[2] or
+                    peak2_i[i] == 0 or peak2_j[i] == corr.shape[1] or peak2_j[i] == 0 or peak2_j[i] == corr.shape[2]):
+                # return zero, since we have no signal.
+                corr_max1[i] = 0
+
+
         elif sig2noise_method == 'peak2mean':
             # find mean of the correlation map
-            corr_max2 = corr.mean(axis=(1,2))
+            corr_max2 = corr.mean(axis=(1, 2))
 
         else:
             raise ValueError('wrong sig2noise_method')
 
     # avoid dividing by zero
-    corr_max2[corr_max2==0]=np.nan    
+    corr_max2[corr_max2 == 0] = np.nan
     sig2noise = corr_max1 / corr_max2
-    sig2noise[sig2noise==np.nan]=0
+    sig2noise[sig2noise == np.nan] = 0
 
     return sig2noise
-
 
 
 class Settings(object):
@@ -829,10 +852,7 @@ if __name__ == "__main__":
 
     """
 
-
-
     settings = Settings()
-
 
     'Data related settings'
     # Folder with the images to process
@@ -857,13 +877,13 @@ if __name__ == "__main__":
     settings.dynamic_masking_filter_size = 7
 
     'Processing Parameters'
-    settings.correlation_method='circular'  # 'circular' or 'linear'
-    settings.iterations =1  # select the number of PIV passes
+    settings.correlation_method = 'circular'  # 'circular' or 'linear'
+    settings.iterations = 1  # select the number of PIV passes
     # add the interroagtion window size for each pass. 
     # For the moment, it should be a power of 2 
-    settings.windowsizes = (128, 64, 32) # if longer than n iteration the rest is ignored
+    settings.windowsizes = (128, 64, 32)  # if longer than n iteration the rest is ignored
     # The overlap of the interroagtion window for each pass.
-    settings.overlap = (64, 32, 16) # This is 50% overlap
+    settings.overlap = (64, 32, 16)  # This is 50% overlap
     # Has to be a value with base two. In general window size/2 is a good choice.
     # methode used for subpixel interpolation: 'gaussian','centroid','parabolic'
     settings.subpixel_method = 'gaussian'
@@ -896,19 +916,19 @@ if __name__ == "__main__":
     # The third filter is the median test (not normalized at the moment)
     settings.median_threshold = 3  # threshold of the median validation
     # On the last iteration, an additional validation can be done based on the S/N.
-    settings.median_size=1 #defines the size of the local median
+    settings.median_size = 1  # defines the size of the local median
     'Validation based on the signal to noise ratio'
     # Note: only available when extract_sig2noise==True and only for the last
     # pass of the interrogation
     # Enable the signal to noise ratio validation. Options: True or False
-    settings.do_sig2noise_validation = False # This is time consuming
+    settings.do_sig2noise_validation = False  # This is time consuming
     # minmum signal to noise ratio that is need for a valid vector
     settings.sig2noise_threshold = 1.2
     'Outlier replacement or Smoothing options'
     # Replacment options for vectors which are masked as invalid by the validation
-    settings.replace_vectors = True # Enable the replacment. Chosse: True or False
-    settings.smoothn=True #Enables smoothing of the displacemenet field
-    settings.smoothn_p=0.5 # This is a smoothing parameter
+    settings.replace_vectors = True  # Enable the replacment. Chosse: True or False
+    settings.smoothn = True  # Enables smoothing of the displacemenet field
+    settings.smoothn_p = 0.5  # This is a smoothing parameter
     # select a method to replace the outliers: 'localmean', 'disk', 'distance'
     settings.filter_method = 'localmean'
     # maximum iterations performed to replace the outliers
@@ -919,7 +939,7 @@ if __name__ == "__main__":
     settings.save_plot = True
     # Choose wether you want to see the vectorfield or not :True or False
     settings.show_plot = False
-    settings.scale_plot = 100 # select a value to scale the quiver plot of the vectorfield
+    settings.scale_plot = 100  # select a value to scale the quiver plot of the vectorfield
     # run the script with the given settings
 
     piv(settings)
