@@ -27,11 +27,11 @@ if GPU_SUPPORT:
                            include_dirs=[numpy.get_include()],
                            )
     extensions.append(gpu_module)
-    gpu_validation_module = Extension(name="openpiv.gpu_validation",
-                                      sources=["openpiv/gpu_validation.pyx"],
-                                      include_dirs=[numpy.get_include()],
-                                      )
-    extensions.append(gpu_validation_module)
+    # gpu_validation_module = Extension(name="openpiv.gpu_validation",
+    #                                   sources=["openpiv/gpu_validation.py"],
+    #                                   include_dirs=[numpy.get_include()],
+    #                                   )
+    # extensions.append(gpu_validation_module)
 
 extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_directives={'language_level': "3"})
 
@@ -42,10 +42,10 @@ with open(path.join(this_directory, 'README.md')) as f:
     long_description = f.read()
 
 setup(
-    name = "OpenPIV",
-    version ='0.22.3',
-    cmdclass = {'build_ext': build_ext},
-    ext_modules = extensions,
+    name="OpenPIV",
+    version='0.22.3',
+    cmdclass={'build_ext': build_ext},
+    ext_modules=extensions,
     packages=find_packages(),
     include_package_data=True,
     setup_requires=[
@@ -64,9 +64,9 @@ setup(
         'natsort',
         'GitPython',
         'pytest',
-		'tqdm'
+        'tqdm'
     ],
-    classifiers = [
+    classifiers=[
         # PyPI-specific version type. The number specified here is a magic constant
         # with no relation to this application's version numbering scheme. *sigh*
         'Development Status :: 4 - Beta',

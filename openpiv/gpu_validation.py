@@ -328,7 +328,6 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         stores the values of u and v of the neighbours of a point
 
     """
-
     mod_get_neighbours = SourceModule("""
     __global__ void get_u_neighbours(float *neighbours, int *neighbours_present, float *u, int Nrow, int Ncol)
     {

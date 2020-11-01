@@ -1,5 +1,8 @@
-# OpenPIV GPU - Multiprocessed
-I will try to continue work on this code that was started by the OpenPIV team and members of the Turbulence Research Lab.
+# OpenPIV GPU
+GPU-accelerated PIV processing
+
+## Status
+Although the goal of this work is to improve processing speed, many of the subroutines are still not fully optimized.
 
 ## Intended Features
 1. Update to Python 3 for future-proofing
