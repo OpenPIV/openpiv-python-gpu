@@ -356,10 +356,10 @@ class CorrelationFunction:
             window_slice_shift = mod_ws.get_function("window_slice_shift")
             window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-
-            # free displacement GPU memory
             d_dy_a.gpudata.free()
             d_dx_a.gpudata.free()
+
+            # free displacement GPU memory
             d_dy_b.gpudata.free()
             d_dx_b.gpudata.free()
             d_dx.gpudata.free()
@@ -1064,12 +1064,6 @@ def widim(frame_a,
         print("//////////////////////////////////////////////////////////////////")
         print("ITERATION # {}".format(K))
 
-        residual = 0
-
-        #################################################################################
-        #  GPU VERSION
-        #################################################################################
-
         # Calculate second frame displacement (shift)
         d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4].copy()  # xb = xa + dpx
         d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5].copy()  # yb = ya + dpy
@@ -1088,8 +1082,8 @@ def widim(frame_a,
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
 
         # update the field with new values
-        assert not np.isnan(i_peak).any(), 'NaNs in correlation peaks!'
-        assert not np.isnan(j_peak).any(), 'NaNs in correlation peaks!'
+        assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
+        assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
         gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
         print("...[DONE]")
 

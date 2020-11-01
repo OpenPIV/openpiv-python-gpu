@@ -453,8 +453,7 @@ def multipass_img_deform(frame_a, frame_b, window_size, overlap, iterations, cur
     '''this one is doing the image deformation (see above)'''
 
     cor_win_1 = pyprocess.moving_window_array(frame_a, window_size, overlap)
-    cor_win_2 = pyprocess.moving_window_array(
-        frame_b_deform, window_size, overlap)
+    cor_win_2 = pyprocess.moving_window_array(frame_b_deform, window_size, overlap)
     '''Filling the interrogation window. They windows are arranged
     in a 3d array with number of interrogation window *window_size*window_size
     this way is much faster then using a loop'''
