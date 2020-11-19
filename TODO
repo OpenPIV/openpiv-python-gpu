@@ -1,12 +1,14 @@
-Finalize API
-    input args
-    validation methods supported
-
-Document the API
-    all input args
-
-Create a README
-    GPU instructions
-
-Test cases
-    install/build test
+finish the window deformation method
+    add reference to Scarano and Riethmuller,
+    retain s2n output option
+        debug it to ensure it works
+make API consistent with CPU version
+replace slow functions with CUDA kernels
+    gradient
+    window slicing
+reactivate the extended search area
+implement choosing advanced algorithm features
+multiprocessing framework that works with the other windef function as well
+Need to have easy-to-use functions available for non-expert
+    consult the mother repository for this
+change the README
