@@ -7,3 +7,4 @@ Pillow
 pycuda
 setuptools
 Cython
+cupy

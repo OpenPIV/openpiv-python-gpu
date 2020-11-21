@@ -12,6 +12,7 @@ import numpy.ma as ma
 from numpy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
+import cupy
 
 cimport numpy as np
 
