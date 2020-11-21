@@ -1,14 +1,5 @@
 # OpenPIV GPU
-GPU-accelerated PIV processing
-
-## Status
-Although the goal of this work is to improve processing speed, many of the subroutines are still not fully optimized.
-
-## Intended Features
-1. Update to Python 3 for future-proofing
-2. Finish some of the the TODO items in the multiprocessed code, if valuable
-3. Implement the work of Paul Lizee of the Turbulence Research Lab
-4. Rebase ontop of the current OpenPIV-Python development
+This is a GPU-accelerated version of openpiv-python, which can be found at https://github.com/OpenPIV/openpiv-python.git
 
 ## Installation
 The requirements for the process.py module are OpenPIV (GPU version) and the standard Python scientific libraries (SciPy, Matplotlib, etc.).
@@ -60,3 +51,5 @@ or cloned for local development by:
     git clone https://github.com/ericyang125/PIV-GPU.git
     pip install -e /path/to/package
     
+## Gettign started.
+To get started, see the tutorial Jupyter notebook.

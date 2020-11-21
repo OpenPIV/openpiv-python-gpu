@@ -12,7 +12,7 @@ import numpy.ma as ma
 from numpy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
-import cupy
+# import cupy
 
 cimport numpy as np
 
@@ -231,7 +231,11 @@ class CorrelationFunction:
     def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift, d_strain):
         """Creates a 3D array stack of all of the interrogation windows.
 
-        This is necessary to do the FFTs all at once on the GPU. Parts of this code assumes that the interrogation windows are square. This populates interrogation windows from the origin of the image.
+        This is necessary to do the FFTs all at once on the GPU. Parts of this code assumes that the interrogation
+        windows are square. This populates interrogation windows from the origin of the image.
+
+        Deformation method is described in
+        P. Meunier, T. Leweke, Analysis and treatment of errors due to high velocity gradients in particle image velocimetry, Experiments in Fluids(2003). DOI 10.1007/s00348-003-0673-2.
 
         Parameters
         -----------
@@ -344,6 +348,12 @@ class CorrelationFunction:
             
             // apply deformation operation
             
+            // do the mapping
+            
+            // round to nearest integer
+            
+            // do linear interpolation
+            
 
             // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
             // window. Multiply This with the shifted value at end.
@@ -424,7 +434,7 @@ class CorrelationFunction:
             d_dy.gpudata.free()
         else:
             # use non-translating windows
-            print('DEBUG: code reached')
+            print('DEBUG: code reached')  # delete this
             window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
@@ -880,9 +890,8 @@ def widim(frame_a,
                         The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
                             dpx_k+1 = dx_k
 
-    References:
+    WiDIM described in
     Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset. Exp Fluids 26:513–523
-    Meunier P, Leweke T (2003) Analysis and treatment of errors due to high velocity gradients in particle image velocimetry. Exp Fluids 35:408–421
 
     Parameters
     ----------
@@ -952,7 +961,8 @@ def widim(frame_a,
 
     Example
     -------
-    x, y, u, v, mask = openpiv.gpu_process.WiDIM(frame_a, frame_b, mark, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
+    #TODO change this API example
+    >>> x, y, u, v, mask = gpu_process.WiDIM(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 
     --------------------------------------
     Method of implementation : to improve the speed of the program, all data have been placed in the same huge
@@ -970,8 +980,8 @@ def widim(frame_a,
                     | 5 --> dpy       |
                     | 6 --> dcx       |
                     | 7 --> dcy       |
-                    | 8 --> u         |
-                    | 9 --> v         |
+                    | 8 --> u         |  # will be deleted
+                    | 9 --> v         |  # will be deleted
                     | 10 --> sig2noise|
                     | 11 --> mask     |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
@@ -2051,8 +2061,18 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
         spacing between nodes
 
     """
+    # # CuPy implementation
+    # # u_x
+    # d_strain[0, :n_row, 1:n_col - 1] = cupy.gradient(d_u, w, axis=None, edge_order=1)
+    # # u_y
+    # d_strain[1, 1:n_row - 1, :n_col] = cupy.gradient(d_u, w, axis=None, edge_order=1)
+    # # v_x
+    # d_strain[2, :n_row, 1:n_col - 1] = cupy.gradient(d_v, w, axis=None, edge_order=1)
+    # # v_y
+    # d_strain[3, 1:n_row - 1, :n_col] = cupy.gradient(d_v, w, axis=None, edge_order=1)
+
+    # PyCUDA implementation
     # u_x
-    # d_strain[0, :n_row, 1:n_col - 1] = gpuarray.to_gpu(np.zeros((n_row, n_col - 2), dtype=np.float32))  # delete this
     d_strain[0, :n_row, 1:n_col - 1] = 0.5 * (d_u[:, 2:].copy() - d_u[:, :-2].copy()) / w
     d_strain[0, :n_row, 0] = (d_u[:, 1].copy() - d_u[:, 0].copy()) / w
     d_strain[0, :n_row, -1] = (d_u[:, -1].copy() - d_u[:, n_col - 1].copy()) / w

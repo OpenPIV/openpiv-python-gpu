@@ -1,5 +1,4 @@
 finish the window deformation method
-    add reference to Scarano and Riethmuller, Meunier
     try nearest neighbour
     try linear interpolation
     try smoothing
@@ -16,4 +15,7 @@ multiprocessing framework that works with the other windef function as well
 Need to have easy-to-use functions available for non-expert
     consult the mother repository for this
 change the README
-
+memory optimizations
+    transfer less data to gpu
+    redefine fewer arrays each iteration
+objecct-oriented framework to reduce the array initilizations
