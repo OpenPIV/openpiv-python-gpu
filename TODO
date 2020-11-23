@@ -1,6 +1,8 @@
 finish the window deformation method
     try nearest neighbour
     try linear interpolation
+        deformation
+        translation
     try smoothing
 retain s2n output option
     debug it to ensure it works
@@ -14,8 +16,9 @@ implement choosing advanced algorithm features
 multiprocessing framework that works with the other windef function as well
 Need to have easy-to-use functions available for non-expert
     consult the mother repository for this
-change the README
 memory optimizations
     transfer less data to gpu
     redefine fewer arrays each iteration
-objecct-oriented framework to reduce the array initilizations
+objecct-oriented framework to reduce the array initializations
+make the coordinate systems consistent
+apply Gaussian filter to first iteration at each window size?
