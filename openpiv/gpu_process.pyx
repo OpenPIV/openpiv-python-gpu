@@ -275,7 +275,7 @@ class CorrelationFunction:
             output[w_range] = input[f_range];
         }
         
-            __global__ void window_slice_shift(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h)
+            __global__ void window_slice_shift(float *input, float *output, int *dx, int *dy, int window_size, int spacing, int n_col, int num_window, int w, int h)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
@@ -285,26 +285,22 @@ class CorrelationFunction:
             int x_shift;
             int y_shift;
 
-            int IW_size = window_size * window_size;
+            // int IW_size = window_size * window_size;
             
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            int diff = window_size - overlap;
+            // int diff = window_size - overlap;
             
             // loop through each interrogation window
-
-            // x index for shifted pixel
-            x_shift = ind_x + dx[ind_i];
-
-            // y index for shifted pixel
+            x_shift = ind_x + dx[ind_i];  
             y_shift = ind_y + dy[ind_i];
 
             // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
             // window. Multiply This with the shifted value at end.
-            int x = ind_i % n_col * diff + x_shift;
-            int y = ind_i / n_col * diff + y_shift;
+            int x = ind_i % n_col * spacing + x_shift;  // x index for shifted pixel
+            int y = ind_i / n_col * spacing + y_shift;  // y index for shifted pixel
             int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
 
             // Get rid of values outside the range
@@ -315,7 +311,7 @@ class CorrelationFunction:
             f_range = y * w + x;
 
             // indices of image to map to
-            w_range = ind_i * IW_size + window_size * ind_y + ind_x;
+            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = input[f_range] * outside_range;
@@ -343,10 +339,10 @@ class CorrelationFunction:
             // Loop through each interrogation window and apply the shift and deformation.
             
             // get the strain tensor values
-            u_x = strain[ind_i];
-            u_y = strain[num_windows + ind_i];
-            v_x = strain[2 * num_window + ind_i];
-            v_y = strain[3 * num_window + ind_i];
+            float u_x = strain[ind_i];
+            float u_y = strain[num_window + ind_i];
+            float v_x = strain[2 * num_window + ind_i];
+            float v_y = strain[3 * num_window + ind_i];
             
             // compute the window vector
             float r_x = ind_x - window_size / 2;  // r_x = x - x_c
@@ -433,8 +429,8 @@ class CorrelationFunction:
             # d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
             # d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
             # window_slice_deform = mod_ws.get_function("window_slice_shift")
-            # window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_u_x, d_u_y, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             # d_dy_a.gpudata.free()
             # d_dx_a.gpudata.free()
 
@@ -994,10 +990,8 @@ def widim(frame_a,
                     | 5 --> dpy       |
                     | 6 --> dcx       |
                     | 7 --> dcy       |
-                    | 8 --> u         |  # will be deleted
-                    | 9 --> v         |  # will be deleted
-                    | 10 --> sig2noise|
-                    | 11 --> mask     |
+                    | 8 --> mask      |
+                    | 9 --> sig2noise |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -1099,7 +1093,7 @@ def widim(frame_a,
 
     #### GPU arrays ####
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 12], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 10], dtype=DTYPEf)
 
     # initialize x and y values
     # x unit vector corresponds to rows
@@ -1130,9 +1124,9 @@ def widim(frame_a,
                     # TODO change this to implicit indexing
                     x_idx = int(f[K, I, J, 0])
                     y_idx = int(f[K, I, J, 1])
-                    f[K, I, J, 11] = mask_view[x_idx, y_idx]
+                    f[K, I, J, 8] = mask_view[x_idx, y_idx]
     else:
-        f[:, :, :, 11] = 1
+        f[:, :, :, 8] = 1
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
@@ -1258,10 +1252,10 @@ def widim(frame_a,
     k = nb_iter_max - 1
     x = f[k, :, :, 1]
     y = f[k, ::-1, :, 0]
-    u = f[k, :, :, 8]
-    v = f[k, :, :, 9]
-    # u = -f[k, :, :, 3] / dt
-    # v = f[k, :, :, 2] / dt
+    # u = f[k, :, :, 8]
+    # v = f[k, :, :, 9]
+    u = f[k, :, :, 3] / dt
+    v = -f[k, :, :, 2] / dt
 
     print("[DONE]\n")
 
@@ -1319,19 +1313,15 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         d_v_tmp = gpu_array_index(d_v_mean[k, :, :].copy(), d_indices, np.float32, retain_list=True)
 
         # update the velocity values
-        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)  # u
-        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)  # v
+        d_f[k, :, :, 2] = gpu_index_update(d_f[k, :, :, 2].copy(), d_u_tmp, d_indices, retain_indices=True)  # u
+        d_f[k, :, :, 3] = gpu_index_update(d_f[k, :, :, 3].copy(), d_v_tmp, d_indices)  # v
 
         # TODO, you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
-        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
-        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
 
     # case if different dimensions: interpolation using previous iteration
     elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
-        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 8)  # u
-        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 9)  # v
-        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
-        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
+        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 2)  # u
+        gpu_interpolate_surroundings(d_f, validation_location, n_row, n_col, w, overlap, k - 1, 3)  # v
 
     # case if same dimensions
     elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
@@ -1342,13 +1332,10 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         # update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
         # TODO - could replace with the mean of the previous values surrounding the point
-        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 8].copy(), d_indices, np.float32, retain_list=True)
-        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 9].copy(), d_indices, np.float32, retain_list=True)
-
-        d_f[k, :, :, 8] = gpu_index_update(d_f[k, :, :, 8].copy(), d_u_tmp, d_indices, retain_indices=True)
-        d_f[k, :, :, 9] = gpu_index_update(d_f[k, :, :, 9].copy(), d_v_tmp, d_indices)
-        d_f[k, :, :, 2] = - d_f[k, :, :, 9].copy() * dt  # dx = - v * dt
-        d_f[k, :, :, 3] = d_f[k, :, :, 8].copy() * dt  # dy = u * dt
+        d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 2].copy(), d_indices, np.float32, retain_list=True)
+        d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 3].copy(), d_indices, np.float32, retain_list=True)
+        d_f[k, :, :, 2] = gpu_index_update(d_f[k, :, :, 2].copy(), d_u_tmp, d_indices, retain_indices=True)
+        d_f[k, :, :, 3] = gpu_index_update(d_f[k, :, :, 3].copy(), d_v_tmp, d_indices)
 
 
 def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
@@ -1678,19 +1665,15 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
             // Index for each IW in the F array
             int F_idx = w_idx * fourth_dim;
 
-            F[F_idx + 6] = i_peak[w_idx];
+            F[F_idx + 6] = i_peak[w_idx];  // switched Nov 23
             F[F_idx + 7] = j_peak[w_idx];
 
             // get new displacement prediction
-            F[F_idx + 2] = (F[F_idx + 4] + F[F_idx + 6]) * F[F_idx + 11];
-            F[F_idx + 3] = (F[F_idx + 5] + F[F_idx + 7]) * F[F_idx + 11];
-
-            // get new velocity vectors
-            F[F_idx + 8] = F[F_idx + 3] / dt;
-            F[F_idx + 9] = -F[F_idx + 2] / dt;
+            F[F_idx + 2] = (F[F_idx + 4] + F[F_idx + 6]) * F[F_idx + 8];
+            F[F_idx + 3] = (F[F_idx + 5] + F[F_idx + 7]) * F[F_idx + 8];
 
             // get sig2noise ratio
-            F[F_idx + 10] = sig2noise[w_idx];
+            F[F_idx + 9] = sig2noise[w_idx];
         }
         """)
 
@@ -1845,7 +1828,7 @@ def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4
     __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int n)
     {
         // 1D grid of 1D blocks
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         if(idx >= n){return;}
 

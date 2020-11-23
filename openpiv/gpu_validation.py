@@ -135,9 +135,10 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     block_size = 32
     x_blocks = int(n_col * n_row / block_size + 1)
 
+    # TODO correct the coordinate system
     # send velocity field to GPU
-    d_u = d_f[k, 0:n_row, 0:n_col, 8].copy()
-    d_v = d_f[k, 0:n_row, 0:n_col, 9].copy()
+    d_u = d_f[k, 0:n_row, 0:n_col, 2].copy()
+    d_v = d_f[k, 0:n_row, 0:n_col, 3].copy()
 
     # get neighbours information
     d_neighbours, d_neighbours_present = gpu_get_neighbours(d_u, d_v, n_row, n_col)
