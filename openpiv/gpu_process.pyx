@@ -252,6 +252,7 @@ class CorrelationFunction:
 
         """
         # define window slice algorithm
+        # TODO pass in window_size - overlap instead of overlap so it isn't computed inside the kernel
         mod_ws = SourceModule("""
             __global__ void window_slice(float *input, float *output, int window_size, int overlap, int n_col, int w, int batch_size)
         {
@@ -320,52 +321,51 @@ class CorrelationFunction:
             output[w_range] = input[f_range] * outside_range;
         }
         
-            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int overlap, int n_col, int w, int h)
+            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
 
             int f_range;
             int w_range;
-            int x_shift;
-            int y_shift;
+            float x_shift;
+            float y_shift;
 
-            int IW_size = window_size * window_size;
+            // int IW_size = window_size * window_size;
+            // int num_window = n_col * n_row
             
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int ind_i = blockIdx.x;
+            int ind_i = blockIdx.x;  // window index
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            int diff = window_size - overlap;
-            // do this computation outside kernel
+            // int diff = window_size - overlap;
             
-            // loop through each interrogation window
+            // Loop through each interrogation window and apply the shift and deformation.
+            
+            // get the strain tensor values
+            u_x = strain[ind_i];
+            u_y = strain[num_windows + ind_i];
+            v_x = strain[2 * num_window + ind_i];
+            v_y = strain[3 * num_window + ind_i];
             
             // compute the window vector
-            // r_x = x - x_c
-            // r_y = y - y_c
+            float r_x = ind_x - window_size / 2;  // r_x = x - x_c
+            float r_y = ind_y - window_size / 2;  // r_y = y - y_c
             
             // apply deformation operation
-            // dx = r_x * up_x + r_y * up_y
-            // dy = r_x * vp_x + r_y * vp_y
+            x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r + u + dx
+            y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
             
             // do the mapping
-            // x index for shifted pixel
-            x_shift = ind_x + dx[ind_i];
-
-            // y index for shifted pixel
-            y_shift = ind_y + dy[ind_i];
-            
-            // r + u + dx
-            int x = ind_i % n_col * diff + x_shift;
-            // r + v + dy
-            int y = ind_i / n_col * diff + y_shift;
+            float x = ind_i % n_col * spacing + x_shift;  
+            float y = ind_i / n_col * spacing + y_shift;  
             
             // round to nearest integer
+            x = __uint2float_rn(x);
+            y = __uint2float_rn(y);
             
             // do linear interpolation
             
-
             // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
             // window. Multiply This with the shifted value at end.
             int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
@@ -378,7 +378,7 @@ class CorrelationFunction:
             f_range = y * w + x;
 
             // indices of image to map to
-            w_range = ind_i * IW_size + window_size * ind_y + ind_x;
+            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = input[f_range] * outside_range;
@@ -388,6 +388,7 @@ class CorrelationFunction:
         # get field shapes
         h = np.int32(self.shape[0])
         w = np.int32(self.shape[1])
+        spacing = self.window_size - self.overlap
 
         # for debugging
         assert self.window_size >= 8, "Window size is too small."
@@ -401,6 +402,7 @@ class CorrelationFunction:
         window_slice = mod_ws.get_function("window_slice")
 
         if d_shift is not None:
+            print('DEBUG: windows deform code reached')  # delete this
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
             # This code is in row major order
@@ -420,8 +422,8 @@ class CorrelationFunction:
             d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
             d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
             window_slice_shift = mod_ws.get_function("window_slice_shift")
-            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             d_dy_a.gpudata.free()
             d_dx_a.gpudata.free()
 
@@ -441,9 +443,10 @@ class CorrelationFunction:
             d_dx_b.gpudata.free()
             d_dx.gpudata.free()
             d_dy.gpudata.free()
+            print('DEBUG: windows deform code passed')  # delete this
         else:
             # use non-translating windows
-            print('DEBUG: code reached')  # delete this
+            print('DEBUG: windows displacement only code reached')  # delete this
             window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
@@ -864,6 +867,7 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
+# TODO rename this function to reflect new functionality
 def widim(frame_a,
           frame_b,
           nb_iter_max=2,
@@ -971,8 +975,8 @@ def widim(frame_a,
 
     Example
     -------
-    #TODO change this API example
-    >>> x, y, u, v, mask = gpu_process.WiDIM(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
+    # TODO change this API example
+    >>> x, y, u, v, mask = widim(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 
     --------------------------------------
     Method of implementation : to improve the speed of the program, all data have been placed in the same huge
@@ -1102,11 +1106,11 @@ def widim(frame_a,
     # y unit vector corresponds to columns
     cdef float diff
     for K in range(nb_iter_max):
-        f[K, 0, :, 0] = w[K] / 2  # init x on 1st row
+        f[K, 0, :, 0] = w[K] / 2  # init x on first row
         f[K, :, 0, 1] = w[K] / 2  # init y on first column
         diff = w[K] - overlap[K]
         for I in range(1, n_row[K]):
-            f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x  on subsequent rows
+            f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
         for J in range(1, n_col[K]):
             f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
 
@@ -1123,6 +1127,7 @@ def widim(frame_a,
         for K in range(nb_iter_max):
             for I in range(0, n_row[K]):
                 for J in range(0, n_col[K]):
+                    # TODO change this to implicit indexing
                     x_idx = int(f[K, I, J, 0])
                     y_idx = int(f[K, I, J, 1])
                     f[K, I, J, 11] = mask_view[x_idx, y_idx]
@@ -1179,10 +1184,11 @@ def widim(frame_a,
         assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
         # Get signal to noise ratio
+        # TODO re-enable this computation
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
 
         # update the field with new values
-        gpu_update(d_f, sig2noise[:n_row[K], :n_col[K]], i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+        gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
 
         # normalize the residual by the maximum quantization error of 0.5 pixel
         try:
@@ -1254,6 +1260,8 @@ def widim(frame_a,
     y = f[k, ::-1, :, 0]
     u = f[k, :, :, 8]
     v = f[k, :, :, 9]
+    # u = -f[k, :, :, 3] / dt
+    # v = f[k, :, :, 2] / dt
 
     print("[DONE]\n")
 
@@ -1635,17 +1643,17 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 ################################################################################
 #  CUDA GPU FUNCTIONS
 ################################################################################
-def gpu_update(d_f, sig2noise, i_peak, j_peak, n_row, n_col, dt, k):
+def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
     Parameters
     ---------
     d_f : GPUArray - 4D float
         main array in WiDIM algorithm
-    sig2noise : 3D array
-        signal to noise ratio at each IW at each iteration
     i_peak, j_peak : array - 2D float
         correlation function peak at each iteration
+    sig2noise : 3D array
+        signal to noise ratio at each IW at each iteration
     n_row, n_col : int
         number of rows and columns in the current iteration
     dt : float
@@ -1831,8 +1839,8 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
 
 
 def bilinear_interp_gpu(d_x1, d_x2, d_y1, d_y2, d_x, d_y, d_f1, d_f2, d_f3, d_f4):
-    """
-    """
+    """Performs bilinear interpolation on the GPU."""
+
     mod_bi = SourceModule("""
     __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int n)
     {
