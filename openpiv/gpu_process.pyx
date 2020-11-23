@@ -320,7 +320,7 @@ class CorrelationFunction:
             output[w_range] = input[f_range] * outside_range;
         }
         
-            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, int window_size, int overlap, int n_col, int w, int h)
+            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int overlap, int n_col, int w, int h)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
@@ -337,18 +337,29 @@ class CorrelationFunction:
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
             int diff = window_size - overlap;
+            // do this computation outside kernel
             
             // loop through each interrogation window
             
+            // compute the window vector
+            // r_x = x - x_c
+            // r_y = y - y_c
+            
+            // apply deformation operation
+            // dx = r_x * up_x + r_y * up_y
+            // dy = r_x * vp_x + r_y * vp_y
+            
+            // do the mapping
             // x index for shifted pixel
             x_shift = ind_x + dx[ind_i];
 
             // y index for shifted pixel
             y_shift = ind_y + dy[ind_i];
             
-            // apply deformation operation
-            
-            // do the mapping
+            // r + u + dx
+            int x = ind_i % n_col * diff + x_shift;
+            // r + v + dy
+            int y = ind_i / n_col * diff + y_shift;
             
             // round to nearest integer
             
@@ -357,8 +368,6 @@ class CorrelationFunction:
 
             // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
             // window. Multiply This with the shifted value at end.
-            int x = ind_i % n_col * diff + x_shift;
-            int y = ind_i / n_col * diff + y_shift;
             int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
 
             // Get rid of values outside the range
@@ -872,9 +881,10 @@ def widim(frame_a,
           div_tol=0.1,
           subpixel_method='gaussian',
           sig2noise_method='peak2peak',
-          width=2,
-          nfft_x=0,
-          nfft_y=0):
+          width=2,  # delete
+          nfft_x=0,  # delete
+          nfft_y=0):  # delete
+    # TODO remove the unused input arguments
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
