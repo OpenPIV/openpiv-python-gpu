@@ -22,3 +22,4 @@ memory optimizations
 objecct-oriented framework to reduce the array initializations
 make the coordinate systems consistent
 apply Gaussian filter to first iteration at each window size?
+try 3rd order interpolations
