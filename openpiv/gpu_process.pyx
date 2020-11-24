@@ -1658,7 +1658,6 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
             // cols = number of columns of IWs
             // fourth_dim  = size of the fourth dimension of F
             // dt = time step between frames
-            // leap = 'leaps' to where the F iteration starts
 
             int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
