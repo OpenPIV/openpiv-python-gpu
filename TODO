@@ -10,16 +10,13 @@ make API consistent with CPU version
 replace slow functions with CUDA kernels or CupY functions
     gradient
     window slicing
-    use CuPy to do array computations
 reactivate the extended search area
 implement choosing advanced algorithm features
-multiprocessing framework that works with the other windef function as well
+multiprocessing framework
 Need to have easy-to-use functions available for non-expert
     consult the mother repository for this
 memory optimizations
-    transfer less data to gpu
-    redefine fewer arrays each iteration
-objecct-oriented framework to reduce the array initializations
+object-oriented framework to reduce the array initializations
 make the coordinate systems consistent
 apply Gaussian filter to first iteration at each window size?
 try 3rd order interpolations

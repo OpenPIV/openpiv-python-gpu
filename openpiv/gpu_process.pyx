@@ -291,7 +291,7 @@ class CorrelationFunction:
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            // int diff = window_size - overlap;
+            // int diff = window_size - overlap;  // delete
             
             // loop through each interrogation window
             x_shift = ind_x + dx[ind_i];  
@@ -334,7 +334,7 @@ class CorrelationFunction:
             int ind_i = blockIdx.x;  // window index
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            // int diff = window_size - overlap;
+            // int diff = window_size - overlap;  // delete
             
             // Loop through each interrogation window and apply the shift and deformation.
             
@@ -353,12 +353,14 @@ class CorrelationFunction:
             y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
             
             // do the mapping
-            float x = ind_i % n_col * spacing + x_shift;  
-            float y = ind_i / n_col * spacing + y_shift;  
+            //int x = ind_i % n_col * spacing + x_shift;  // delete
+            //int y = ind_i / n_col * spacing + y_shift;
+            float x = ind_i % n_col * spacing + x_shift;
+            float y = ind_i / n_col * spacing + y_shift;
             
             // round to nearest integer
-            x = __uint2float_rn(x);
-            y = __uint2float_rn(y);
+            x = __float2int_rn(x);
+            y = __float2int_rn(y);
             
             // do linear interpolation
             
@@ -397,20 +399,36 @@ class CorrelationFunction:
         # slice up windows
         window_slice = mod_ws.get_function("window_slice")
 
-        if d_shift is not None:
-            print('DEBUG: windows deform code reached')  # delete this
+        if d_strain is not None:
+            d_dy = d_shift[1].copy()
+            d_dx = d_shift[0].copy()
+            d_strain_a = -d_strain.copy() / 2
+            d_strain_b = d_strain.copy() / 2
+
+            # shift frames and deform
+            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
+            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
+            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
+            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
+            window_slice_deform = mod_ws.get_function("window_slice_deform")
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+
+            # free displacement GPU memory
+            d_dy_a.gpudata.free()
+            d_dx_a.gpudata.free()
+            d_dy_b.gpudata.free()
+            d_dx_b.gpudata.free()
+            d_dx.gpudata.free()
+            d_dy.gpudata.free()
+            d_strain_a.gpudata.free()
+            d_strain_b.gpudata.free()
+        elif d_shift is not None:
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
             # This code is in row major order
-            d_dy = d_shift[0].copy()
-            d_dx = d_shift[1].copy()
-
-            # # shift frame b
-            # d_dy_b = d_dy.astype(np.int32)
-            # d_dx_b = d_dx.astype(np.int32)
-            # window_slice_shift = mod_ws.get_function("window_slice_shift")
-            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            d_dy = d_shift[1].copy()
+            d_dx = d_shift[0].copy()
 
             # shift frames symmetrically
             d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
@@ -423,26 +441,20 @@ class CorrelationFunction:
             d_dy_a.gpudata.free()
             d_dx_a.gpudata.free()
 
-            # # shift frames and deform
-            # d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
-            # d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
-            # d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
-            # d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
-            # window_slice_deform = mod_ws.get_function("window_slice_shift")
-            # window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # d_dy_a.gpudata.free()
-            # d_dx_a.gpudata.free()
+            # # shift frame b
+            # d_dy_b = d_dy.astype(np.int32)
+            # d_dx_b = d_dx.astype(np.int32)
+            # window_slice_shift = mod_ws.get_function("window_slice_shift")
+            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dy_b.gpudata.free()
             d_dx_b.gpudata.free()
             d_dx.gpudata.free()
             d_dy.gpudata.free()
-            print('DEBUG: windows deform code passed')  # delete this
         else:
             # use non-translating windows
-            print('DEBUG: windows displacement only code reached')  # delete this
             window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
@@ -988,8 +1000,8 @@ def widim(frame_a,
                     | 3 --> dy        |
                     | 4 --> dpx       |
                     | 5 --> dpy       |
-                    | 6 --> dcx       |
-                    | 7 --> dcy       |
+                    | 6 --> dcx       |  delete this
+                    | 7 --> dcy       |  delete this
                     | 8 --> mask      |
                     | 9 --> sig2noise |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
@@ -1093,7 +1105,7 @@ def widim(frame_a,
 
     #### GPU arrays ####
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 10], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 8], dtype=DTYPEf)
 
     # initialize x and y values
     # x unit vector corresponds to rows
@@ -1116,6 +1128,7 @@ def widim(frame_a,
     cdef DTYPEb_t [:, :] mask_view = mask_b.astype(np.uint8)
     cdef Py_ssize_t x_idx
     cdef Py_ssize_t y_idx
+
     if mask is not None:
         assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
         for K in range(nb_iter_max):
@@ -1124,9 +1137,9 @@ def widim(frame_a,
                     # TODO change this to implicit indexing
                     x_idx = int(f[K, I, J, 0])
                     y_idx = int(f[K, I, J, 1])
-                    f[K, I, J, 8] = mask_view[x_idx, y_idx]
+                    f[K, I, J, 6] = mask_view[x_idx, y_idx]
     else:
-        f[:, :, :, 8] = 1
+        f[:, :, :, 6] = 1
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
@@ -1147,9 +1160,11 @@ def widim(frame_a,
         print("ITERATION {}".format(K))
 
         # changed this section Nov 1 2020 to not use copy()
+        # d_shift_arg = None
+        d_strain_arg = None
         if K > 0:
             # Calculate second frame displacement (shift)
-            # d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4].copy()  # xb = xa + dpx
+            # d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4].copy()  # xb = xa + dpx  # delete
             # d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5].copy()  # yb = ya + dpy
             d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
             d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
@@ -1179,7 +1194,7 @@ def widim(frame_a,
 
         # Get signal to noise ratio
         # TODO re-enable this computation
-        # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)  # disabled by eric
+        # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
 
         # update the field with new values
         gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
@@ -1194,28 +1209,25 @@ def widim(frame_a,
         #########################################################
         # validation of the velocity vectors with 3 * 3 filtering
         #########################################################
-        if K == 0 and trust_1st_iter:  # 1st iteration can generally be trusted if it follows the 1/4 rule
-            print("No validation--trusting 1st iteration.")
-        elif nb_validation_iter > 0:
-            print("Starting validation.")
+        if K == 0 and trust_1st_iter:
+            print('No validation--trusting 1st iteration.')
 
-            # real validation starts
-            for i in range(nb_validation_iter):
-                print("Validation iteration {}:".format(i))
+        for i in range(nb_validation_iter):
+            print('Validation iteration {}:'.format(i))
 
-                # reset validation list
-                validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+            # reset validation list
+            validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
-                # get list of places that need to be validated
-                validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], sig2n_tol, median_tol, mean_tol, div_tol)
+            # get list of places that need to be validated
+            validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], sig2n_tol, median_tol, mean_tol, div_tol)
 
-                # do the validation
-                n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
-                if n_val > 0:
-                    print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
-                    gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
-                else:
-                    print('No invalid vectors!')
+            # do the validation
+            n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
+            if n_val > 0:
+                print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
+                gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+            else:
+                print('No invalid vectors!')
 
             print("[DONE]\n")
 
@@ -1224,9 +1236,9 @@ def widim(frame_a,
         ##############################################################################
         if K < nb_iter_max - 1:
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
-            print("Going to next iteration...")
+            print('Going to next iteration.')
             # interpolate if dimensions do not agree
-            if n_row[K + 1] != n_row[K] or n_col[K + 1] != n_col[K]:
+            if w[K + 1] != w[K]:
                 print("Performing interpolation of the displacement field for next iteration predictors.")
                 v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
                 # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
@@ -1252,10 +1264,8 @@ def widim(frame_a,
     k = nb_iter_max - 1
     x = f[k, :, :, 1]
     y = f[k, ::-1, :, 0]
-    # u = f[k, :, :, 8]
-    # v = f[k, :, :, 9]
-    u = f[k, :, :, 3] / dt
-    v = -f[k, :, :, 2] / dt
+    u = f[k, :, :, 2] / dt
+    v = -f[k, :, :, 3] / dt
 
     print("[DONE]\n")
 
@@ -1348,7 +1358,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     v_list : array - 2D bool
         indicates which values must be validated. True means it needs to be validated, False means no validation is needed.
     n_row, n_col : array - 1D
-        Number rows and columns in each iteration
+        number rows and columns in each iteration
     w : int
         number of pixels between interrogation windows
     overlap : int
@@ -1571,62 +1581,6 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         d_f[k + 1, int(n_row[k + 1] - 1), int(n_col[k + 1] - 1), dat] = d_f[k, int(n_row[k] - 1), int(n_col[k] - 1), dat]
 
 
-# def launch(str method, names, arg):
-#     """A nice launcher for any OpenPIV function, printing a header in terminal with a list of the parameters used.
-#
-#     Parameters
-#     ----------
-#     method : string
-#         the name of the algorithm used
-#     names : list of string
-#         names of the parameters to print
-#     arg : list
-#         parameters of different types
-#
-#     Returns
-#     -------
-#     start_time : float
-#         the current time --> can be used to print the execution time of the programm at the end.
-#
-#     """
-#     cdef int i
-#     print(" ")
-#     print('----------------------------------------------------------')
-#     print('|----->     ||   The Open Source  P article              |')
-#     print('| Open      ||                    I mage                 |')
-#     print('|     PIV   ||                    V elocimetry  Toolbox  |')
-#     print('|     <-----||   www.openpiv.net          version 1.0    |')
-#     print('----------------------------------------------------------')
-#     print(" ")
-#     print("Algorithm : ", method)
-#     print(" ")
-#     print("Parameters   ")
-#     print("-----------------------------------")
-#     for i in range(len(arg)-1):
-#         print("     ", names[i], " | ", arg[i])
-#     print(" ")
-#     print("-----------------------------------")
-#     print("|           STARTING              |")
-#     print("-----------------------------------")
-#     print(" ")
-#     cdef float start_time = time.time()
-#     return start_time
-#
-#
-# def end(float start_time):
-#     """A function that prints the time since startTime. Used to nicely end the program
-#
-#     Parameters
-#     ----------
-#     start_time : float
-#         a time
-#
-#     """
-#     print("-------------------------------------------------------------")
-#     print("[DONE] ..after ", (time.time() - start_time), "seconds ")
-#     print("-------------------------------------------------------------")
-
-
 ################################################################################
 #  CUDA GPU FUNCTIONS
 ################################################################################
@@ -1664,15 +1618,12 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
             // Index for each IW in the F array
             int F_idx = w_idx * fourth_dim;
 
-            F[F_idx + 6] = i_peak[w_idx];  // switched Nov 23
-            F[F_idx + 7] = j_peak[w_idx];
-
             // get new displacement prediction
-            F[F_idx + 2] = (F[F_idx + 4] + F[F_idx + 6]) * F[F_idx + 8];
-            F[F_idx + 3] = (F[F_idx + 5] + F[F_idx + 7]) * F[F_idx + 8];
+            F[F_idx + 2] = (F[F_idx + 4] + j_peak[w_idx]) * F[F_idx + 6];
+            F[F_idx + 3] = (F[F_idx + 5] + i_peak[w_idx]) * F[F_idx + 6];
 
             // get sig2noise ratio
-            F[F_idx + 9] = sig2noise[w_idx];
+            F[F_idx + 7] = sig2noise[w_idx];
         }
         """)
 
@@ -2199,3 +2150,58 @@ def gpu_round(d_src, retain_input=False):
         d_src.gpudata.free()
 
     return d_dst
+
+# def launch(str method, names, arg):
+#     """A nice launcher for any OpenPIV function, printing a header in terminal with a list of the parameters used.
+#
+#     Parameters
+#     ----------
+#     method : string
+#         the name of the algorithm used
+#     names : list of string
+#         names of the parameters to print
+#     arg : list
+#         parameters of different types
+#
+#     Returns
+#     -------
+#     start_time : float
+#         the current time --> can be used to print the execution time of the programm at the end.
+#
+#     """
+#     cdef int i
+#     print(" ")
+#     print('----------------------------------------------------------')
+#     print('|----->     ||   The Open Source  P article              |')
+#     print('| Open      ||                    I mage                 |')
+#     print('|     PIV   ||                    V elocimetry  Toolbox  |')
+#     print('|     <-----||   www.openpiv.net          version 1.0    |')
+#     print('----------------------------------------------------------')
+#     print(" ")
+#     print("Algorithm : ", method)
+#     print(" ")
+#     print("Parameters   ")
+#     print("-----------------------------------")
+#     for i in range(len(arg)-1):
+#         print("     ", names[i], " | ", arg[i])
+#     print(" ")
+#     print("-----------------------------------")
+#     print("|           STARTING              |")
+#     print("-----------------------------------")
+#     print(" ")
+#     cdef float start_time = time.time()
+#     return start_time
+#
+#
+# def end(float start_time):
+#     """A function that prints the time since startTime. Used to nicely end the program
+#
+#     Parameters
+#     ----------
+#     start_time : float
+#         a time
+#
+#     """
+#     print("-------------------------------------------------------------")
+#     print("[DONE] ..after ", (time.time() - start_time), "seconds ")
+#     print("-------------------------------------------------------------")
