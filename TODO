@@ -1,22 +1,24 @@
 finish the window deformation method
-    try nearest neighbour
+    try nearest neighbour - done
     try linear interpolation
-        deformation
+        deformation - done
         translation
-    try smoothing
+    try smoothing - done
+        gradient - done
+        displacements
 retain s2n output option
     debug it to ensure it works
 make API consistent with CPU version
-replace slow functions with CUDA kernels or CupY functions
+replace slow functions with CUDA kernels or CuPy functions
     gradient
     window slicing
 reactivate the extended search area
 implement choosing advanced algorithm features
 multiprocessing framework
-Need to have easy-to-use functions available for non-expert
+    Need to have easy-to-use functions available for non-expert
     consult the mother repository for this
-memory optimizations
+memory optimizations - done
 object-oriented framework to reduce the array initializations
-make the coordinate systems consistent
+make the coordinate systems consistent - done
 apply Gaussian filter to first iteration at each window size?
 try 3rd order interpolations

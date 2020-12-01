@@ -13,6 +13,7 @@ from numpy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
 # import cupy
+from openpiv.smoothn import smoothn as smoothn
 
 cimport numpy as np
 
@@ -322,7 +323,7 @@ class CorrelationFunction:
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
 
-            int f_range;
+            // int f_range;
             int w_range;
             float x_shift;
             float y_shift;
@@ -358,28 +359,52 @@ class CorrelationFunction:
             float x = ind_i % n_col * spacing + x_shift;
             float y = ind_i / n_col * spacing + y_shift;
             
+            ////
             // round to nearest integer
-            x = __float2int_rn(x);
-            y = __float2int_rn(y);
-            
-            // do linear interpolation
+            // x = __float2int_rn(x);
+            // y = __float2int_rn(y);
             
             // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
             // window. Multiply This with the shifted value at end.
-            int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
+            // int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
 
             // Get rid of values outside the range
-            x = x * outside_range;
-            y = y * outside_range;
+            // x = x * outside_range;
+            // y = y * outside_range;
 
             // indices of image to map from. Apply shift to pixels
-            f_range = y * w + x;
+            // f_range = y * w + x;
 
             // indices of image to map to
-            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            // w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-            output[w_range] = input[f_range] * outside_range;
+            // output[w_range] = input[f_range] * outside_range;
+            ////
+            
+            // do bilinear interpolation
+            int x2 = ceilf(x);
+            int x1 = floorf(x);
+            int y2 = ceilf(y);
+            int y1 = floorf(y);
+            
+            // prevent divide-by-zero
+            if (x2 == x1) {x2 = x1 + 1;}
+            if (y2 == y1) {y2 = y2 + 1;}
+            
+            int outside_range = (x1 >= 0 && x2 < w && y1 >= 0 && y2 < h);
+            
+            float f11 = input[(y1 * w + x1) * outside_range];
+            float f21 = input[(y1 * w + x2) * outside_range];
+            float f12 = input[(y2 * w + x1) * outside_range];
+            float f22 = input[(y2 * w + x2) * outside_range];
+            
+            // indices of image to map to
+            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            
+            // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+            output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
+
         }
         """)
 
@@ -402,8 +427,15 @@ class CorrelationFunction:
         if d_strain is not None:
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
+
+
+
             d_strain_a = -d_strain.copy() / 2
             d_strain_b = d_strain.copy() / 2
+            strain = d_strain.get()
+            strain_a = d_strain_a.get()
+            np.save('strain', strain)
+            np.save('strain_a', strain_a)
 
             # shift frames and deform
             d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
@@ -423,6 +455,7 @@ class CorrelationFunction:
             d_dy.gpudata.free()
             d_strain_a.gpudata.free()
             d_strain_b.gpudata.free()
+        # if d_shift is not None:
         elif d_shift is not None:
             # Define displacement array for second window
             # GPU thread/block architecture uses column major order, so x is the column and y is the row
@@ -983,7 +1016,7 @@ def widim(frame_a,
 
     Example
     -------
-    # TODO change this API example
+    # TODO change this example
     >>> x, y, u, v, mask = widim(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 
     --------------------------------------
@@ -1000,13 +1033,13 @@ def widim(frame_a,
                     | 3 --> dy        |
                     | 4 --> dpx       |
                     | 5 --> dpy       |
-                    | 6 --> dcx       |  delete this
-                    | 7 --> dcy       |  delete this
                     | 8 --> mask      |
                     | 9 --> sig2noise |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
+
+    Note: Because the GPU arrays are accessed in parallel, the above technique probably doesn't add anything to performance anymore. It just makes things difficult to develop.
 
     """
     ####################################################
@@ -1173,9 +1206,9 @@ def widim(frame_a,
             # calculate the strain tensor
             d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
             if w[K] != w[K - 1]:
-                gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], overlap[K])
+                gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], w[K] - overlap[K])
             else:
-                gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], overlap[K])
+                gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], w[K] - overlap[K])
         else:
             d_shift_arg = None
             d_strain_arg = None
@@ -2012,7 +2045,7 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
         spacing between nodes
 
     """
-    # # CuPy implementation
+    # # CuPy implementation  delete
     # # u_x
     # d_strain[0, :n_row, 1:n_col - 1] = cupy.gradient(d_u, w, axis=None, edge_order=1)
     # # u_y
@@ -2022,26 +2055,45 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
     # # v_y
     # d_strain[3, 1:n_row - 1, :n_col] = cupy.gradient(d_v, w, axis=None, edge_order=1)
 
-    # PyCUDA implementation
+    # # PyCUDA implementation
+    # # u_x
+    # d_strain[0, :n_row, 1:n_col - 1] = 0.5 * (d_u[:, 2:].copy() - d_u[:, :-2].copy()) / w
+    # d_strain[0, :n_row, 0] = (d_u[:, 1].copy() - d_u[:, 0].copy()) / w
+    # d_strain[0, :n_row, -1] = (d_u[:, -1].copy() - d_u[:, n_col - 1].copy()) / w
+    #
+    # # u_y
+    # d_strain[1, 1:n_row - 1, :n_col] = 0.5 * (d_u[2:, :].copy() - d_u[:-2, :].copy()) / w
+    # d_strain[1, 0, :n_col] = (d_u[1, :].copy() - d_u[0, :].copy()) / w
+    # d_strain[1, -1, :n_col] = (d_u[-1, :].copy() - d_u[n_col - 1, :].copy()) / w
+    #
+    # # v_x
+    # d_strain[2, :n_row, 1:n_col - 1] = 0.5 * (d_v[:, 2:].copy() - d_v[:, :-2].copy()) / w
+    # d_strain[2, :n_row, 0] = (d_v[:, 1].copy() - d_v[:, 0].copy()) / w
+    # d_strain[2, :n_row, -1] = (d_v[:, -1].copy() - d_v[:, n_col - 1].copy()) / w
+    #
+    # # v_y
+    # d_strain[3, 1:n_row - 1, :n_col] = 0.5 * (d_v[2:, :].copy() - d_v[:-2, :].copy()) / w
+    # d_strain[3, 0, :n_col] = (d_v[1, :].copy() - d_v[0, :].copy()) / w
+    # d_strain[3, -1, :n_col] = (d_v[-1, :].copy() - d_v[n_col - 1, :].copy()) / w
+
+    # NumPy implementation
+    u = d_u.get()
+    v = d_v.get()
+    strain = np.zeros((4, n_row, n_col))
+
     # u_x
-    d_strain[0, :n_row, 1:n_col - 1] = 0.5 * (d_u[:, 2:].copy() - d_u[:, :-2].copy()) / w
-    d_strain[0, :n_row, 0] = (d_u[:, 1].copy() - d_u[:, 0].copy()) / w
-    d_strain[0, :n_row, -1] = (d_u[:, -1].copy() - d_u[:, n_col - 1].copy()) / w
+    u_x = np.gradient(u, axis=1)
+    u_y = np.gradient(u, axis=0)
+    v_x = np.gradient(v, axis=1)
+    v_y = np.gradient(v, axis=0)
 
-    # u_y
-    d_strain[1, 1:n_row - 1, :n_col] = 0.5 * (d_u[2:, :].copy() - d_u[:-2, :].copy()) / w
-    d_strain[1, 0, :n_col] = (d_u[1, :].copy() - d_u[0, :].copy()) / w
-    d_strain[1, -1, :n_col] = (d_u[-1, :].copy() - d_u[n_col - 1, :].copy()) / w
+    # # see if smoothing does anything
+    strain[0, :, :], _, _, _ = smoothn(u_x, s=0.5)
+    strain[1, :, :], _, _, _ = smoothn(u_y, s=0.5)
+    strain[2, :, :], _, _, _ = smoothn(v_x, s=0.5)
+    strain[3, :, :], _, _, _ = smoothn(v_y, s=0.5)
 
-    # v_x
-    d_strain[2, :n_row, 1:n_col - 1] = 0.5 * (d_v[:, 2:].copy() - d_v[:, :-2].copy()) / w
-    d_strain[2, :n_row, 0] = (d_v[:, 1].copy() - d_v[:, 0].copy()) / w
-    d_strain[2, :n_row, -1] = (d_v[:, -1].copy() - d_v[:, n_col - 1].copy()) / w
-
-    # v_y
-    d_strain[3, 1:n_row - 1, :n_col] = 0.5 * (d_v[2:, :].copy() - d_v[:-2, :].copy()) / w
-    d_strain[3, 0, :n_col] = (d_v[1, :].copy() - d_v[0, :].copy()) / w
-    d_strain[3, -1, :n_col] = (d_v[-1, :].copy() - d_v[n_col - 1, :].copy()) / w
+    d_strain = gpuarray.to_gpu(strain)
 
 
 def gpu_floor(d_src, retain_input=False):
