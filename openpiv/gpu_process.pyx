@@ -318,7 +318,7 @@ class CorrelationFunction:
             output[w_range] = input[f_range] * outside_range;
         }
         
-            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h)
+            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h, float *test_out)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
@@ -352,6 +352,8 @@ class CorrelationFunction:
             // apply deformation operation
             x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r + u + dx
             y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
+            
+            test_out[ind_i] = u_y;
             
             // do the mapping
             //int x = ind_i % n_col * spacing + x_shift;  // delete
@@ -428,14 +430,18 @@ class CorrelationFunction:
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
 
-
-
             d_strain_a = -d_strain.copy() / 2
             d_strain_b = d_strain.copy() / 2
             strain = d_strain.get()
             strain_a = d_strain_a.get()
+            strain_a = d_strain_b.get()
             np.save('strain', strain)
             np.save('strain_a', strain_a)
+            np.save('strain_b', strain_a)
+
+            # test input
+            test_in = np.zeros((self.n_rows, self.n_cols), dtype=np.float32)
+            d_test_out = gpuarray.to_gpu(test_in)
 
             # shift frames and deform
             d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
@@ -443,8 +449,12 @@ class CorrelationFunction:
             d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
             d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+
+            # test output
+            test_out = d_test_out.get()
+            np.save('test_out', test_out)
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -911,12 +921,12 @@ def get_field_shape(image_size, window_size, overlap):
 # TODO rename this function to reflect new functionality
 def widim(frame_a,
           frame_b,
-          nb_iter_max=2,
-          nb_refinement_iter=1,
+          window_size_iters=(1, 2),
           min_window_size=16,
           overlap_ratio=0.5,
           dt=1,
           mask=None,
+          deform=True,
           validation_method='median_velocity',
           trust_1st_iter=True,
           nb_validation_iter=1,
@@ -926,9 +936,7 @@ def widim(frame_a,
           div_tol=0.1,
           subpixel_method='gaussian',
           sig2noise_method='peak2peak',
-          width=2,  # delete
-          nfft_x=0,  # delete
-          nfft_y=0):  # delete
+          width=2):
     # TODO remove the unused input arguments
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
@@ -950,38 +958,34 @@ def widim(frame_a,
 
     Parameters
     ----------
-    frame_a : array, 2D dtype=np.float32
-        an two dimensions array of integers containing grey levels of
-        the first frame.
-    frame_b : array, 2D dtype=np.float32
-        an two dimensions array of integers containing grey levels of
-        the second frame.
-    min_window_size : int
-        the size of the minimum (final) (square) interrogation window.
+    frame_a, frame_b : array, 2D dtype=np.float32
+        Two-dimensional array of integers containing grey levels of the first and second frames
+    window_size_iters : tuple or int
+        Number of iterations performed at each window size
+    min_window_size : tuple or int
+        Length of the sides of the square deformation. Only support multiples of 8.
     overlap_ratio : float
         the ratio of overlap between two windows (between 0 and 1).
-    nb_refinement_iter : int
-        how many times the window size refining processes happens.
     dt : float
-        the time delay separating the two frames.
+        Time delay separating the two frames.
     mask : array, 2D dtype=np.int32
-        an two dimensions array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+        Two-dimensional array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+    deform : bool
+        Whether to deform the windows by the velocity gradient at each iteration.
     validation_method : string
-        the method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now
+        Method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now.
     trust_1st_iter : bool
         With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
     nb_validation_iter : int
-        number of iterations per validation cycle.
+        Number of iterations per validation cycle.
     sig2n_tol : float
-        threshold for signal to noise
+        Threshold for signal to noise.
     median_tol : float
-        the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
+        Threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
     mean_tol : float
-        the threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
+        Threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
     div_tol : float
         Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptable.
-    nb_iter_max : int
-        global number of iterations.
     subpixel_method : string
          one of the following methods to estimate subpixel location of the peak:
          'centroid' [replaces default if correlation map is negative],
@@ -994,12 +998,6 @@ def widim(frame_a,
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-    nfft_x : int
-        the size of the 2D FFT in x-direction,
-        [default: 2 x windows_a.shape[0] is recommended]
-    nfft_y : int
-        the size of the 2D FFT in y-direction,
-        [default: 2 x windows_a.shape[1] is recommended]
 
     Returns
     -------
@@ -1048,6 +1046,11 @@ def widim(frame_a,
     # input checks
     ht, wd = frame_a.shape
     dt = np.float32(dt)
+    ws_iters = tuple([window_size_iters])
+    nb_iter_max = sum(ws_iters)
+
+    # windows sizes
+    ws = [np.power(2, i) * min_window_size for i in range(len(ws_iters) - 1, -1, -1) for j in range(ws_iters[i])]
 
     # Initialize skcuda miscellaneous library
     cu_misc.init()
@@ -1060,32 +1063,15 @@ def widim(frame_a,
     d_frame_a_f = gpuarray.to_gpu(frame_a_f)
     d_frame_b_f = gpuarray.to_gpu(frame_b_f)
 
-    if nb_iter_max <= nb_refinement_iter:
-        raise ValueError("Please provide a nb_iter_max that is greater than the nb_refinement_iter")
-    cdef Py_ssize_t K  # main iteration index
+    cdef Py_ssize_t K # main iteration index
     cdef Py_ssize_t I, J  # interrogation locations indices
-    cdef Py_ssize_t L, M  # inside window indices
-    cdef Py_ssize_t O, P  # frame indices corresponding to I and J
     cdef Py_ssize_t i, j  # indices for various works
     cdef float mean_u, mean_v, rms_u, rms_v, residual_0, div
     cdef int residual, nb_w_ind
     cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=1] w = np.zeros(nb_iter_max, dtype=DTYPEi)
+    cdef np.ndarray[DTYPEi_t, ndim=1] w = np.asarray(ws, dtype=DTYPEi)
     cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
-
-    # window sizes list initialization - old
-    for K in range(nb_refinement_iter + 1):
-        w[K] = np.power(2, nb_refinement_iter - K) * min_window_size
-    for K in range(nb_refinement_iter + 1, nb_iter_max):
-        w[K] = w[K - 1]
-
-    # # window sizes list initialization
-    # for K in range(0, nb_iter_max - nb_refinement_iter):
-    #     w[K] = np.power(2, nb_refinement_iter) * min_window_size
-    # for K in range(nb_iter_max - nb_refinement_iter, nb_iter_max):
-    #     w[K] = np.power(2, nb_iter_max - K - 1) * min_window_size
-    # print('windows sizes = {}'.format(w))
 
     # overlap init
     for K in range(nb_iter_max):
@@ -1095,9 +1081,6 @@ def widim(frame_a,
     for K in range(nb_iter_max):
         n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
         n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
-
-    # write the parameters to the screen
-    # cdef float start_time = launch(method='WiDIM', names=['Size of image', 'total number of iterations', 'overlap ratio', 'coarse factor', 'time step', 'validation method', 'number of validation iterations', 'subpixel_method','n_row', 'n_col', 'Window sizes', 'overlaps'], arg=[[ht, wd], nb_iter_max, overlap_ratio, nb_refinement_iter, dt, validation_method, nb_validation_iter, subpixel_method, n_row, n_col, w, overlap])
 
     # define u, v & x, y fields (only used as outputs of this program)
     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
@@ -1214,7 +1197,7 @@ def widim(frame_a,
             d_strain_arg = None
 
         # Get correlation function
-        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], nfft_x, d_shift=d_shift_arg, d_strain=d_strain_arg)
+        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
         # Get window displacement to subpixel accuracy
         i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
@@ -2030,7 +2013,7 @@ def gpu_index_update(d_dest, d_values, d_indices, retain_indices=False):
 
 
 # TODO changes this to be a CUDA kernel
-def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
+def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     """Computes the strain rate gradients.
 
     Parameters
@@ -2041,7 +2024,7 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
         velocity
     n_row, n_col : int
         number of rows, columns
-    w : int
+    spacing : int
         spacing between nodes
 
     """
@@ -2079,7 +2062,9 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
     # NumPy implementation
     u = d_u.get()
     v = d_v.get()
-    strain = np.zeros((4, n_row, n_col))
+    # u = smoothn(d_u.get(), s=0.5)[0]
+    # v = smoothn(d_v.get(), s=0.5)[0]
+    strain = np.zeros((4, n_row, n_col), dtype=np.float32)
 
     # u_x
     u_x = np.gradient(u, axis=1)
@@ -2087,13 +2072,19 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, w):
     v_x = np.gradient(v, axis=1)
     v_y = np.gradient(v, axis=0)
 
-    # # see if smoothing does anything
-    strain[0, :, :], _, _, _ = smoothn(u_x, s=0.5)
-    strain[1, :, :], _, _, _ = smoothn(u_y, s=0.5)
-    strain[2, :, :], _, _, _ = smoothn(v_x, s=0.5)
-    strain[3, :, :], _, _, _ = smoothn(v_y, s=0.5)
+    # see if smoothing does anything
+    strain[0, :, :] = smoothn(u_x, s=0.5)[0]
+    strain[1, :, :] = smoothn(u_y, s=0.5)[0]
+    strain[2, :, :] = smoothn(v_x, s=0.5)[0]
+    strain[3, :, :] = smoothn(v_y, s=0.5)[0]
 
-    d_strain = gpuarray.to_gpu(strain)
+    # # see if smoothing does anything
+    # strain[0, :, :] = u_x
+    # strain[1, :, :] = u_y
+    # strain[2, :, :] = v_x
+    # strain[3, :, :] = v_y
+
+    d_strain[:] = gpuarray.to_gpu(strain / spacing)
 
 
 def gpu_floor(d_src, retain_input=False):

@@ -747,8 +747,8 @@ def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
 
             elif subpixel_method == 'gaussian':
                 subp_peak_position = (
-                peak1_i + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr))),
-                peak1_j + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu))))
+                    peak1_i + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr))),
+                    peak1_j + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu))))
 
             elif subpixel_method == 'parabolic':
                 subp_peak_position = (peak1_i + (cl - cr) / (2 * cl - 4 * c + 2 * cr),
