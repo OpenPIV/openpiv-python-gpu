@@ -937,7 +937,6 @@ def widim(frame_a,
           subpixel_method='gaussian',
           sig2noise_method='peak2peak',
           width=2):
-    # TODO remove the unused input arguments
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
@@ -1046,7 +1045,7 @@ def widim(frame_a,
     # input checks
     ht, wd = frame_a.shape
     dt = np.float32(dt)
-    ws_iters = tuple([window_size_iters])
+    ws_iters = window_size_iters if type(window_size_iters) == tuple else tuple([window_size_iters])
     nb_iter_max = sum(ws_iters)
 
     # windows sizes
@@ -1186,12 +1185,14 @@ def widim(frame_a,
             d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
             d_shift_arg = d_shift[:, :n_row[K], :n_col[K]]
 
-            # calculate the strain tensor
-            d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
-            if w[K] != w[K - 1]:
-                gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], w[K] - overlap[K])
-            else:
-                gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], w[K] - overlap[K])
+            # calculate the strain rate tensor
+            if deform:
+                d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
+                if w[K] != w[K - 1]:
+                    gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], w[K] - overlap[K])
+                else:
+                    gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], w[K] - overlap[K])
+
         else:
             d_shift_arg = None
             d_strain_arg = None
