@@ -937,16 +937,11 @@ def widim(frame_a,
           mask=None,
           deform=True,
           smoothing=True,
+          smoothing_par=0.5,
+          nb_validation_iter=1,
           validation_method='median_velocity',
           trust_1st_iter=True,
-          nb_validation_iter=1,
-          sig2n_tol=1.5,
-          median_tol=2,
-          mean_tol=1.5,
-          div_tol=0.1,
-          subpixel_method='gaussian',
-          sig2noise_method='peak2peak',
-          width=2):
+          **kwargs):
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
@@ -983,32 +978,14 @@ def widim(frame_a,
         Whether to deform the windows by the velocity gradient at each iteration.
     smoothing : bool
         Whether to smooth the intermediate fields.
-    validation_method : string
-        Method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now.
-    trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
+    smoothing_par : float
+        The value of the smoothing function argument.
     nb_validation_iter : int
         Number of iterations per validation cycle.
-    sig2n_tol : float
-        Threshold for signal to noise.
-    median_tol : float
-        Threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-    mean_tol : float
-        Threshold for the validation method chosen. This does not concern the sig2noise for which the threshold is 1.5; [nb: this could change in the future]
-    div_tol : float
-        Threshold value for the maximum divergence at each point. Another validation check to make sure the velocity field is acceptable.
-    subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
-         'centroid' [replaces default if correlation map is negative],
-         'gaussian' [default if correlation map is positive],
-         'parabolic'.
-    sig2noise_method : string
-        defines the method of signal-to-noise-ratio measure,
-        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-    width : int
-        the half size of the region around the first
-        correlation peak to ignore for finding the second
-        peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
+    validation_method : tuple or str
+        method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
+    trust_1st_iter : bool
+        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
 
     Returns
     -------
@@ -1022,6 +999,23 @@ def widim(frame_a,
         2D, the v velocity component, in pixels/seconds.
     mask : array
         2D, a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
+
+    Other Parameters
+    ----------------
+    median_tol : int
+        Tolerance of the median validation.
+    subpixel_method : string
+         one of the following methods to estimate subpixel location of the peak:
+         'centroid' [replaces default if correlation map is negative],
+         'gaussian' [default if correlation map is positive],
+         'parabolic'.
+    sig2noise_method : string
+        defines the method of signal-to-noise-ratio measure,
+        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
+    width : int
+        the half size of the region around the first
+        correlation peak to ignore for finding the second
+        peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
 
     Example
     -------
@@ -1057,7 +1051,7 @@ def widim(frame_a,
     # input checks
     ht, wd = frame_a.shape
     dt = np.float32(dt)
-    ws_iters = window_size_iters if type(window_size_iters) == tuple else (window_size_iters,)
+    ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
     nb_iter_max = sum(ws_iters)
     num_ws = len(ws_iters)
 
@@ -1118,26 +1112,16 @@ def widim(frame_a,
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
     # validation method
-    if validation_method.find('sig2noise') == -1:
-        sig2n_tol = 0
-    if validation_method.find('median_velocity') == -1:
-        median_tol = 0
-    if validation_method.find('mean_velocity') == -1:
-        mean_tol = 0
-    if validation_method.find('divergence') == -1:
-        div_tol = 0
-    if nb_validation_iter > 0:
-        assert sig2n_tol + median_tol + mean_tol + div_tol > 0, "Unsupported validation method. Supported validation methods are 'sig2noise' (not validated),'median_velocity', (not yet implemented) , 'mean_velocity' and 'divergence' (not validated)."
-    else:
-        validation_method = 'None'
+    val_tols = [0, 0, 0, 0]
+    val_methods = validation_method if type(validation_method) == str else (validation_method,)
+    if 'median_velocity' in val_methods:
+        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
 
     #### GPU arrays ####
     # define the main array f that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 8], dtype=DTYPEf)
 
     # initialize x and y values
-    # x unit vector corresponds to rows
-    # y unit vector corresponds to columns
     cdef float diff
     for K in range(nb_iter_max):
         f[K, 0, :, 0] = w[K] / 2  # init x on first row
@@ -1243,7 +1227,7 @@ def widim(frame_a,
             validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
             # get list of places that need to be validated
-            validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], sig2n_tol, median_tol, mean_tol, div_tol)
+            validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
 
             # do the validation
             n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
@@ -1275,8 +1259,8 @@ def widim(frame_a,
                 # d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
                 # np.save('test_array_before{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy().get())
                 if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=0.5)  # check if .copy() is needed
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=0.5)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par)  # check if .copy() is needed
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par)
                 # np.save('test_array_after{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4].copy().get())
 
 
@@ -1286,8 +1270,8 @@ def widim(frame_a,
                 # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = d_f[K, :n_row[K], :n_col[K], 2].copy()
                 # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = d_f[K, :n_row[K], :n_col[K], 3].copy()
                 if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=0.5)
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=0.5)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=smoothing_par)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=smoothing_par)
                 else:
                     d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
                     d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
