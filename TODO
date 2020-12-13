@@ -2,24 +2,28 @@ finish the window deformation method
     try nearest neighbour - done
     try linear interpolation
         deformation - done
-        translation
+        translation - done
     try smoothing - done
         gradient - done
-        displacements
+        displacements - done
 retain s2n output option
     debug it to ensure it works
-make API consistent with CPU version
+make API consistent with CPU version - done
 replace slow functions with CUDA kernels or CuPy functions
     gradient
-    window slicing
+    peak location
 reactivate the extended search area
 implement choosing advanced algorithm features - done
 multiprocessing framework
     Need to have easy-to-use functions available for non-expert
     consult the mother repository for this
-memory optimizations - done
+memory optimizations
+    reuse same arrays as previous iterations
 object-oriented framework to reduce the array initializations
 make the coordinate systems consistent - done
 apply Gaussian filter to first iteration at each window size?
-try 3rd order interpolations
 complete the Jupyter notebook tutorial
+qc the frame deformation
+fix edge treatment
+other TODO items
+decomission to F-structure

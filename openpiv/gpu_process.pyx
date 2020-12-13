@@ -318,7 +318,7 @@ class CorrelationFunction:
             output[w_range] = input[f_range] * outside_range;
         }
         
-            __global__ void window_slice_deform(float *input, float *output, int *dx, int *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h, float *test_out)
+            __global__ void window_slice_deform(float *input, float *output, float *dx, float *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h, float *test_out)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
@@ -335,7 +335,6 @@ class CorrelationFunction:
             int ind_i = blockIdx.x;  // window index
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            // int diff = window_size - overlap;  // delete
             
             // Loop through each interrogation window and apply the shift and deformation.
             
@@ -356,8 +355,6 @@ class CorrelationFunction:
             test_out[ind_i] = u_y;
             
             // do the mapping
-            //int x = ind_i % n_col * spacing + x_shift;  // delete
-            //int y = ind_i / n_col * spacing + y_shift;
             float x = ind_i % n_col * spacing + x_shift;
             float y = ind_i / n_col * spacing + y_shift;
             
@@ -427,34 +424,41 @@ class CorrelationFunction:
         window_slice = mod_ws.get_function("window_slice")
 
         if d_strain is not None:
+            print('deform')
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
-
             d_strain_a = -d_strain.copy() / 2
             d_strain_b = d_strain.copy() / 2
-            strain = d_strain.get()
-            strain_a = d_strain_a.get()
-            strain_a = d_strain_b.get()
-            np.save('strain', strain)
-            np.save('strain_a', strain_a)
-            np.save('strain_b', strain_a)
+            # d_strain_a = gpuarray.zeros_like(d_strain)
+            # d_strain_b = gpuarray.zeros_like(d_strain)
+
+            # strain = d_strain.get()
+            # strain_a = d_strain_a.get()
+            # strain_a = d_strain_b.get()
+            # np.save('strain', strain)
+            # np.save('strain_a', strain_a)
+            # np.save('strain_b', strain_a)
 
             # test input
             test_in = np.zeros((self.n_rows, self.n_cols), dtype=np.float32)
             d_test_out = gpuarray.to_gpu(test_in)
 
             # shift frames and deform
-            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
-            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
-            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
-            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
+            # d_dy_a = cumath.ceil(-d_dy / 2)
+            # d_dx_a = cumath.ceil(-d_dx / 2)
+            # d_dy_b = cumath.ceil(d_dy / 2)
+            # d_dx_b = cumath.ceil(d_dx / 2)
+            d_dy_a = -d_dy / 2
+            d_dx_a = -d_dx / 2
+            d_dy_b = d_dy / 2
+            d_dx_b = d_dx / 2
             window_slice_deform = mod_ws.get_function("window_slice_deform")
             window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
-            # test output
-            test_out = d_test_out.get()
-            np.save('test_out', test_out)
+            # # test output
+            # test_out = d_test_out.get()
+            # np.save('test_out', test_out)
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -465,38 +469,43 @@ class CorrelationFunction:
             d_dy.gpudata.free()
             d_strain_a.gpudata.free()
             d_strain_b.gpudata.free()
-        # if d_shift is not None:
-        elif d_shift is not None:
-            # Define displacement array for second window
-            # GPU thread/block architecture uses column major order, so x is the column and y is the row
-            # This code is in row major order
-            d_dy = d_shift[1].copy()
-            d_dx = d_shift[0].copy()
-
-            # shift frames symmetrically
-            d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
-            d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
-            d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
-            d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
-            window_slice_shift = mod_ws.get_function("window_slice_shift")
-            window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            d_dy_a.gpudata.free()
-            d_dx_a.gpudata.free()
-
-            # # shift frame b
-            # d_dy_b = d_dy.astype(np.int32)
-            # d_dx_b = d_dx.astype(np.int32)
-            # window_slice_shift = mod_ws.get_function("window_slice_shift")
-            # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-
-            # free displacement GPU memory
-            d_dy_b.gpudata.free()
-            d_dx_b.gpudata.free()
-            d_dx.gpudata.free()
-            d_dy.gpudata.free()
+        # elif d_shift is not None:
+        #     print('shift')
+        #     # Define displacement array for second window
+        #     # GPU thread/block architecture uses column major order, so x is the column and y is the row
+        #     # This code is in row major order
+        #     d_dy = d_shift[1].copy()
+        #     d_dx = d_shift[0].copy()
+        #
+        #     # shift frames symmetrically
+        #     # d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
+        #     # d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
+        #     # d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
+        #     # d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
+        #     d_dy_a = -d_dy / 2
+        #     d_dx_a = -d_dx / 2
+        #     d_dy_b = d_dy / 2
+        #     d_dx_b = d_dx / 2
+        #     window_slice_shift = mod_ws.get_function("window_slice_shift")
+        #     window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+        #     window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+        #     d_dy_a.gpudata.free()
+        #     d_dx_a.gpudata.free()
+        #
+        #     # # shift frame b
+        #     # d_dy_b = d_dy.astype(np.int32)
+        #     # d_dx_b = d_dx.astype(np.int32)
+        #     # window_slice_shift = mod_ws.get_function("window_slice_shift")
+        #     # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+        #     # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+        #
+        #     # free displacement GPU memory
+        #     d_dy_b.gpudata.free()
+        #     d_dx_b.gpudata.free()
+        #     d_dx.gpudata.free()
+        #     d_dy.gpudata.free()
         else:
+            print('no shift or deform')
             # use non-translating windows
             window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
@@ -927,6 +936,7 @@ def widim(frame_a,
           dt=1,
           mask=None,
           deform=True,
+          smoothing=True,
           validation_method='median_velocity',
           trust_1st_iter=True,
           nb_validation_iter=1,
@@ -971,6 +981,8 @@ def widim(frame_a,
         Two-dimensional array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
+    smoothing : bool
+        Whether to smooth the intermediate fields.
     validation_method : string
         Method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now.
     trust_1st_iter : bool
@@ -1045,11 +1057,12 @@ def widim(frame_a,
     # input checks
     ht, wd = frame_a.shape
     dt = np.float32(dt)
-    ws_iters = window_size_iters if type(window_size_iters) == tuple else tuple([window_size_iters])
+    ws_iters = window_size_iters if type(window_size_iters) == tuple else (window_size_iters,)
     nb_iter_max = sum(ws_iters)
+    num_ws = len(ws_iters)
 
     # windows sizes
-    ws = [np.power(2, i) * min_window_size for i in range(len(ws_iters) - 1, -1, -1) for j in range(ws_iters[i])]
+    ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
 
     # Initialize skcuda miscellaneous library
     cu_misc.init()
@@ -1175,12 +1188,10 @@ def widim(frame_a,
         print("ITERATION {}".format(K))
 
         # changed this section Nov 1 2020 to not use copy()
-        # d_shift_arg = None
+        d_shift_arg = None
         d_strain_arg = None
         if K > 0:
             # Calculate second frame displacement (shift)
-            # d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4].copy()  # xb = xa + dpx  # delete
-            # d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5].copy()  # yb = ya + dpy
             d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
             d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
             d_shift_arg = d_shift[:, :n_row[K], :n_col[K]]
@@ -1192,10 +1203,6 @@ def widim(frame_a,
                     gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], w[K] - overlap[K])
                 else:
                     gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], w[K] - overlap[K])
-
-        else:
-            d_shift_arg = None
-            d_strain_arg = None
 
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
@@ -1261,11 +1268,30 @@ def widim(frame_a,
                 # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
-                d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy(), retain_input=False)
-                d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy(), retain_input=False)
+                # d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy(), retain_input=False)  # original
+                # d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy(), retain_input=False)
+                # TODO check if .copy() is needed
+                # d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
+                # d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
+                # np.save('test_array_before{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy().get())
+                if smoothing:
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=0.5)  # check if .copy() is needed
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=0.5)
+                # np.save('test_array_after{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4].copy().get())
+
+
             else:
-                d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy(), retain_input=False)  # dpx_k+1 = dx_k
-                d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy(), retain_input=False)  # dpy_k+1 = dy_k
+                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy(), retain_input=False)  # dpx_k+1 = dx_k
+                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy(), retain_input=False)  # dpy_k+1 = dy_k
+                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = d_f[K, :n_row[K], :n_col[K], 2].copy()
+                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = d_f[K, :n_row[K], :n_col[K], 3].copy()
+                if smoothing:
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=0.5)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=0.5)
+                else:
+                    d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
+                    d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
+
 
             print("[DONE] -----> going to iteration {}.\n".format(K + 1))
 
@@ -2073,17 +2099,17 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     v_x = np.gradient(v, axis=1)
     v_y = np.gradient(v, axis=0)
 
-    # see if smoothing does anything
-    strain[0, :, :] = smoothn(u_x, s=0.5)[0]
-    strain[1, :, :] = smoothn(u_y, s=0.5)[0]
-    strain[2, :, :] = smoothn(v_x, s=0.5)[0]
-    strain[3, :, :] = smoothn(v_y, s=0.5)[0]
-
     # # see if smoothing does anything
-    # strain[0, :, :] = u_x
-    # strain[1, :, :] = u_y
-    # strain[2, :, :] = v_x
-    # strain[3, :, :] = v_y
+    # strain[0, :, :] = smoothn(u_x, s=0.5)[0]
+    # strain[1, :, :] = smoothn(u_y, s=0.5)[0]
+    # strain[2, :, :] = smoothn(v_x, s=0.5)[0]
+    # strain[3, :, :] = smoothn(v_y, s=0.5)[0]
+
+    # see if smoothing does anything
+    strain[0, :, :] = u_x
+    strain[1, :, :] = u_y
+    strain[2, :, :] = v_x
+    strain[3, :, :] = v_y
 
     d_strain[:] = gpuarray.to_gpu(strain / spacing)
 
@@ -2188,6 +2214,68 @@ def gpu_round(d_src, retain_input=False):
     # get and execute kernel
     round_gpu = mod_round.get_function("round_gpu")
     round_gpu(d_dst, d_src, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    # free gpu memory
+    if not retain_input:
+        d_src.gpudata.free()
+
+    return d_dst
+
+
+def gpu_smooth(d_src, s=0.5, retain_input=False):
+    """Smoothes a scalar field stored as a GPUArray
+
+    Parameters
+    ----------
+    d_src : GPUArray
+        field to be smoothed
+    s : int
+        smoothing parameter
+    retain_input : bool
+        whether to keep th input in memory
+
+    Returns
+    -------
+    d_dst : GPUArray
+        smoothed field
+
+    """
+    # mod_round = SourceModule("""
+    # __global__ void copy_gpu(float *dest, float *src, int n)
+    # {
+    #     // dest : array to store values
+    #     // src : array of values to be floored
+    #
+    #     int t_id = blockIdx.x * blockDim.x + threadIdx.x;
+    #
+    #     // Avoid the boundary
+    #     if(t_id >= n){return;}
+    #
+    #     dest[t_id] = src[t_id];
+    # }
+    # """)
+    array = d_src.get()
+
+    # np.save(debug + '_before', array)  # delete this
+
+    # # create array to store data
+    # d_dst = gpuarray.empty_like(d_src)
+
+    # smoothed = smoothn(array, s=s)[0].astype(np.float32, order='C')  # delete this
+    d_dst = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(np.float32, order='C'))  # change the order here
+
+    # np.save(debug + '_after', smoothed)
+
+    # # get array size for gpu
+    # n = np.int32(d_src.size)
+    #
+    # # define gpu parameters
+    # block_size = 32
+    # x_blocks = int(n // block_size + 1)
+    #
+    # # get and execute kernel
+    # round_gpu = mod_round.get_function("round_gpu")
+    # round_gpu(d_dst, d_src, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # free gpu memory
     if not retain_input:
