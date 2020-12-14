@@ -311,10 +311,8 @@ class CorrelationFunction:
             y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
             
             // do the mapping
-            float x = ind_i % n_col * spacing + x_shift + 1;
-            float y = ind_i / n_col * spacing + y_shift + 1;
-            
-            test_out[ind_i * window_size * window_size + ind_y * window_size + ind_x] = r_y * u_y;
+            float x = ind_i % n_col * spacing + x_shift;
+            float y = ind_i / n_col * spacing + y_shift;
             
             // do bilinear interpolation
             int x2 = ceilf(x);
