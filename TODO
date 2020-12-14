@@ -15,8 +15,7 @@ replace slow functions with CUDA kernels or CuPy functions
 reactivate the extended search area
 implement choosing advanced algorithm features - done
 multiprocessing framework
-    Need to have easy-to-use functions available for non-expert
-    consult the mother repository for this
+    Need to have easy-to-use functions available for non-expert - done
 memory optimizations
     reuse same arrays as previous iterations
 object-oriented framework to reduce the array initializations

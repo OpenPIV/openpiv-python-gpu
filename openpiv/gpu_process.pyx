@@ -276,7 +276,7 @@ class CorrelationFunction:
             output[w_range] = input[f_range];
         }
         
-            __global__ void window_slice_deform(float *input, float *output, float *dx, float *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h, float *test_out)
+            __global__ void window_slice_deform(float *input, float *output, float *dx, float *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h)
         {
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
@@ -311,8 +311,8 @@ class CorrelationFunction:
             y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
             
             // do the mapping
-            float x = ind_i % n_col * spacing + x_shift;
-            float y = ind_i / n_col * spacing + y_shift;
+            float x = ind_i % n_col * spacing + x_shift + 1;
+            float y = ind_i / n_col * spacing + y_shift + 1;
             
             test_out[ind_i * window_size * window_size + ind_y * window_size + ind_x] = r_y * u_y;
             
@@ -363,43 +363,20 @@ class CorrelationFunction:
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
             if d_strain is not None:
-                # d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
-                # d_strain_b = d_strain.copy()
                 d_strain_a = -d_strain.copy() / 2
                 d_strain_b = d_strain.copy() / 2
-
-                strain = d_strain.get()
-                np.save('gpu_gradient', strain[1, :, :])
             else:
                 d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
                 d_strain_b = gpuarray.zeros((4, h, w), dtype=np.float32)
 
-            # strain_a = d_strain_a.get()
-            # strain_a = d_strain_b.get()
-            # np.save('strain_a', strain_a)
-            # np.save('strain_b', strain_a)
-
-            # test input
-            test_out = np.zeros((self.n_rows * self.n_cols, self.window_size, self.window_size), dtype=np.float32)
-            # test_out = np.zeros((self.n_rows, self.n_cols), dtype=np.float32)
-            d_test_out = gpuarray.to_gpu(test_out)
-
             # shift frames and deform
-            # d_dy_a = cumath.ceil(-d_dy / 2)
-            # d_dx_a = cumath.ceil(-d_dx / 2)
-            # d_dy_b = cumath.ceil(d_dy / 2)
-            # d_dx_b = cumath.ceil(d_dx / 2)
             d_dy_a = -d_dy / 2
             d_dx_a = -d_dx / 2
             d_dy_b = d_dy / 2
             d_dx_b = d_dx / 2
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-
-            # test output
-            test_out = d_test_out.get()
-            np.save('test_out', test_out)
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -835,20 +812,20 @@ def get_field_shape(image_size, window_size, overlap):
 
 
 # TODO rename this function to reflect new functionality
-def widim(frame_a,
-          frame_b,
-          window_size_iters=(1, 2),
-          min_window_size=16,
-          overlap_ratio=0.5,
-          dt=1,
-          mask=None,
-          deform=True,
-          smoothing=True,
-          smoothing_par=0.5,
-          nb_validation_iter=1,
-          validation_method='median_velocity',
-          trust_1st_iter=True,
-          **kwargs):
+def gpu_piv_def(frame_a,
+                frame_b,
+                window_size_iters=(1, 2),
+                min_window_size=16,
+                overlap_ratio=0.5,
+                dt=1,
+                mask=None,
+                deform=True,
+                smoothing=True,
+                smoothing_par=0.5,
+                nb_validation_iter=1,
+                validation_method='median_velocity',
+                trust_1st_iter=True,
+                **kwargs):
     """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
 
     This is an iterative  method to cope with  the lost of pairs due to particles
@@ -927,7 +904,7 @@ def widim(frame_a,
     Example
     -------
     # TODO change this example
-    >>> x, y, u, v, mask = widim(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
+    >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
 
     --------------------------------------
     Method of implementation : to improve the speed of the program, all data have been placed in the same huge
@@ -1156,26 +1133,16 @@ def widim(frame_a,
             if w[K + 1] != w[K]:
                 print("Performing interpolation of the displacement field for next iteration predictors.")
                 v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
-                # interpolate velocity onto next iterations grid. Then take it as the predictor for the next step
+
+                # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
-                # d_f[K + 1, :, :, 4] = gpu_round(d_f[K + 1, :, :, 2].copy(), retain_input=False)  # original
-                # d_f[K + 1, :, :, 5] = gpu_round(d_f[K + 1, :, :, 3].copy(), retain_input=False)
                 # TODO check if .copy() is needed
-                # d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
-                # d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
-                # np.save('test_array_before{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy().get())
                 if smoothing:
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par)  # check if .copy() is needed
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par)
-                # np.save('test_array_after{}'.format(K), d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4].copy().get())
-
 
             else:
-                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_round(d_f[K, :n_row[K], :n_col[K], 2].copy(), retain_input=False)  # dpx_k+1 = dx_k
-                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_round(d_f[K, :n_row[K], :n_col[K], 3].copy(), retain_input=False)  # dpy_k+1 = dy_k
-                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = d_f[K, :n_row[K], :n_col[K], 2].copy()
-                # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = d_f[K, :n_row[K], :n_col[K], 3].copy()
                 if smoothing:
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=smoothing_par)
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=smoothing_par)
@@ -2131,100 +2098,12 @@ def gpu_smooth(d_src, s=0.5, retain_input=False):
         smoothed field
 
     """
-    # mod_round = SourceModule("""
-    # __global__ void copy_gpu(float *dest, float *src, int n)
-    # {
-    #     // dest : array to store values
-    #     // src : array of values to be floored
-    #
-    #     int t_id = blockIdx.x * blockDim.x + threadIdx.x;
-    #
-    #     // Avoid the boundary
-    #     if(t_id >= n){return;}
-    #
-    #     dest[t_id] = src[t_id];
-    # }
-    # """)
     array = d_src.get()
-
-    # np.save(debug + '_before', array)  # delete this
-
-    # # create array to store data
-    # d_dst = gpuarray.empty_like(d_src)
-
-    # smoothed = smoothn(array, s=s)[0].astype(np.float32, order='C')  # delete this
-    d_dst = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(np.float32, order='C'))  # change the order here
-
-    # np.save(debug + '_after', smoothed)
-
-    # # get array size for gpu
-    # n = np.int32(d_src.size)
-    #
-    # # define gpu parameters
-    # block_size = 32
-    # x_blocks = int(n // block_size + 1)
-    #
-    # # get and execute kernel
-    # round_gpu = mod_round.get_function("round_gpu")
-    # round_gpu(d_dst, d_src, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    # TODO change the order here
+    d_dst = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(np.float32, order='C'))
 
     # free gpu memory
     if not retain_input:
         d_src.gpudata.free()
 
     return d_dst
-
-# def launch(str method, names, arg):
-#     """A nice launcher for any OpenPIV function, printing a header in terminal with a list of the parameters used.
-#
-#     Parameters
-#     ----------
-#     method : string
-#         the name of the algorithm used
-#     names : list of string
-#         names of the parameters to print
-#     arg : list
-#         parameters of different types
-#
-#     Returns
-#     -------
-#     start_time : float
-#         the current time --> can be used to print the execution time of the programm at the end.
-#
-#     """
-#     cdef int i
-#     print(" ")
-#     print('----------------------------------------------------------')
-#     print('|----->     ||   The Open Source  P article              |')
-#     print('| Open      ||                    I mage                 |')
-#     print('|     PIV   ||                    V elocimetry  Toolbox  |')
-#     print('|     <-----||   www.openpiv.net          version 1.0    |')
-#     print('----------------------------------------------------------')
-#     print(" ")
-#     print("Algorithm : ", method)
-#     print(" ")
-#     print("Parameters   ")
-#     print("-----------------------------------")
-#     for i in range(len(arg)-1):
-#         print("     ", names[i], " | ", arg[i])
-#     print(" ")
-#     print("-----------------------------------")
-#     print("|           STARTING              |")
-#     print("-----------------------------------")
-#     print(" ")
-#     cdef float start_time = time.time()
-#     return start_time
-#
-#
-# def end(float start_time):
-#     """A function that prints the time since startTime. Used to nicely end the program
-#
-#     Parameters
-#     ----------
-#     start_time : float
-#         a time
-#
-#     """
-#     print("-------------------------------------------------------------")
-#     print("[DONE] ..after ", (time.time() - start_time), "seconds ")
-#     print("-------------------------------------------------------------")
