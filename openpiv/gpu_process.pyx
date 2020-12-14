@@ -276,48 +276,6 @@ class CorrelationFunction:
             output[w_range] = input[f_range];
         }
         
-            __global__ void window_slice_shift(float *input, float *output, int *dx, int *dy, int window_size, int spacing, int n_col, int num_window, int w, int h)
-        {
-            // w = width (number of columns in the full image)
-            // h = height (number of rows in the full image)
-
-            int f_range;
-            int w_range;
-            int x_shift;
-            int y_shift;
-
-            // int IW_size = window_size * window_size;
-            
-            // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int ind_i = blockIdx.x;
-            int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            // int diff = window_size - overlap;  // delete
-            
-            // loop through each interrogation window
-            x_shift = ind_x + dx[ind_i];  
-            y_shift = ind_y + dy[ind_i];
-
-            // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
-            // window. Multiply This with the shifted value at end.
-            int x = ind_i % n_col * spacing + x_shift;  // x index for shifted pixel
-            int y = ind_i / n_col * spacing + y_shift;  // y index for shifted pixel
-            int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
-
-            // Get rid of values outside the range
-            x = x * outside_range;
-            y = y * outside_range;
-
-            // indices of image to map from. Apply shift to pixels
-            f_range = y * w + x;
-
-            // indices of image to map to
-            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
-
-            // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-            output[w_range] = input[f_range] * outside_range;
-        }
-        
             __global__ void window_slice_deform(float *input, float *output, float *dx, float *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h, float *test_out)
         {
             // w = width (number of columns in the full image)
@@ -345,41 +303,18 @@ class CorrelationFunction:
             float v_y = strain[3 * num_window + ind_i];
             
             // compute the window vector
-            float r_x = ind_x - window_size / 2;  // r_x = x - x_c
-            float r_y = ind_y - window_size / 2;  // r_y = y - y_c
+            float r_x = ind_x - window_size / 2 + 1;  // r_x = x - x_c
+            float r_y = ind_y - window_size / 2 + 1;  // r_y = y - y_c
             
             // apply deformation operation
             x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r + u + dx
             y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
             
-            test_out[ind_i] = u_y;
-            
             // do the mapping
             float x = ind_i % n_col * spacing + x_shift;
             float y = ind_i / n_col * spacing + y_shift;
             
-            ////
-            // round to nearest integer
-            // x = __float2int_rn(x);
-            // y = __float2int_rn(y);
-            
-            // Get values outside window. This array is 1 if the value is inside the window, and 0 if it is outside the 
-            // window. Multiply This with the shifted value at end.
-            // int outside_range = (x >= 0 && x < w && y >= 0 && y < h);
-
-            // Get rid of values outside the range
-            // x = x * outside_range;
-            // y = y * outside_range;
-
-            // indices of image to map from. Apply shift to pixels
-            // f_range = y * w + x;
-
-            // indices of image to map to
-            // w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
-
-            // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-            // output[w_range] = input[f_range] * outside_range;
-            ////
+            test_out[ind_i * window_size * window_size + ind_y * window_size + ind_x] = r_y * u_y;
             
             // do bilinear interpolation
             int x2 = ceilf(x);
@@ -423,25 +358,31 @@ class CorrelationFunction:
         # slice up windows
         window_slice = mod_ws.get_function("window_slice")
 
-        if d_strain is not None:
+        if d_shift is not None:
             print('deform')
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
-            d_strain_a = -d_strain.copy() / 2
-            d_strain_b = d_strain.copy() / 2
-            # d_strain_a = gpuarray.zeros_like(d_strain)
-            # d_strain_b = gpuarray.zeros_like(d_strain)
+            if d_strain is not None:
+                # d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
+                # d_strain_b = d_strain.copy()
+                d_strain_a = -d_strain.copy() / 2
+                d_strain_b = d_strain.copy() / 2
 
-            # strain = d_strain.get()
+                strain = d_strain.get()
+                np.save('gpu_gradient', strain[1, :, :])
+            else:
+                d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
+                d_strain_b = gpuarray.zeros((4, h, w), dtype=np.float32)
+
             # strain_a = d_strain_a.get()
             # strain_a = d_strain_b.get()
-            # np.save('strain', strain)
             # np.save('strain_a', strain_a)
             # np.save('strain_b', strain_a)
 
             # test input
-            test_in = np.zeros((self.n_rows, self.n_cols), dtype=np.float32)
-            d_test_out = gpuarray.to_gpu(test_in)
+            test_out = np.zeros((self.n_rows * self.n_cols, self.window_size, self.window_size), dtype=np.float32)
+            # test_out = np.zeros((self.n_rows, self.n_cols), dtype=np.float32)
+            d_test_out = gpuarray.to_gpu(test_out)
 
             # shift frames and deform
             # d_dy_a = cumath.ceil(-d_dy / 2)
@@ -456,9 +397,9 @@ class CorrelationFunction:
             window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, d_test_out, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
-            # # test output
-            # test_out = d_test_out.get()
-            # np.save('test_out', test_out)
+            # test output
+            test_out = d_test_out.get()
+            np.save('test_out', test_out)
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -469,41 +410,7 @@ class CorrelationFunction:
             d_dy.gpudata.free()
             d_strain_a.gpudata.free()
             d_strain_b.gpudata.free()
-        # elif d_shift is not None:
-        #     print('shift')
-        #     # Define displacement array for second window
-        #     # GPU thread/block architecture uses column major order, so x is the column and y is the row
-        #     # This code is in row major order
-        #     d_dy = d_shift[1].copy()
-        #     d_dx = d_shift[0].copy()
-        #
-        #     # shift frames symmetrically
-        #     # d_dy_a = cumath.ceil(-d_dy / 2).astype(np.int32)
-        #     # d_dx_a = cumath.ceil(-d_dx / 2).astype(np.int32)
-        #     # d_dy_b = cumath.ceil(d_dy / 2).astype(np.int32)
-        #     # d_dx_b = cumath.ceil(d_dx / 2).astype(np.int32)
-        #     d_dy_a = -d_dy / 2
-        #     d_dx_a = -d_dx / 2
-        #     d_dy_b = d_dy / 2
-        #     d_dx_b = d_dx / 2
-        #     window_slice_shift = mod_ws.get_function("window_slice_shift")
-        #     window_slice_shift(d_frame_a, d_win_a, d_dx_a, d_dy_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-        #     window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-        #     d_dy_a.gpudata.free()
-        #     d_dx_a.gpudata.free()
-        #
-        #     # # shift frame b
-        #     # d_dy_b = d_dy.astype(np.int32)
-        #     # d_dx_b = d_dx.astype(np.int32)
-        #     # window_slice_shift = mod_ws.get_function("window_slice_shift")
-        #     # window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-        #     # window_slice_shift(d_frame_b, d_win_b, d_dx_b, d_dy_b, self.window_size, self.overlap, self.n_cols, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-        #
-        #     # free displacement GPU memory
-        #     d_dy_b.gpudata.free()
-        #     d_dx_b.gpudata.free()
-        #     d_dx.gpudata.free()
-        #     d_dy.gpudata.free()
+
         else:
             print('no shift or deform')
             # use non-translating windows
