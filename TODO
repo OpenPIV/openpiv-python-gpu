@@ -1,19 +1,4 @@
-finish the window deformation method - done
-    try nearest neighbour - done
-    try linear interpolation
-        deformation - done
-        translation - done
-    try smoothing - done
-        gradient - done
-        displacements - done
-make API consistent with CPU version - done
-implement choosing advanced algorithm features - done
-multiprocessing framework - done
-    Need to have easy-to-use functions available for non-expert - done
-object-oriented framework to reduce the array initializations - no
-make the coordinate systems consistent - done
-apply Gaussian filter to first iteration at each window size? - no
-qc the frame deformation - done
+object-oriented framework to reduce the array initializations
 memory optimizations
     reuse same arrays as previous iterations
     decommission the F-structure
