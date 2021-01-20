@@ -5,14 +5,12 @@ writing to the same file. Please remember to use a queue if doing file I/O concu
 
 """
 from multiprocessing import Process, Manager, Pool, cpu_count, set_start_method, current_process
-import numpy as np
 from math import ceil
 from time import time
-from functools import partial
 import os
 from contextlib import redirect_stdout as redirect_stdout
 import time
-import glob
+import warnings
 
 
 # MULTIPROCESSING UTILITY CLASSES & FUNCTIONS
@@ -163,169 +161,7 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
         process.join()
 
 
-"""This module handles the front-end of PIV processing. For convenience, this standardizes the file formats and
-reduces scripting."""
-
-class PIV:
-    """Handles the front-end file management for PIV processing.
-
-    The images names must be of format im_name + #### + suffix + .extension_name . The image set can be subdivided
-    and each subset can be run on its own GPU. The output is saved as a npz file with x, y coordinates and the u, v fields.
-
-    Parameters
-    ----------
-    im_dir : str
-        directory where images are stored
-    save_name : str
-        name of the file to save, none for no save
-    save_dir : str
-        name of the directory to save to
-    im_ext : str
-        extension of the image
-    suf_a, suf_b : str
-        letter suffix of the first/second image
-    im_range : tuple
-        numeric range indicating how what portion of the images to process
-    processes :
-        number of parallel processes to run, should be 1 per GPU
-
-    """
-
-    def __init__(self, im_dir, save_name=None, save_dir=None, im_ext='.tiff', suf_a='a', suf_b='b', im_range=None,
-                 processes=1):
-        self.im_dir = im_dir
-        self.save_name = save_name
-        self.save_dir = save_dir
-        self.im_ext = im_ext
-        self.suf_a, self.suf_b = suf_a, suf_b
-        self.im_range = im_range
-        self.processes = processes
-        self.x = None
-        self.y = None
-        self.u = None
-        self.v = None
-        self.exists = False
-
-    def begin(self):
-        # check if output exists
-        self.exists = os.path.exists(self.save_dir + self.save_name + '.npz') if self.save_name is not None else False
-
-        # set the image range
-        if self.im_range is not None:
-            im_range = self.im_range
-        else:
-            im_range = (0, 10000)
-
-        # find the images to process
-        str_a = self.im_dir + '*' + '[0-9]' * 4 + self.suf_a + self.im_ext
-        str_b = self.im_dir + '*' + '[0-9]' * 4 + self.suf_b + self.im_ext
-        list_a = sorted(glob.glob(str_a))[im_range[0]:im_range[1]]
-        list_b = sorted(glob.glob(str_b))[im_range[0]:im_range[1]]
-        assert len(list_a) == len(list_b), 'Image lists are not same size.'
-        assert len(list_a) > 0, 'No images found in {} within the range {}.'.format(self.im_dir, im_range)
-
-        # print status
-        print('Beginning to process {} fields...'.format(len(list_a)))
-        start_time = time.time()
-
-        return list_a, list_b, start_time
-
-    def end(self, x, y, u, v, start_time):
-        print("...Finished in {:.3f} seconds.".format(time.time() - start_time))
-
-        # decide whether the file is to be saved
-        if self.save_name is None:
-            self.x, self.y = x, y
-            self.u, self.v = u, v
-        else:
-            if self.save_dir is not None:
-                # create the save directory if it doesn't exist already
-                save_dir = self.save_dir
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
-                    print('Creating directory {} .'.format(save_dir))
-            else:
-                save_dir = self.im_dir
-
-            # save the data as a structured frame
-            print('Saving into file {}.npz in directory {} ...'.format(self.save_name, save_dir))
-            np.savez(save_dir + self.save_name, x=x, y=y, u=u, v=v)
-            print('...Done.')
-
-    def run_widim_gpu(self, kwargs=None, cuda_device=None, overwrite=False):
-        """Uses the widim algorithm of OpenPIV to process images.
-
-        Parameters
-        ----------
-        kwargs : dict
-            arguments to the widim algorithm
-        cuda_device : int
-            which CUDA device to use
-        overwrite : bool
-            controls whether old data is overwritten
-
-        """
-        list_a, list_b, start_time = self.begin()
-
-        # check if overwrite condition is met
-        if overwrite is False:
-            if self.exists:
-                print("Output file {} already exists--skipping.".format(self.save_dir + self.save_name))
-                return
-
-        if cuda_device is not None:
-            # set the CUDA device
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_device)
-
-        # do the OpenPIV imports
-        import openpiv.gpu_process as gpu_process
-        import openpiv.tools as tools
-
-        def gpu_func(a, b, num):
-            print('Processing pair {}: {} and {}.'.format(num, a.replace(self.im_dir, ''), b.replace(self.im_dir, '')))
-
-            # load the images
-            frame_a, frame_b = tools.imread(a), tools.imread(b)
-
-            # GPU process
-            x1, y1, u1, v1, _, _ = gpu_process.widim(frame_a, frame_b, **kwargs)
-
-            return x1, y1, u1, v1
-
-        # process one image pair
-        x, y, u0, v0 = gpu_func(list_a[0], list_b[0], 0)
-
-        # initiate arrays
-        num_files = len(list_a)
-        m, n = x.shape
-        u, v = np.empty((num_files, m, n)), np.empty((num_files, m, n))
-        u[0, :, :], v[0, :, :] = u0, v0
-
-        for i in range(1, num_files):
-            _, _, u[i, :, :], v[i, :, :] = gpu_func(list_a[i], list_b[i], i)
-
-        self.end(x, y, u, v, start_time)
-
-
-def mp_gpu_func(frames, kwargs, gpus):
-    # set the CUDA device
-    # k = int(current_process().name[-1]) - 1
-    cpu_name = current_process().name
-    k = (int(cpu_name[cpu_name.find('-') + 1:]) - 1) % gpus
-    # k = os.getpid() % processes
-    os.environ['CUDA_DEVICE'] = str(k)
-    # os.environ['CUDA_VISIBLE_DEVICES'] = str(k)
-    time1 = time.time()
-
-    # GPU process
-    x, y, u, v, = gpu_func(frames[0, :, :], frames[1, :, :], kwargs)
-
-    print('processed image pair. GPU = {}. dt = {:.3f}.'.format(k, time.time() - time1))
-
-    return u, v
-
-
-def gpu_func(frame_a, frame_b, kwargs):
+def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
     """This function processes a pair of images using the GPU-PIV algorithm.
 
     Parameters
@@ -334,11 +170,32 @@ def gpu_func(frame_a, frame_b, kwargs):
         PIV images
     kwargs : dict
         Keyword arguments for the PIV-GPU algorithm.
+    num_gpus : int
+        number of gpus
     """
+    # set the CUDA device
+    cpu_name = current_process().name
+    k = (int(cpu_name[cpu_name.find('-') + 1:]) - 1) % num_gpus
+    os.environ['CUDA_DEVICE'] = str(k)
+    time1 = time.time()
+
+    # GPU process
+    with redirect_stdout(None):
+        x, y, u, v, = gpu_func(frame_a, frame_b, kwargs)
+
+    print('processed image pair. GPU = {}. dt = {:.3f}.'.format(k, time.time() - time1))
+
+    return u, v
+
+
+def gpu_func(frame_a, frame_b, kwargs):
+    # start a PyCUDA context
+    # import pycuda.autoinit
     import openpiv.gpu_process as gpu_process
 
-    # suppress stout to prevent cluttering the console
-    with redirect_stdout(None):
+    # GPU process
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
         x, y, u, v, _, _ = gpu_process.gpu_piv_def(frame_a, frame_b, **kwargs)
 
     return x, y, u, v

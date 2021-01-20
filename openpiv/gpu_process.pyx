@@ -354,10 +354,8 @@ class CorrelationFunction:
         grid_size = int(self.window_size / block_size)
 
         # slice up windows
-        window_slice = mod_ws.get_function("window_slice")
 
         if d_shift is not None:
-            print('deform')
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
             if d_strain is not None:
@@ -387,8 +385,8 @@ class CorrelationFunction:
             d_strain_b.gpudata.free()
 
         else:
-            print('no shift or deform')
             # use non-translating windows
+            window_slice = mod_ws.get_function("window_slice")
             window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
             window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
@@ -819,7 +817,6 @@ def gpu_piv_def(frame_a,
                 mask=None,
                 deform=True,
                 smoothing=True,
-                smoothing_par=0.5,
                 nb_validation_iter=1,
                 validation_method='median_velocity',
                 trust_1st_iter=True,
@@ -860,8 +857,6 @@ def gpu_piv_def(frame_a,
         Whether to deform the windows by the velocity gradient at each iteration.
     smoothing : bool
         Whether to smooth the intermediate fields.
-    smoothing_par : float
-        The value of the smoothing function argument.
     nb_validation_iter : int
         Number of iterations per validation cycle.
     validation_method : tuple or str
@@ -940,6 +935,14 @@ def gpu_piv_def(frame_a,
     # windows sizes
     ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
 
+    # validation method
+    val_tols = [0, 0, 0, 0]
+    val_methods = validation_method if type(validation_method) == str else (validation_method,)
+    if 'median_velocity' in val_methods:
+        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
+
+    smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
+
     # Initialize skcuda miscellaneous library
     cu_misc.init()
 
@@ -992,12 +995,6 @@ def gpu_piv_def(frame_a,
     # cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
-
-    # validation method
-    val_tols = [0, 0, 0, 0]
-    val_methods = validation_method if type(validation_method) == str else (validation_method,)
-    if 'median_velocity' in val_methods:
-        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
 
     #### GPU arrays ####
     # define the main array f that contains all the data
@@ -1124,12 +1121,10 @@ def gpu_piv_def(frame_a,
         ##############################################################################
         # next iteration
         ##############################################################################
+        # go to next iteration: compute the predictors dpx and dpy from the current displacements
         if K < nb_iter_max - 1:
-            # go to next iteration: compute the predictors dpx and dpy from the current displacements
-            print('Going to next iteration.')
             # interpolate if dimensions do not agree
             if w[K + 1] != w[K]:
-                print("Performing interpolation of the displacement field for next iteration predictors.")
                 v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
 
                 # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
@@ -1945,8 +1940,6 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     # NumPy implementation
     u = d_u.get()
     v = d_v.get()
-    # u = smoothn(d_u.get(), s=0.5)[0]
-    # v = smoothn(d_v.get(), s=0.5)[0]
     strain = np.zeros((4, n_row, n_col), dtype=np.float32)
 
     # u_x
@@ -1954,12 +1947,6 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     u_y = np.gradient(u, axis=0)
     v_x = np.gradient(v, axis=1)
     v_y = np.gradient(v, axis=0)
-
-    # # see if smoothing does anything
-    # strain[0, :, :] = smoothn(u_x, s=0.5)[0]
-    # strain[1, :, :] = smoothn(u_y, s=0.5)[0]
-    # strain[2, :, :] = smoothn(v_x, s=0.5)[0]
-    # strain[3, :, :] = smoothn(v_y, s=0.5)[0]
 
     # see if smoothing does anything
     strain[0, :, :] = u_x
