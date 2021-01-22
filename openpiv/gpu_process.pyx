@@ -253,9 +253,8 @@ class CorrelationFunction:
 
         """
         # define window slice algorithm
-        # TODO pass in window_size - overlap instead of overlap so it isn't computed inside the kernel
         mod_ws = SourceModule("""
-            __global__ void window_slice(float *input, float *output, int window_size, int overlap, int n_col, int w, int batch_size)
+            __global__ void window_slice(float *input, float *output, int window_size, int spacing, int n_col, int w, int batch_size)
         {
             int f_range;
             int w_range;
@@ -265,7 +264,6 @@ class CorrelationFunction:
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            int diff = window_size - overlap;
 
             // loop through each interrogation window
             f_range = (ind_i / n_col * diff + ind_y) * w + (ind_i % n_col) * diff + ind_x;
@@ -343,7 +341,7 @@ class CorrelationFunction:
         # get field shapes
         h = np.int32(self.shape[0])
         w = np.int32(self.shape[1])
-        spacing = self.window_size - self.overlap
+        grid_spacing = self.window_size - self.overlap
 
         # for debugging
         assert self.window_size >= 8, "Window size is too small."
@@ -371,8 +369,8 @@ class CorrelationFunction:
             d_dy_b = d_dy / 2
             d_dx_b = d_dx / 2
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, grid_spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, grid_spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -387,8 +385,8 @@ class CorrelationFunction:
         else:
             # use non-translating windows
             window_slice = mod_ws.get_function("window_slice")
-            window_slice(d_frame_a, d_win_a, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice(d_frame_b, d_win_b, self.window_size, self.overlap, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice(d_frame_a, d_win_a, self.window_size, grid_spacing, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice(d_frame_b, d_win_b, self.window_size, grid_spacing, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
 
     def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
@@ -918,8 +916,6 @@ def gpu_piv_def(frame_a,
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
-
-    Note: Because the GPU arrays are accessed in parallel, the above technique probably doesn't add anything to performance anymore. It just makes things difficult to develop.
 
     """
     ####################################################

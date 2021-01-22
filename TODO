@@ -1,7 +1,7 @@
-object-oriented framework to reduce the array initializations
+build-test
+
 memory optimizations
     reuse same arrays as previous iterations
-    decommission the F-structure
 reactivate the extended search area
 retain s2n output option
     debug it to ensure it works
@@ -14,3 +14,7 @@ replace slow functions with CUDA kernels or CuPy functions
     gradient
     peak location
 fix edge treatment in validation
+
+#Future
+object-oriented framework to reduce the array initializations
+Use CuPy or scikit-cuda to implement the cosine transform used in smoothn

@@ -51,5 +51,9 @@ or cloned for local development by:
     git clone https://github.com/ericyang125/PIV-GPU.git
     pip install -e /path/to/package
     
-## Gettign started.
+## Getting started.
 To get started, see the tutorial Jupyter notebook.
+
+##Copyright statement
+`smoothn.py` is a Python version of `smoothn.m` originally created by D. Garcia [https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn], written by Prof. Lewis and available on Github [https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py]. We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license.
+

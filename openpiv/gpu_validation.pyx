@@ -1,7 +1,4 @@
-"""This module is for GPU-accelerated validation algoritms.
-
-Code sections that are commented-out have not been tested and likely do not work as intended.
-"""
+"""This module is for GPU-accelerated validation algoritms."""
 
 import numpy as np
 import pycuda.gpuarray as gpuarray
