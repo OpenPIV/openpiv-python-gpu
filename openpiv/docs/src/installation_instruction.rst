@@ -39,17 +39,6 @@ Or use `pip` ::
     pip install numpy cython
     pip install openpiv --pre
     
-
-In Python 3 the project changed name to `progressbar2` package. Install it separately using `pip`
-
-    pip install progressbar2
-    
-Or using Conda:   
-
-    conda install progressbar2
-    
-We will remove this requirement in the future, so don't be surprised it if just works without progressbar. 
-
 Get OpenPIV source code!
 ========================
 
@@ -78,10 +67,10 @@ with ::
     python setup.py build_ext --inplace 
     
 
-Having problems?
-================
+Experience problems?
+====================
 If you encountered some issues, found difficult to install OpenPIV following these instructions
-please register and write to openpiv-users@googlegroups.com , so that we can help you and 
+please register and write on our Google groups forum https://groups.google.com/g/openpiv-users , so that we can help you and 
 improve this page!
 
 

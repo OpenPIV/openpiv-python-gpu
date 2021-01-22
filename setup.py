@@ -19,7 +19,8 @@ except ImportError:
     pass
 
 extensions = [
-    Extension("openpiv.process", ["./openpiv/process.pyx"], include_dirs=[numpy.get_include()])]
+    Extension("openpiv.widim", ["./openpiv/widim.pyx"],
+              include_dirs=[numpy.get_include()])]
 
 if GPU_SUPPORT:
     gpu_module = Extension(name="openpiv.gpu_process",
@@ -43,7 +44,7 @@ with open(path.join(this_directory, 'README.md')) as f:
 
 setup(
     name="OpenPIV",
-    version='0.22.3',
+    version='0.23.4',
     cmdclass={'build_ext': build_ext},
     ext_modules=extensions,
     packages=find_packages(),
@@ -59,7 +60,6 @@ setup(
         'imageio',
         'matplotlib>=3',
         'scikit-image',
-        'progressbar2',
         'scipy',
         'natsort',
         'GitPython',
@@ -67,8 +67,10 @@ setup(
         'tqdm'
     ],
     classifiers=[
-        # PyPI-specific version type. The number specified here is a magic constant
-        # with no relation to this application's version numbering scheme. *sigh*
+        # PyPI-specific version type. The number specified here is a magic
+        # constant
+        # with no relation to this application's version numbering scheme.
+        # *sigh*
         'Development Status :: 4 - Beta',
 
         # Sublist of all supported Python versions.
@@ -76,10 +78,9 @@ setup(
         'Programming Language :: Python :: 3.8',
 
         # Sublist of all supported platforms and environments.
-        'Environment :: Console',
-        'Environment :: MacOS X',
-        'Environment :: Win32 (MS Windows)',
-        'Environment :: X11 Applications',
+          'Operating System :: MacOS :: MacOS X',
+          'Operating System :: Microsoft :: Windows',
+          'Operating System :: POSIX',
 
         # Miscellaneous metadata.
         'Intended Audience :: Science/Research',
@@ -88,6 +89,6 @@ setup(
         'Operating System :: OS Independent',
         'Topic :: Scientific/Engineering',
     ],
-    long_description=long_description,
-    long_description_content_type='text/markdown'
+    # long_description=long_description,
+    # long_description_content_type='text/markdown'
 )

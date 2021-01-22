@@ -1,21 +1,36 @@
-try:
-    from openpiv.process import extended_search_area_piv as piv
-except ImportError:
-    from openpiv.pyprocess import extended_search_area_piv as piv
+from openpiv.pyprocess import extended_search_area_piv as piv
+from openpiv.pyprocess import fft_correlate_images, \
+                              correlation_to_displacement
+import matplotlib.pyplot as plt
+
 import numpy as np
 
 
 from skimage.util import random_noise
 from skimage import img_as_ubyte
+from scipy.ndimage import shift
 
-threshold = 0.1
+threshold = 0.23
+
+# define "PIV" shift, i.e. creating u,v values that we want to get
+# -5.5 pixels to the left and 3.2 pixels upwards
+# if we translate it to the scipy.ndimage.shift values
+# the first value is 2 pixels positive downwards, positive rows, 
+# the second value is 1 pixel positive to the right 
+# shifted_digit_image=shift(some_digit_image,[2,1]) 
+# so we expect to get later
+# shift(image, [-1*shift_v, shift_u])
 
 
-def dist(u, shift):
-    return np.mean(np.abs(u-shift))
+# <------
+shift_u = -3.5  # shift to the left, should be placed in columns, axis=1
+# ^
+# |
+# |
+shift_v = 2.2   # shift upwards, should be placed in rows, axis=0 
 
 
-def create_pair(image_size=32, u=3, v=2):
+def create_pair(image_size=32, u=shift_u, v=shift_v):
     """ creates a pair of images with a roll/shift """
     frame_a = np.zeros((image_size, image_size))
     frame_a = random_noise(frame_a)
@@ -25,73 +40,98 @@ def create_pair(image_size=32, u=3, v=2):
     # bottom left corner, and the image is rolled from the
     # top left corner
 
-    frame_b = np.roll(np.roll(frame_a, u, axis=1), v, axis=0)
+    # frame_b = np.roll(np.roll(frame_a, u, axis=1), v, axis=0)
+    # scipy shift allows to shift by floating values
+    frame_b = shift(frame_a, (v, u), mode='wrap')
+
+    # fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    # ax[0].imshow(frame_a, cmap=plt.cm.gray)
+    # ax[1].imshow(frame_b, cmap=plt.cm.gray)
+    # plt.show()
+
     return frame_a.astype(np.int32), frame_b.astype(np.int32)
 
 
 def test_piv():
-    """ test of the simplest PIV run
-        default window_size = 32
+    """test of the simplest PIV run
+    default window_size = 32
     """
     frame_a, frame_b = create_pair(image_size=32)
-    u, v = piv(frame_a, frame_b, window_size=32)
-    assert(dist(u, 3) < threshold)
-    assert(dist(v, -2) < threshold)
+    # extended_search_area_piv returns image based coordinate system
+    u, v, _ = piv(frame_a, frame_b, window_size=32)
+    print(u, v)
+    assert np.allclose(u, shift_u, atol=threshold)
+    assert np.allclose(v, shift_v, atol=threshold)
 
 
 def test_piv_smaller_window():
     """ test of the search area larger than the window """
-    frame_a, frame_b = create_pair(image_size=32, u=-3, v=-2)
-    u, v = piv(frame_a, frame_b, window_size=16, search_area_size=32)
-    assert(dist(u, -3) < threshold)
-    assert(dist(v, 2) < threshold)
+    frame_a, frame_b = create_pair(image_size=32, u=-3.5, v=-2.1)
+    u, v, _ = piv(frame_a, frame_b, window_size=16, search_area_size=32)
+    assert np.allclose(u, -3.5, atol=threshold)
+    assert np.allclose(v, -2.1, atol=threshold)
 
 
 def test_extended_search_area():
     """ test of the extended area PIV with larger image """
-    frame_a, frame_b = create_pair(image_size=64)
-    u, v = piv(frame_a, frame_b, window_size=16,
-               search_area_size=32, overlap=0)
+    frame_a, frame_b = create_pair(image_size=64, u=-3.5, v=-2.1)
+    u, v, _ = piv(frame_a, frame_b,
+                  window_size=16, 
+                  search_area_size=32, 
+                  overlap=0)
 
-    assert((dist(u, 3)+dist(v, -2)) < 2*threshold)
+    assert np.allclose(u, -3.5, atol=threshold)
+    assert np.allclose(v, -2.1, atol=threshold)
+    # assert dist(u, shift_u) < threshold
+    # assert dist(v, shift_v) < threshold
 
 
 def test_extended_search_area_overlap():
     """ test of the extended area PIV with different overlap """
-    frame_a, frame_b = create_pair(image_size=64)
-    u, v = piv(frame_a, frame_b, window_size=16,
-               search_area_size=32, overlap=8)
-    assert((dist(u, 3)+dist(v, -2)) < 2*threshold)
+    frame_a, frame_b = create_pair(image_size=72)
+    u, v, _ = piv(frame_a, frame_b,
+                  window_size=16, 
+                  search_area_size=32,
+                  overlap=8)
+    print(f"\n u={u}\n v={v}\n")
+    assert np.allclose(u, shift_u, atol=threshold)
+    assert np.allclose(v, shift_v, atol=threshold)
 
 
 def test_extended_search_area_sig2noise():
     """ test of the extended area PIV with sig2peak """
-    frame_a, frame_b = create_pair(image_size=64)
-    u, v, s2n = piv(frame_a, frame_b, window_size=16,
-                    search_area_size=32, sig2noise_method='peak2peak')
-    assert((dist(u, 3)+dist(v, -2)) < 2*threshold)
+    frame_a, frame_b = create_pair(image_size=64, u=-3.5, v=2.1)
+    u, v, s2n = piv(
+        frame_a,
+        frame_b,
+        window_size=16,
+        search_area_size=32,
+        sig2noise_method="peak2peak",
+        subpixel_method="gaussian"
+    )
+
+    assert np.allclose(u, -3.5, atol=threshold)
+    assert np.allclose(v, 2.1, atol=threshold)
 
 
 def test_process_extended_search_area():
     """ test of the extended area PIV from Cython """
     frame_a, frame_b = create_pair(image_size=64)
-    u, v = piv(frame_a, frame_b,
-               window_size=16, search_area_size=32, dt=1, overlap=0)
-    # assert(np.max(np.abs(u[:-1,:-1]-3)+np.abs(v[:-1,:-1]+2)) <= 0.3)
-    assert((dist(u, 3)+dist(v, -2)) < 2*threshold)
+    u, v, _ = piv(frame_a, frame_b, window_size=16,
+                  search_area_size=32, dt=2., overlap=0)
+
+    assert np.allclose(u, shift_u/2., atol=threshold)
+    assert np.allclose(v, shift_v/2., atol=threshold)
 
 
-def test_piv_vs_extended_search():
-    """ test of the simplest PIV run """
-    import openpiv.process
-    import openpiv.pyprocess
-    frame_a, frame_b = create_pair()
-    u, v = openpiv.process.extended_search_area_piv(frame_a, frame_b,
-                                                    window_size=32)
-    u1, v1 = openpiv.pyprocess.extended_search_area_piv(frame_a, frame_b,
-                                                        window_size=32,
-                                                        search_area_size=32,
-                                                        dt=1, overlap=0)
+def test_sig2noise_ratio():
+    return False
 
-    assert(np.allclose(u, u1))
-    assert(np.allclose(v, v1))
+
+def test_fft_correlate():
+    frame_a, frame_b = create_pair(image_size=32)
+    corr = fft_correlate_images(frame_a, frame_b)
+    u, v = correlation_to_displacement(corr[np.newaxis, ...], 1, 1)
+    assert np.allclose(u, shift_u, atol=threshold)
+    assert np.allclose(v, shift_v, atol=threshold)
+

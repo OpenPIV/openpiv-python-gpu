@@ -27,13 +27,28 @@ import multiprocessing
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as pt
+
 # from builtins import range
 from imageio import imread as _imread, imsave as _imsave
+from skimage.feature import canny
 
 
-def display_vector_field(filename, on_img=False, image_name='None',
-                         window_size=32, scaling_factor=1, widim=False,
-                         ax=None, **kw):
+def unique(array):
+    uniq, index = np.unique(array, return_index=True)
+    return uniq[index.argsort()]
+
+
+def display_vector_field(
+    filename,
+    on_img=False,
+    image_name="None",
+    window_size=32,
+    scaling_factor=1,
+    widim=False,
+    ax=None,
+    width=0.0025,
+    **kw
+):
     """ Displays quiver plot of the data stored in the file 
     
     
@@ -85,6 +100,10 @@ def display_vector_field(filename, on_img=False, image_name='None',
     """
 
     a = np.loadtxt(filename)
+    # parse
+    x, y, u, v, mask = a[:, 0], a[:, 1], a[:, 2], a[:, 3], a[:, 4]
+
+
     if ax is None:
         fig, ax = plt.subplots()
     else:
@@ -95,25 +114,30 @@ def display_vector_field(filename, on_img=False, image_name='None',
         im = negative(im)  # plot negative of the image for more clarity
         # imsave('neg.tif', im)
         # im = imread('neg.tif')
-        xmax = np.amax(a[:, 0]) + window_size / (2 * scaling_factor)
-        ymax = np.amax(a[:, 1]) + window_size / (2 * scaling_factor)
-        ax.imshow(im, origin='lower', cmap="Greys_r",
-                  extent=[0., xmax, 0., ymax])
-        plt.draw()
+        xmax = np.amax(x) + window_size / (2 * scaling_factor)
+        ymax = np.amax(y) + window_size / (2 * scaling_factor)
+        ax.imshow(im, cmap="Greys_r", extent=[0.0, xmax, 0.0, ymax])
+        # plt.draw()
 
-    if widim is True:
-        a[:, 1] = a[:, 1].max() - a[:, 1]
-
-    invalid = a[:, 4].astype('bool')  # mask
-    # fig.canvas.set_window_title('Vector field, 
-    #       '+str(np.count_nonzero(invalid))+' wrong vectors')
+    invalid = mask.astype("bool")  
     valid = ~invalid
-    ax.quiver(a[invalid, 0], a[invalid, 1], a[invalid, 2], a[invalid, 3],
-              color='r', **kw)
-    ax.quiver(a[valid, 0], a[valid, 1], a[valid, 2], a[valid, 3], color='b',
-              **kw)
-    #     if on_img is False:
-    ax.invert_yaxis()
+
+    # visual conversion for the data on image
+    # to be consistent with the image coordinate system
+
+    # if on_img:
+    #     y = y.max() - y
+    #     v *= -1
+
+    ax.quiver(
+        x[invalid], y[invalid], u[invalid], v[invalid], color="r", width=width, **kw)
+    ax.quiver(x[valid], y[valid], u[valid], v[valid], color="b", width=width,**kw)
+    
+    # if on_img is False:
+    #     ax.invert_yaxis()
+    
+    ax.set_aspect(1.)
+    # fig.canvas.set_window_title('Vector field, '+str(np.count_nonzero(invalid))+' wrong vectors')
 
     plt.show()
 
@@ -187,8 +211,8 @@ def imsave(filename, arr):
         arr /= arr.max()
         arr *= 255
 
-    if filename.endswith('tif'):
-        _imsave(filename, arr, format='TIFF')
+    if filename.endswith("tif"):
+        _imsave(filename, arr, format="TIFF")
     else:
         _imsave(filename, arr)
 
@@ -245,7 +269,7 @@ def mark_background2(list_img, filename):
 
 def edges(list_img, filename):
     back = mark_background(30, list_img, filename)
-    edges = filter.canny(back, sigma=3)
+    edges = canny(back, sigma=3)
     imsave(filename, edges)
 
 
@@ -263,7 +287,7 @@ def find_reflexions(list_img, filename):
 
 
 def find_boundaries(threshold, list_img1, list_img2, filename, picname):
-    f = open(filename, 'w')
+    f = open(filename, "w")
     print("mark1..")
     mark1 = mark_background(threshold, list_img1, "mark1.bmp")
     print("[DONE]")
@@ -280,66 +304,90 @@ def find_boundaries(threshold, list_img1, list_img2, filename, picname):
             list_bound[I, J] = 0
             if mark1[I, J] == 0:
                 list_bound[I, J] = 125
-            if I > 1 and J > 1 and I < list_bound.shape[0] - 2 and J < list_bound.shape[1] - 2:
+            if (
+                I > 1
+                and J > 1
+                and I < list_bound.shape[0] - 2
+                and J < list_bound.shape[1] - 2
+            ):
                 for K in range(5):
                     for L in range(5):
                         if mark1[I - 2 + K, J - 2 + L] != mark2[I - 2 + K, J - 2 + L]:
                             list_bound[I, J] = 255
             else:
                 list_bound[I, J] = 255
-            f.write(str(I) + '\t' + str(J) + '\t' + str(list_bound[I, J]) + '\n')
-    print('[DONE]')
+            f.write(str(I) + "\t" + str(J) + "\t" + str(list_bound[I, J]) + "\n")
+    print("[DONE]")
     f.close()
     imsave(picname, list_bound)
     return list_bound
 
 
-def save(x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t'):
+def save(x, y, u, v, mask, filename, fmt="%8.4f", delimiter="\t"):
     """Save flow field to an ascii file.
-    
+
     Parameters
     ----------
     x : 2d np.ndarray
-        a two dimensional array containing the x coordinates of the 
+        a two dimensional array containing the x coordinates of the
         interrogation window centers, in pixels.
-        
+
     y : 2d np.ndarray
-        a two dimensional array containing the y coordinates of the 
+        a two dimensional array containing the y coordinates of the
         interrogation window centers, in pixels.
-        
+
     u : 2d np.ndarray
         a two dimensional array containing the u velocity components,
         in pixels/seconds.
-        
+
     v : 2d np.ndarray
         a two dimensional array containing the v velocity components,
         in pixels/seconds.
-        
+
     mask : 2d np.ndarray
         a two dimensional boolen array where elements corresponding to
         invalid vectors are True.
-        
+
     filename : string
         the path of the file where to save the flow field
-        
+
     fmt : string
         a format string. See documentation of numpy.savetxt
         for more details.
-    
+
     delimiter : string
         character separating columns
-        
+
     Examples
     --------
-    
-    >>> openpiv.tools.save( x, y, u, v, 'field_001.txt', fmt='%6.3f', delimiter='\t')
-    
+
+    openpiv.tools.save( x, y, u, v, 'field_001.txt', fmt='%6.3f',
+                        delimiter='\t')
+
     """
+    if isinstance(u, np.ma.MaskedArray):
+        u = u.filled(0.)
+        v = v.filled(0.)
+
     # build output array
-    out = np.vstack([m.ravel() for m in [x, y, u, v, mask]])
+    out = np.vstack([m.flatten() for m in [x, y, u, v, mask]])
 
     # save data to file.
-    np.savetxt(filename, out.T, fmt=fmt, delimiter=delimiter)
+    np.savetxt(
+        filename,
+        out.T,
+        fmt=fmt,
+        delimiter=delimiter,
+        header="x"
+        + delimiter
+        + "y"
+        + delimiter
+        + "u"
+        + delimiter
+        + "v"
+        + delimiter
+        + "mask",
+    )
 
 
 def display(message):
@@ -352,11 +400,11 @@ def display(message):
     
     """
     sys.stdout.write(message)
-    sys.stdout.write('\n')
+    sys.stdout.write("\n")
     sys.stdout.flush()
 
 
-class Multiprocesser():
+class Multiprocesser:
     def __init__(self, data_dir, pattern_a, pattern_b=None):
         """A class to handle and process large sets of images.
 
@@ -390,13 +438,17 @@ class Multiprocesser():
         """
         # load lists of images
 
-        self.files_a = sorted(glob.glob(os.path.join(os.path.abspath(data_dir), pattern_a)))
+        self.files_a = sorted(
+            glob.glob(os.path.join(os.path.abspath(data_dir), pattern_a))
+        )
 
         if pattern_b is None:
             self.files_b = self.files_a[1:]
             self.files_a = self.files_a[:-1]
         else:
-            self.files_b = sorted(glob.glob(os.path.join(os.path.abspath(data_dir), pattern_b)))
+            self.files_b = sorted(
+                glob.glob(os.path.join(os.path.abspath(data_dir), pattern_b))
+            )
 
         # number of images
         self.n_files = len(self.files_a)
@@ -404,11 +456,13 @@ class Multiprocesser():
         # check if everything was fine
         if not len(self.files_a) == len(self.files_b):
             raise ValueError(
-                'Something failed loading the image file. There should be an equal number of "a" and "b" files.')
+                'Something failed loading the image file. There should be an equal number of "a" and "b" files.'
+            )
 
         if not len(self.files_a):
             raise ValueError(
-                'Something failed loading the image file. No images were found. Please check directory and image template name.')
+                "Something failed loading the image file. No images were found. Please check directory and image template name."
+            )
 
     def run(self, func, n_cpus=1):
         """Start to process images.
@@ -426,8 +480,12 @@ class Multiprocesser():
         """
 
         # create a list of tasks to be executed.
-        image_pairs = [(file_a, file_b, i) for file_a, file_b, i in
-                       zip(self.files_a, self.files_b, range(self.n_files))]
+        image_pairs = [
+            (file_a, file_b, i)
+            for file_a, file_b, i in zip(
+                self.files_a, self.files_b, range(self.n_files)
+            )
+        ]
 
         # for debugging purposes always use n_cpus = 1,
         # since it is difficult to debug multiprocessing stuff.
@@ -451,10 +509,10 @@ def negative(image):
     (255-image) : 2d np.ndarray of grey levels
 
     """
-    return (255 - image)
+    return 255 - image
 
 
-def display_windows_sampling(x, y, window_size, skip=0, method='standard'):
+def display_windows_sampling(x, y, window_size, skip=0, method="standard"):
     """ Displays a map of the interrogation points and windows
     
     
@@ -487,14 +545,14 @@ def display_windows_sampling(x, y, window_size, skip=0, method='standard'):
 
     fig = plt.figure()
     if skip < 0 or skip + 1 > len(x[0]) * len(y):
-        fig.canvas.set_window_title('interrogation points map')
-        plt.scatter(x, y, color='g')  # plot interrogation locations
+        fig.canvas.set_window_title("interrogation points map")
+        plt.scatter(x, y, color="g")  # plot interrogation locations
     else:
         nb_windows = len(x[0]) * len(y) / (skip + 1)
         # standard method --> display uniformly picked windows
-        if method == 'standard':
-            plt.scatter(x, y, color='g')  # plot interrogation locations (green dots)
-            fig.canvas.set_window_title('interrogation window map')
+        if method == "standard":
+            plt.scatter(x, y, color="g")  # plot interrogation locations (green dots)
+            fig.canvas.set_window_title("interrogation window map")
             # plot the windows as red squares
             for i in range(len(x[0])):
                 for j in range(len(y)):
@@ -503,136 +561,64 @@ def display_windows_sampling(x, y, window_size, skip=0, method='standard'):
                             x1 = x[0][i] - window_size / 2
                             y1 = y[j][0] - window_size / 2
                             plt.gca().add_patch(
-                                pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
+                                pt.Rectangle(
+                                    (x1, y1),
+                                    window_size,
+                                    window_size,
+                                    facecolor="r",
+                                    alpha=0.5,
+                                )
+                            )
                     else:
                         if i % (skip + 1) == 1 or skip == 0:
                             x1 = x[0][i] - window_size / 2
                             y1 = y[j][0] - window_size / 2
                             plt.gca().add_patch(
-                                pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
+                                pt.Rectangle(
+                                    (x1, y1),
+                                    window_size,
+                                    window_size,
+                                    facecolor="r",
+                                    alpha=0.5,
+                                )
+                            )
         # random method --> display randomly picked windows
-        elif method == 'random':
-            plt.scatter(x, y, color='g')  # plot interrogation locations
-            fig.canvas.set_window_title('interrogation window map, showing randomly ' + str(nb_windows) + ' windows')
+        elif method == "random":
+            plt.scatter(x, y, color="g")  # plot interrogation locations
+            fig.canvas.set_window_title(
+                "interrogation window map, showing randomly "
+                + str(nb_windows)
+                + " windows"
+            )
             for i in range(nb_windows):
                 k = np.random.randint(len(x[0]))  # pick a row and column index
                 l = np.random.randint(len(y))
                 x1 = x[0][k] - window_size / 2
                 y1 = y[l][0] - window_size / 2
-                plt.gca().add_patch(pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
+                plt.gca().add_patch(
+                    pt.Rectangle(
+                        (x1, y1), window_size, window_size, facecolor="r", alpha=0.5
+                    )
+                )
         else:
-            raise ValueError('method not valid: choose between standard and random')
+            raise ValueError("method not valid: choose between standard and random")
     plt.draw()
     plt.show()
 
 
-def load_vectors(filename, skip=1, uncrt=None):
-    """
-    Loads the velocity fields / uncertainty from an OpenPIV  data output file
-    returns the data from each file in a 3D matrix
+def transform_coordinates(x, y, u, v):
+    """ Converts coordinate systems from/to the image based / physical based 
     
-    Parameters
-    ----------
-    filename: string
-        The absolute path to the PIV data
+    Input/Output: x,y,u,v
 
-    skip: int
-        Number of header lines to skip in the data files. Defaults to 2 as that is what the save function defaults to. 
+        image based is 0,0 top left, x = columns to the right, y = rows downwards
+        and so u,v 
 
-    uncrt: tuple
-        Column (zero indexed) of the u and v velocity uncertainty. 
-        Default is None, which returns no uncertainty. 
+        physical or right hand one is that leads to the positive vorticity with 
+        the 0,0 origin at bottom left to be counterclockwise
+    
+    """
+    y = y[::-1, :]
+    v *= -1
+    return x, y, u, v
         
-    Returns
-    -------
-    x,y : 2D numpy array
-        The x and y locations of the velocity vector. Since each frame is the same,
-        only one 2D array for each is returned
-
-    u,v : 3D numpy array
-        The u amd v velocity fields for each piv file
-
-    mask : 3D array
-        Values that were masked during the validation process.
-    """
-
-    if uncrt is None:
-        # data is in 1D arrays. Reshape to 2D arrays.
-        x, y, u, v, mask = data_unravel(filename, skip=skip)
-
-        return x, y, u, v, mask
-    else:
-        x, y, u, v, mask, Ux, Uy = data_unravel(filename, skip=skip, uncrt=uncrt)
-
-
-def data_unravel(filename, maskCol=4, skip=1, uncrt=None):
-    """
-    Takes data stored as flattened arrays and turns it back into 2D arrays.
-    This is necessary for the fast bilinear spline in the image_dewarp function to work. 
-
-    Parameters
-    ----------
-    filename: string
-        name of the file piv data results are stored in
-
-    maskCol: int
-        column where the mask data is stored
-
-    uncrt: 2 component tuple
-        contains the column index of the u and v uncertainties 
-
-    Returns
-    -------
-    x,y: 2d array, float
-        coordinates of the velocity vectors
-
-    u,v: 2d array, float
-        velocity vectors
-
-    mask: 2d array, bool
-        location of the masked elements
-
-    Ux, Uy: 2d array,
-        u and v uncertainties for each vector
-    """
-
-    data = np.loadtxt(filename, skiprows=skip)
-    x_tmp = data[:, 0]
-    y_tmp = data[:, 1]
-    u_tmp = data[:, 2]
-    v_tmp = data[:, 3]
-    mask_tmp = data[:, maskCol]
-
-    if uncrt is not None:
-        Ux_tmp = data[:, uncrt[0]]
-        Uy_tmp = data[:, uncrt[1]]
-
-    # sort position inputs
-    xs = np.sort(x_tmp, axis=0)
-    ys = np.sort(y_tmp, axis=0)
-
-    # number or rows will be how many columns are the same and vise versa
-    row = int(max(np.where(xs[0] == xs)[0]) + 1)
-    col = int(max(np.where(ys[0] == ys)[0]) + 1)
-
-    assert row * col == x_tmp.size, "nrows and/or ncols is wrong"
-    assert row * col == y_tmp.size, "nrows and/or ncols is wrong"
-
-    # Reshape arrays
-    if uncrt is not None:
-        x = x_tmp.reshape(row, col)
-        y = y_tmp.reshape(row, col)
-        u = u_tmp.reshape(row, col)
-        v = v_tmp.reshape(row, col)
-        mask = mask_tmp.reshape(row, col)
-        Ux = Ux_tmp.reshape(row, col)
-        Uy = Uy_tmp.reshape(row, col)
-
-        return x, y, u, v, mask, Ux, Uy
-    else:
-        x = x_tmp.reshape(row, col)
-        y = y_tmp.reshape(row, col)
-        u = u_tmp.reshape(row, col)
-        v = v_tmp.reshape(row, col)
-        mask = mask_tmp.reshape(row, col)
-        return x, y, u, v, mask
