@@ -463,8 +463,7 @@ def multipass_img_deform(frame_a, frame_b, window_size, overlap, iterations, cur
     disp = np.zeros((np.size(correlation, 0), 2))
     for i in range(0, np.size(correlation, 0)):
         ''' determine the displacment on subpixel level  '''
-        disp[i, :] = find_subpixel_peak_position(
-            correlation[i, :, :], subpixel_method=subpixel_method)
+        disp[i, :] = find_subpixel_peak_position(correlation[i, :, :], subpixel_method=subpixel_method)
     'this loop is doing the displacment evaluation for each window '
 
     'reshaping the interrogation window to vector field shape'

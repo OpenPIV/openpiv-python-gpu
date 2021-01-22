@@ -644,7 +644,7 @@ class CorrelationFunction:
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
 
-        # TODO When the try statement fails, this can leave lot of points unmasked that should be masked. Must find a better way to do the masking.
+        # When the try statement fails, this can leave lot of points unmasked that should be masked. Must find a better way to do the masking.
         # set (width x width) square submatrix around the first correlation peak as masked
         tmp_len = range(self.batch_size)
 
@@ -805,7 +805,6 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
-# TODO rename this function to reflect new functionality
 def gpu_piv_def(frame_a,
                 frame_b,
                 window_size_iters=(1, 2),
@@ -894,8 +893,7 @@ def gpu_piv_def(frame_a,
 
     Example
     -------
-    # TODO change this example
-    >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16, overlap_ratio=0.25, coarse_factor=2, dt=0.02, validation_method='mean_velocity', trust_1st_iter=1, validation_iter=2, tolerance=0.7, nb_iter_max=4, sig2noise_method='peak2peak')
+    >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
 
     --------------------------------------
     Method of implementation : to improve the speed of the program, all data have been placed in the same huge
@@ -1076,7 +1074,6 @@ def gpu_piv_def(frame_a,
         assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
         # Get signal to noise ratio
-        # TODO re-enable this computation
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
 
         # update the field with new values
@@ -1216,7 +1213,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         d_f[k, :, :, 2] = gpu_index_update(d_f[k, :, :, 2].copy(), d_u_tmp, d_indices, retain_indices=True)  # u
         d_f[k, :, :, 3] = gpu_index_update(d_f[k, :, :, 3].copy(), d_v_tmp, d_indices)  # v
 
-        # TODO, you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
+        # you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
 
     # case if different dimensions: interpolation using previous iteration
     elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
@@ -1231,7 +1228,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
 
         # update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
-        # TODO - could replace with the mean of the previous values surrounding the point
+        # could replace with the mean of the previous values surrounding the point
         d_u_tmp = gpu_array_index(d_f[k - 1, :, :, 2].copy(), d_indices, np.float32, retain_list=True)
         d_v_tmp = gpu_array_index(d_f[k - 1, :, :, 3].copy(), d_indices, np.float32, retain_list=True)
         d_f[k, :, :, 2] = gpu_index_update(d_f[k, :, :, 2].copy(), d_u_tmp, d_indices, retain_indices=True)

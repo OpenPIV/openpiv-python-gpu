@@ -1,4 +1,4 @@
-build-test
+#Now
 
 memory optimizations
     reuse same arrays as previous iterations
@@ -8,13 +8,13 @@ retain s2n output option
 complete the Jupyter notebook tutorial
 other TODO items
 
-make version 1.0?
-
 replace slow functions with CUDA kernels or CuPy functions
     gradient
     peak location
-fix edge treatment in validation
+
 
 #Future
+fix edge treatment in validation
+
 object-oriented framework to reduce the array initializations
 Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
