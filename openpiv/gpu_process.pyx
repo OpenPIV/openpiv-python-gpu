@@ -27,142 +27,6 @@ ctypedef np.uint8_t DTYPEb_t
 DTYPEf = np.float32
 ctypedef np.float32_t DTYPEf_t
 
-# Note: this function almost certainly won't work anymore because of changes to CorrelationFunction
-# def gpu_piv(np.ndarray[DTYPEi_t, ndim=2] frame_a,
-#             np.ndarray[DTYPEi_t, ndim=2] frame_b,
-#             int window_size,
-#             int overlap,
-#             float dt,
-#             int search_area_size,
-#             str subpixel_method='gaussian',
-#             sig2noise_method=None,
-#             int width=2,
-#             nfftx=None,
-#             nffty=None):
-#     """
-#     The implementation of the one-step direct correlation with the same size
-#     windows. Support for extended search area of the second window has yet to
-#     be implimetned. This module is meant to be used with a iterative method to
-#     cope with the loss of pairs due to particle movement out of the search area.
-#
-#     This function is an adaptation of the original extended_search_area_piv
-#     function. This has been rewritten with PyCuda and CUDA-C to run on
-#     an NVIDIA GPU.
-#
-#     WARNING FOR DEVELOPERS: Only single precision calculations can be done on the GPU,
-#     so all data types must be 32-bit or less.
-#
-#     See:
-#
-#     Particle-Imaging Techniques for Experimental Fluid Mechanics
-#
-#     Annual Review of Fluid Mechanics
-#     Vol. 23: 261-304 (Volume publication date January 1991)
-#     DOI: 10.1146/annurev.fl.23.010191.001401
-#
-#     Parameters
-#     ----------
-#     frame_a : 2d np.ndarray, dtype=np.float32
-#         an two dimensions array of integers containing grey levels of
-#         the first frame.
-#     frame_b : 2d np.ndarray, dtype=np.float32
-#         an two dimensions array of integers containing grey levels of
-#         the second frame.
-#     window_size : int
-#         the size of the (square) interrogation window.
-#     overlap : int
-#         the number of pixels by which two adjacent windows overlap.
-#     dt : float
-#         the time delay separating the two frames.
-#     search_area_size : int
-#         the size of the (square) interrogation window from the second frame
-#     subpixel_method : string
-#          one of the following methods to estimate subpixel location of the peak:
-#          'centroid' [replaces default if correlation map is negative],
-#          'gaussian' [default if correlation map is positive],
-#          'parabolic'.
-#     sig2noise_method : string
-#         defines the method of signal-to-noise-ratio measure,
-#         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-#     width : int
-#         the half size of the region around the first
-#         correlation peak to ignore for finding the second
-#         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-#     nfftx   : int
-#         the size of the 2D FFT in x-direction,
-#         [default: 2 x windows_a.shape[0] is recommended]
-#     nffty   : int
-#         the size of the 2D FFT in y-direction,
-#         [default: 2 x windows_a.shape[1] is recommended]
-#
-#     Returns
-#     -------
-#     u : 2d np.ndarray
-#         a two dimensional array containing the u velocity component,
-#         in pixels/seconds.
-#     v : 2d np.ndarray
-#         a two dimensional array containing the v velocity component,
-#         in pixels/seconds.
-#     sig2noise : 2d np.ndarray, optional
-#         a two dimensional array containing the signal to noise ratio
-#         from the cross correlation function. This array is returned if
-#         sig2noise_method is not None.
-#
-#     Examples
-#     --------
-#     u, v = openpiv.gpu_process.gpu_piv(frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
-#
-#     """
-#     # cast images as floats
-#     cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
-#
-#     # Send images to the gpu
-#     d_frame_a_f = gpuarray.to_gpu(frame_a_f)
-#     d_frame_b_f = gpuarray.to_gpu(frame_b_f)
-#
-#     # Define variables
-#     cdef DTYPEi_t n_rows, n_cols
-#
-#     assert nfftx == nffty, 'fft x and y dimensions must be same size'
-#
-#     # Get correlation function
-#     c = CorrelationFunction(d_frame_a_f, d_frame_b_f, window_size, overlap, nfftx)
-#
-#     # Free gpu memory
-#     d_frame_a_f.gpudata.free()
-#     d_frame_b_f.gpudata.free()
-#
-#     # vector field shape
-#     n_rows, n_cols = c.return_shape()
-#
-#     # Define arrays
-#     cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_rows, n_cols], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([n_rows, n_cols], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_rows, n_cols], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_rows, n_cols], dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_rows*n_cols, dtype=DTYPEf)
-#     cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_rows*n_cols, dtype=DTYPEf)
-#
-#     # Get window displacement to subpixel accuracy
-#     i_tmp, j_tmp = c.subpixel_peak_location()
-#
-#     # reshape the peaks
-#     i_peak = np.reshape(i_tmp, (n_rows, n_cols))
-#     j_peak = np.reshape(j_tmp, (n_rows, n_cols))
-#
-#     # calculate velocity fields
-#     v = -( (i_peak - c.nfft/2) - (search_area_size - window_size)/2)/dt
-#     u =  ( (j_peak - c.nfft/2) - (search_area_size - window_size)/2)/dt
-#
-#     if sig2noise_method is not None:
-#         sig2noise = c.sig2noise_ratio(method = sig2noise_method)
-#         del c
-#         return u,v, sig2noise
-#     else:
-#         del c
-#         return u, v
-
 
 class CorrelationFunction:
     def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x, d_shift=None, d_strain=None):
@@ -805,6 +669,22 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
+def gpu_init(window_size_iters=(1, 2),
+                min_window_size=16,
+                overlap_ratio=0.5,
+                dt=1,
+                mask=None,
+                deform=True,
+                smoothing=True,
+                nb_validation_iter=1,
+                validation_method='median_velocity',
+                trust_1st_iter=True,
+                **kwargs):
+    """Initializes the arrays used in the GPU code so that large batches can be completed faster."""
+
+    return
+
+
 def gpu_piv_def(frame_a,
                 frame_b,
                 window_size_iters=(1, 2),
@@ -910,7 +790,6 @@ def gpu_piv_def(frame_a,
                     | 4 --> dpx       |
                     | 5 --> dpy       |
                     | 8 --> mask      |
-                    | 9 --> sig2noise |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -988,9 +867,47 @@ def gpu_piv_def(frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
-    #### GPU arrays ####
+    # #### GPU arrays ####
+    # # define the main array f that contains all the data
+    # cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
+    #
+    # # initialize x and y values
+    # cdef float diff
+    # for K in range(nb_iter_max):
+    #     f[K, 0, :, 0] = w[K] / 2  # init x on first row
+    #     f[K, :, 0, 1] = w[K] / 2  # init y on first column
+    #     diff = w[K] - overlap[K]
+    #     for I in range(1, n_row[K]):
+    #         f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
+    #     for J in range(1, n_col[K]):
+    #         f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
+    #
+    # # initialize mask
+    # mask_b = np.ones((ht, wd))
+    # if mask is not None:
+    #     mask_b = mask
+    #
+    # cdef DTYPEb_t [:, :] mask_view = mask_b.astype(np.uint8)
+    # cdef Py_ssize_t x_idx
+    # cdef Py_ssize_t y_idx
+    #
+    # if mask is not None:
+    #     assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
+    #     for K in range(nb_iter_max):
+    #         for I in range(0, n_row[K]):
+    #             for J in range(0, n_col[K]):
+    #                 x_idx = int(f[K, I, J, 0])
+    #                 y_idx = int(f[K, I, J, 1])
+    #                 f[K, I, J, 6] = mask_view[x_idx, y_idx]
+    # else:
+    #     f[:, :, :, 6] = 1
+
+    ##########################################
+    # code here can go into the gpu_init()
+
+    # GPU ARRAYS
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 8], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
 
     # initialize x and y values
     cdef float diff
@@ -998,6 +915,7 @@ def gpu_piv_def(frame_a,
         f[K, 0, :, 0] = w[K] / 2  # init x on first row
         f[K, :, 0, 1] = w[K] / 2  # init y on first column
         diff = w[K] - overlap[K]
+
         for I in range(1, n_row[K]):
             f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
         for J in range(1, n_col[K]):
@@ -1008,21 +926,21 @@ def gpu_piv_def(frame_a,
     if mask is not None:
         mask_b = mask
 
-    cdef DTYPEb_t [:, :] mask_view = mask_b.astype(np.uint8)
+    cdef DTYPEb_t[:, :] mask_view
     cdef Py_ssize_t x_idx
     cdef Py_ssize_t y_idx
 
     if mask is not None:
         assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
         for K in range(nb_iter_max):
-            for I in range(0, n_row[K]):
-                for J in range(0, n_col[K]):
-                    # TODO change this to implicit indexing
-                    x_idx = int(f[K, I, J, 0])
-                    y_idx = int(f[K, I, J, 1])
-                    f[K, I, J, 6] = mask_view[x_idx, y_idx]
+            x_idx1 = f[K, :, :, 0].astype(DTYPEi)
+            y_idx1 = f[K, :, :, 1].astype(DTYPEi)
+            mask_view = mask_b[y_idx1, x_idx1]
+            f[K, :, :, 6] = mask_view
+
     else:
         f[:, :, :, 6] = 1
+    ###########################################
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
@@ -1076,7 +994,7 @@ def gpu_piv_def(frame_a,
         # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
 
         # update the field with new values
-        gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+        gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
 
         # normalize the residual by the maximum quantization error of 0.5 pixel
         try:
@@ -1198,7 +1116,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
     # first iteration, just replace with mean velocity
     if k == 0:
         # get indices and send them to the gpu
-        indices = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
+        indices = np.where(validation_location.flatten() == 1)[0].astype(DTYPEi)
         d_indices = gpuarray.to_gpu(indices)
 
         # get mean velocity at validation points
@@ -1219,7 +1137,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
     # case if same dimensions
     elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
         # get indices and send them to the gpu
-        indices = np.where(validation_location.flatten() == 1)[0].astype(np.int32)
+        indices = np.where(validation_location.flatten() == 1)[0].astype(DTYPEi)
         d_indices = gpuarray.to_gpu(indices)
 
         # update the velocity values with the previous values.
@@ -1262,7 +1180,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     interior_list[:,-1] = 0
 
     # define array with the indices of the points to be validated
-    interior_ind = np.where(interior_list.flatten() == True)[0].astype(np.int32)
+    interior_ind = np.where(interior_list.flatten() == True)[0].astype(DTYPEi)
     if interior_ind.size != 0:
         # get the x and y indices of the interior points that must be validated
         interior_ind_x = interior_ind // n_col[k + 1]
@@ -1277,28 +1195,28 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
     top_list = np.copy(v_list[0, :n_col[k + 1]])
     top_list[0] = 0
     top_list[-1] = 0
-    top_ind = np.where(top_list.flatten() == True)[0].astype(np.int32)
+    top_ind = np.where(top_list.flatten() == True)[0].astype(DTYPEi)
     if top_ind.size != 0:
         d_top_ind = gpuarray.to_gpu(top_ind)
 
     bottom_list = np.copy(v_list[n_row[k + 1] - 1, :n_col[k + 1]])
     bottom_list[0] = 0
     bottom_list[-1] = 0
-    bottom_ind = np.where(bottom_list.flatten() == True)[0].astype(np.int32)
+    bottom_ind = np.where(bottom_list.flatten() == True)[0].astype(DTYPEi)
     if bottom_ind.size != 0:
         d_bottom_ind = gpuarray.to_gpu(bottom_ind)
 
     left_list = np.copy(v_list[:n_row[k + 1], 0])
     left_list[0] = 0
     left_list[-1] = 0
-    left_ind = np.where(left_list.flatten() == True)[0].astype(np.int32)
+    left_ind = np.where(left_list.flatten() == True)[0].astype(DTYPEi)
     if left_ind.size != 0:
         d_left_ind = gpuarray.to_gpu(left_ind)
 
     right_list = np.copy(v_list[:n_row[k + 1], n_col[k + 1] - 1])
     right_list[0] = 0
     right_list[-1] = 0
-    right_ind = np.where(right_list.flatten() == True)[0].astype(np.int32)
+    right_ind = np.where(right_list.flatten() == True)[0].astype(DTYPEi)
     if right_ind.size != 0:
         d_right_ind = gpuarray.to_gpu(right_ind)
 
@@ -1465,7 +1383,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 
 
 #  CUDA GPU FUNCTIONS
-def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
+def gpu_update(d_f, i_peak, j_peak, n_row, n_col, dt, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
     Parameters
@@ -1485,7 +1403,7 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
 
     """
     mod_update = SourceModule("""
-        __global__ void update_values(float *F, float *i_peak, float *j_peak, float *sig2noise, int fourth_dim, float dt)
+        __global__ void update_values(float *F, float *i_peak, float *j_peak, int fourth_dim, float dt)
         {
             // F is where all the data is stored at a particular K
             // i_peak / j_peak is the correlation peak location
@@ -1502,9 +1420,6 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
             // get new displacement prediction
             F[F_idx + 2] = (F[F_idx + 4] + j_peak[w_idx]) * F[F_idx + 6];
             F[F_idx + 3] = (F[F_idx + 5] + i_peak[w_idx]) * F[F_idx + 6];
-
-            // get sig2noise ratio
-            F[F_idx + 7] = sig2noise[w_idx];
         }
         """)
 
@@ -1515,7 +1430,6 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
     # move data to gpu
     d_i_peak = gpuarray.to_gpu(i_peak)
     d_j_peak = gpuarray.to_gpu(j_peak)
-    d_sig2noise = gpuarray.to_gpu(sig2noise)
     d_f_tmp = d_f[k, 0:n_row, 0:n_col, :].copy()
 
     # last dimension of F
@@ -1523,14 +1437,13 @@ def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
 
     # update the values
     update_values = mod_update.get_function("update_values")
-    update_values(d_f_tmp, d_i_peak, d_j_peak, d_sig2noise, fourth_dim, dt, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    update_values(d_f_tmp, d_i_peak, d_j_peak, fourth_dim, dt, block=(block_size, 1, 1), grid=(x_blocks, 1))
     d_f[k, 0:n_row, 0:n_col, :] = d_f_tmp
 
     # Free gpu memory
     d_f_tmp.gpudata.free()
     d_i_peak.gpudata.free()
     d_j_peak.gpudata.free()
-    d_sig2noise.gpudata.free()
 
 
 # gpu validation algorithms were removed from here
@@ -1622,8 +1535,8 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
     x_blocks = int(len(d_pos_index)//block_size + 1)
 
     # create GPU data
-    d_low = gpuarray.zeros_like(d_pos_index, dtype=np.int32)
-    d_high = gpuarray.zeros_like(d_pos_index, dtype=np.int32)
+    d_low = gpuarray.zeros_like(d_pos_index, dtype=DTYPEi)
+    d_high = gpuarray.zeros_like(d_pos_index, dtype=DTYPEi)
 
     if side == "x_axis":
         assert d_pos_index[-1].get() < n_row[k + 1], "Position index for validation point is outside the grid. Not possible - all points should be on the grid."
@@ -1812,7 +1725,7 @@ def gpu_array_index(d_array, d_return_list, data_type, retain_input=False, retai
         # get and launch kernel
         array_index = mod_array_index.get_function("array_index_float")
         array_index(d_array, d_return_values, d_return_list, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    elif data_type == np.int32:
+    elif data_type == DTYPEi:
         # get and launch kernel
         array_index = mod_array_index.get_function("array_index_int")
         array_index(d_array, d_return_values, d_return_list, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))

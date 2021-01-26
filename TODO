@@ -1,11 +1,19 @@
-reactivate the extended search area
+test the masking
+
 retain s2n output option
     debug it to ensure it works
+
 complete the Jupyter notebook tutorial
 
-#Future
-fix edge treatment in validation
 memory optimizations
     reuse same arrays as previous iterations
-object-oriented framework to reduce the array initializations
-Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
+        write an outside class to store the common GPU data
+    define empty arrays on the GPU directly instead of sending to GPU from numpy by gpuarray.to_gpu
+        profile this
+
+profile for the slowest parts of the code
+
+Future work
+    fix edge treatment to have less errors
+        validation of edges
+    Use CuPy or scikit-cuda to implement the cosine transform used in smoothn

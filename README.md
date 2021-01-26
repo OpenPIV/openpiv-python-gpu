@@ -57,3 +57,9 @@ To get started, see the tutorial Jupyter notebook.
 ##Copyright statement
 `smoothn.py` is a Python version of `smoothn.m` originally created by D. Garcia [https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn], written by Prof. Lewis and available on Github [https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py]. We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license.
 
+# Changes from base repository
+piv_gpu is no longer supported
+median validation is the main method of validation, along with smoothn used in intermediate fields
+window deformation is implemented to improve estimation of velocity gradient
+API for the function is different for the GPU function, which is now called pif_gpu_def
+performance/reliability has been improved by various other changes
