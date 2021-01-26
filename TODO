@@ -1,20 +1,11 @@
-#Now
-
-memory optimizations
-    reuse same arrays as previous iterations
 reactivate the extended search area
 retain s2n output option
     debug it to ensure it works
 complete the Jupyter notebook tutorial
-other TODO items
-
-replace slow functions with CUDA kernels or CuPy functions
-    gradient
-    peak location
-
 
 #Future
 fix edge treatment in validation
-
+memory optimizations
+    reuse same arrays as previous iterations
 object-oriented framework to reduce the array initializations
 Use CuPy or scikit-cuda to implement the cosine transform used in smoothn

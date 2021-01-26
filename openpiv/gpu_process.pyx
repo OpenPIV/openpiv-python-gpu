@@ -266,7 +266,7 @@ class CorrelationFunction:
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
 
             // loop through each interrogation window
-            f_range = (ind_i / n_col * diff + ind_y) * w + (ind_i % n_col) * diff + ind_x;
+            f_range = (ind_i / n_col * spacing + ind_y) * w + (ind_i % n_col) * spacing + ind_x;
 
             // indices of new array to map to
             w_range = ind_i * IW_size + window_size * ind_y + ind_x;
@@ -985,8 +985,6 @@ def gpu_piv_def(frame_a,
     # define arrays used for the validation process
     # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
     cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-    # cdef np.ndarray[DTYPEf_t, ndim=3] u_mean = np.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
-    # cdef np.ndarray[DTYPEf_t, ndim=3] v_mean = np.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
@@ -1037,14 +1035,11 @@ def gpu_piv_def(frame_a,
     d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
     d_v_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
 
-    ####################################################
     # MAIN LOOP
-    ####################################################
     for K in range(nb_iter_max):
         print("//////////////////////////////////////////////////////////////////")
         print("ITERATION {}".format(K))
 
-        # changed this section Nov 1 2020 to not use copy()
         d_shift_arg = None
         d_strain_arg = None
         if K > 0:
@@ -1057,9 +1052,13 @@ def gpu_piv_def(frame_a,
             if deform:
                 d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
                 if w[K] != w[K - 1]:
-                    gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2], d_f[K, :n_row[K], :n_col[K], 3], n_row[K], n_col[K], w[K] - overlap[K])
+                    gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
                 else:
-                    gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2], d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3], n_row[K], n_col[K], w[K] - overlap[K])
+                    gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
+
+                    # DEBUG
+                    # np.save('cpu_strain', d_strain_arg.get())
+                    # np.save('gpu_strain', d_strain_arg.get())
 
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
@@ -1086,9 +1085,7 @@ def gpu_piv_def(frame_a,
         except OverflowError:
             print('[DONE]--Overflow in residuals.\n')
 
-        #########################################################
-        # validation of the velocity vectors with 3 * 3 filtering
-        #########################################################
+        # VALIDATION
         if K == 0 and trust_1st_iter:
             print('No validation--trusting 1st iteration.')
 
@@ -1111,9 +1108,7 @@ def gpu_piv_def(frame_a,
 
             print("[DONE]\n")
 
-        ##############################################################################
-        # next iteration
-        ##############################################################################
+        # NEXT ITERATION
         # go to next iteration: compute the predictors dpx and dpy from the current displacements
         if K < nb_iter_max - 1:
             # interpolate if dimensions do not agree
@@ -1123,15 +1118,18 @@ def gpu_piv_def(frame_a,
                 # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
-                # TODO check if .copy() is needed
                 if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par)  # check if .copy() is needed
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par)
+                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par)  # check if .copy() is needed
+                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par, retain_input=True)  # check if .copy() is needed
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par, retain_input=True)
 
             else:
                 if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=smoothing_par)
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=smoothing_par)
+                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=smoothing_par)  # delete
+                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=smoothing_par)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2], s=smoothing_par, retain_input=True)
+                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3], s=smoothing_par, retain_input=True)
                 else:
                     d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
                     d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
@@ -1139,9 +1137,7 @@ def gpu_piv_def(frame_a,
 
             print("[DONE] -----> going to iteration {}.\n".format(K + 1))
 
-    ##############################################################################
-    # return the results
-    ##############################################################################
+    # RETURN RESULTS
     print("//////////////////////////////////////////////////////////////////")
     print("End of iterative process. Rearranging vector fields.")
 
@@ -1468,9 +1464,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         d_f[k + 1, int(n_row[k + 1] - 1), int(n_col[k + 1] - 1), dat] = d_f[k, int(n_row[k] - 1), int(n_col[k] - 1), dat]
 
 
-################################################################################
 #  CUDA GPU FUNCTIONS
-################################################################################
 def gpu_update(d_f, i_peak, j_peak, sig2noise, n_row, n_col, dt, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
@@ -1785,7 +1779,7 @@ def gpu_array_index(d_array, d_return_list, data_type, retain_input=False, retai
     __global__ void array_index_float(float *array, float *return_values, int *return_list, int r_size )
     {
         // 1D grid of 1D blocks
-        int tid = blockIdx.x*blockDim.x + threadIdx.x;
+        int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
         if(tid >= r_size){return;}
 
@@ -1809,7 +1803,7 @@ def gpu_array_index(d_array, d_return_list, data_type, retain_input=False, retai
     # define gpu parameters
     block_size = 32
     r_size = np.int32(d_return_list.size)
-    x_blocks = int(r_size//block_size + 1)
+    x_blocks = int(r_size // block_size + 1)
 
     # send data to the gpu
     d_return_values = gpuarray.zeros(d_return_list.size, dtype=data_type)
@@ -1855,7 +1849,7 @@ def gpu_index_update(d_dest, d_values, d_indices, retain_indices=False):
 
     """
     mod_index_update = SourceModule("""
-    __global__ void index_update(float *dest, float *values, int *indices, int r_size )
+    __global__ void index_update(float *dest, float *values, int *indices, int r_size)
     {
         // 1D grid of 1D blocks
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1883,7 +1877,6 @@ def gpu_index_update(d_dest, d_values, d_indices, retain_indices=False):
     return d_dest
 
 
-# TODO changes this to be a CUDA kernel
 def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     """Computes the strain rate gradients.
 
@@ -1899,55 +1892,80 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
         spacing between nodes
 
     """
-    # # CuPy implementation  delete
+    mod = SourceModule("""
+    __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
+    {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        
+        int size = m * n;
+        
+        if (i >= size) {return;}
+        
+        int row = i / n;
+        int col = i % n;
+        
+        // x-axis
+        // first column
+        if (col == 0) {strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
+        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
+        
+        // last column
+        } else if (col == n - 1) {strain[row * n + m - 1] = (u[row * n + m - 1] - u[row * n + m - 2]) / h;  // u_x
+        strain[size * 2 + row * n + m - 1] = (v[row * n + m - 1] - v[row * n + m - 2]) / h;  // v_x
+        
+        // main body
+        } else {strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
+        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;}  // v_x
+        
+        // y-axis
+        // first row
+        if (row == 0) {strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
+        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
+
+        // last row
+        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
+        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
+
+        // main body
+        } else {strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
+        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;}  // v_y
+    }
+    """)
+
+    # # NumPy implementation
+    # u = d_u.get()
+    # v = d_v.get()
+    # strain = np.zeros((4, n_row, n_col), dtype=np.float32)
+    #
     # # u_x
-    # d_strain[0, :n_row, 1:n_col - 1] = cupy.gradient(d_u, w, axis=None, edge_order=1)
-    # # u_y
-    # d_strain[1, 1:n_row - 1, :n_col] = cupy.gradient(d_u, w, axis=None, edge_order=1)
-    # # v_x
-    # d_strain[2, :n_row, 1:n_col - 1] = cupy.gradient(d_v, w, axis=None, edge_order=1)
-    # # v_y
-    # d_strain[3, 1:n_row - 1, :n_col] = cupy.gradient(d_v, w, axis=None, edge_order=1)
-
-    # # PyCUDA implementation
-    # # u_x
-    # d_strain[0, :n_row, 1:n_col - 1] = 0.5 * (d_u[:, 2:].copy() - d_u[:, :-2].copy()) / w
-    # d_strain[0, :n_row, 0] = (d_u[:, 1].copy() - d_u[:, 0].copy()) / w
-    # d_strain[0, :n_row, -1] = (d_u[:, -1].copy() - d_u[:, n_col - 1].copy()) / w
+    # u_x = np.gradient(u, spacing, axis=1)
+    # u_y = np.gradient(u, spacing, axis=0)
+    # v_x = np.gradient(v, spacing, axis=1)
+    # v_y = np.gradient(v, spacing, axis=0)
     #
-    # # u_y
-    # d_strain[1, 1:n_row - 1, :n_col] = 0.5 * (d_u[2:, :].copy() - d_u[:-2, :].copy()) / w
-    # d_strain[1, 0, :n_col] = (d_u[1, :].copy() - d_u[0, :].copy()) / w
-    # d_strain[1, -1, :n_col] = (d_u[-1, :].copy() - d_u[n_col - 1, :].copy()) / w
+    # # see if smoothing does anything
+    # strain[0, :, :] = u_x
+    # strain[1, :, :] = u_y
+    # strain[2, :, :] = v_x
+    # strain[3, :, :] = v_y
     #
-    # # v_x
-    # d_strain[2, :n_row, 1:n_col - 1] = 0.5 * (d_v[:, 2:].copy() - d_v[:, :-2].copy()) / w
-    # d_strain[2, :n_row, 0] = (d_v[:, 1].copy() - d_v[:, 0].copy()) / w
-    # d_strain[2, :n_row, -1] = (d_v[:, -1].copy() - d_v[:, n_col - 1].copy()) / w
-    #
-    # # v_y
-    # d_strain[3, 1:n_row - 1, :n_col] = 0.5 * (d_v[2:, :].copy() - d_v[:-2, :].copy()) / w
-    # d_strain[3, 0, :n_col] = (d_v[1, :].copy() - d_v[0, :].copy()) / w
-    # d_strain[3, -1, :n_col] = (d_v[-1, :].copy() - d_v[n_col - 1, :].copy()) / w
+    # d_strain[:] = gpuarray.to_gpu(strain / spacing)
 
-    # NumPy implementation
-    u = d_u.get()
-    v = d_v.get()
-    strain = np.zeros((4, n_row, n_col), dtype=np.float32)
+    # CUDA kernel implementation
+    block_size = 32
+    n_blocks = int((n_row * n_col) // 32 + 1)
 
-    # u_x
-    u_x = np.gradient(u, axis=1)
-    u_y = np.gradient(u, axis=0)
-    v_x = np.gradient(v, axis=1)
-    v_y = np.gradient(v, axis=0)
+    d_gradient = mod.get_function('gradient')
+    d_gradient(d_strain, d_u, d_v, np.float32(spacing), np.int32(n_row), np.int32(n_col), block=(block_size, 1, 1), grid=(n_blocks, 1))
 
-    # see if smoothing does anything
-    strain[0, :, :] = u_x
-    strain[1, :, :] = u_y
-    strain[2, :, :] = v_x
-    strain[3, :, :] = v_y
+    # # DEBUG
+    # gradient = d_strain.get()
+    # np.save('gradient_dump', gradient)  # delete
+    # np.save('strain_dump', strain)
+    # np.save('u_dump', d_u.get())
+    # np.save('u_diff', gradient - strain)
 
-    d_strain[:] = gpuarray.to_gpu(strain / spacing)
+    # check differences between these implementations
 
 
 def gpu_floor(d_src, retain_input=False):
@@ -2059,7 +2077,7 @@ def gpu_round(d_src, retain_input=False):
 
 
 def gpu_smooth(d_src, s=0.5, retain_input=False):
-    """Smoothes a scalar field stored as a GPUArray
+    """Smoothes a scalar field stored as a GPUArray.
 
     Parameters
     ----------
@@ -2077,7 +2095,6 @@ def gpu_smooth(d_src, s=0.5, retain_input=False):
 
     """
     array = d_src.get()
-    # TODO change the order here
     d_dst = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(np.float32, order='C'))
 
     # free gpu memory

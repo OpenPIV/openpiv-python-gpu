@@ -10,7 +10,8 @@ import numpy as np
 from numpy.fft import rfft2, irfft2, fftshift
 import scipy.ndimage as scn
 from scipy.interpolate import RectBivariateSpline
-from openpiv import process, validation, filters, pyprocess, tools, preprocess, scaling
+from openpiv import validation, filters, pyprocess, tools, preprocess, scaling
+import openpiv.widim as process
 from openpiv import smoothn
 import matplotlib.pyplot as plt
 
