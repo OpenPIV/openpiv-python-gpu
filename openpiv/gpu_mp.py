@@ -42,8 +42,7 @@ class MPGPU(Process):
         self.parameters = parameters
 
         if gpu_id is not None:
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-            # os.environ['CUDA_DEVICE'] = str(gpu_id)
+            os.environ['CUDA_DEVICE'] = str(gpu_id)
 
     def run(self):
         # process_time = time()
@@ -181,11 +180,11 @@ def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
 
     # GPU process
     with redirect_stdout(None):
-        x, y, u, v, = gpu_func(frame_a, frame_b, kwargs)
+        x, y, u, v, maks, s2n = gpu_func(frame_a, frame_b, kwargs)
 
     print('processed image pair. GPU = {}. dt = {:.3f}.'.format(k, time.time() - time1))
 
-    return u, v
+    return x, y, u, v, maks, s2n
 
 
 def gpu_func(frame_a, frame_b, kwargs):
@@ -196,6 +195,6 @@ def gpu_func(frame_a, frame_b, kwargs):
     # GPU process
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        x, y, u, v, _, _ = gpu_process.gpu_piv_def(frame_a, frame_b, **kwargs)
+        x, y, u, v, mask, s2n = gpu_process.gpu_piv_def(frame_a, frame_b, **kwargs)
 
-    return x, y, u, v
+    return x, y, u, v, mask, s2n

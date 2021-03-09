@@ -698,7 +698,7 @@ def gpu_piv_def(frame_a,
                 validation_method='median_velocity',
                 trust_1st_iter=True,
                 **kwargs):
-    """Implementation of the WiDIM algorithm (Window Displacement Iterative Method).
+    """Implementation of the WiDIM algorithm (Window Displacement Iterative Method) with window deformation.
 
     This is an iterative  method to cope with  the lost of pairs due to particles
     motion and get rid of the limitation in velocity range due to the window size.
@@ -715,6 +715,8 @@ def gpu_piv_def(frame_a,
 
     WiDIM described in
     Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset. Exp Fluids 26:513–523
+    Deformation descrbed in
+    Meunier, P., & Leweke, T. (2003). Analysis and treatment of errors due to high velocity gradients in particle image velocimetry. Experiments in fluids, 35(5), 408-421.
 
     Parameters
     ----------
@@ -814,7 +816,9 @@ def gpu_piv_def(frame_a,
     if 'median_velocity' in val_methods:
         val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
 
+    # other parameters
     smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
+    sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
     # Initialize skcuda miscellaneous library
     cu_misc.init()
@@ -974,10 +978,6 @@ def gpu_piv_def(frame_a,
                 else:
                     gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
 
-                    # DEBUG
-                    # np.save('cpu_strain', d_strain_arg.get())
-                    # np.save('gpu_strain', d_strain_arg.get())
-
         # Get correlation function
         c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
@@ -991,7 +991,7 @@ def gpu_piv_def(frame_a,
         assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
         # Get signal to noise ratio
-        # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
+        sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
 
         # update the field with new values
         gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)

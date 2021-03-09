@@ -1,15 +1,17 @@
-test the masking
+test the masking - complete first week of March
 
-retain s2n output option
+retain s2n output option - complete first week of March
     debug it to ensure it works
 
-complete the Jupyter notebook tutorial
+complete the Jupyter notebook tutorial - complete first week of March
 
-memory optimizations
+memory optimizations - complete in March
     reuse same arrays as previous iterations
         write an outside class to store the common GPU data
-    define empty arrays on the GPU directly instead of sending to GPU from numpy by gpuarray.to_gpu
+    define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
         profile this
+
+push to mother repository - complete in March
 
 profile for the slowest parts of the code
 
