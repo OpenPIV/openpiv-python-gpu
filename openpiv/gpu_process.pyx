@@ -1845,40 +1845,12 @@ def gpu_gradient(d_strain, d_u, d_v, n_row, n_col, spacing):
     }
     """)
 
-    # # NumPy implementation
-    # u = d_u.get()
-    # v = d_v.get()
-    # strain = np.zeros((4, n_row, n_col), dtype=np.float32)
-    #
-    # # u_x
-    # u_x = np.gradient(u, spacing, axis=1)
-    # u_y = np.gradient(u, spacing, axis=0)
-    # v_x = np.gradient(v, spacing, axis=1)
-    # v_y = np.gradient(v, spacing, axis=0)
-    #
-    # # see if smoothing does anything
-    # strain[0, :, :] = u_x
-    # strain[1, :, :] = u_y
-    # strain[2, :, :] = v_x
-    # strain[3, :, :] = v_y
-    #
-    # d_strain[:] = gpuarray.to_gpu(strain / spacing)
-
     # CUDA kernel implementation
     block_size = 32
     n_blocks = int((n_row * n_col) // 32 + 1)
 
     d_gradient = mod.get_function('gradient')
     d_gradient(d_strain, d_u, d_v, np.float32(spacing), np.int32(n_row), np.int32(n_col), block=(block_size, 1, 1), grid=(n_blocks, 1))
-
-    # # DEBUG
-    # gradient = d_strain.get()
-    # np.save('gradient_dump', gradient)  # delete
-    # np.save('strain_dump', strain)
-    # np.save('u_dump', d_u.get())
-    # np.save('u_diff', gradient - strain)
-
-    # check differences between these implementations
 
 
 def gpu_floor(d_src, retain_input=False):
