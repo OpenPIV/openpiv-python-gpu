@@ -508,22 +508,25 @@ class CorrelationFunction:
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
 
-        tmp_len = np.asarray((range(self.batch_size)))
         cdef Py_ssize_t i
         cdef Py_ssize_t j
+
+        # print(np.mean(self.p_row), np.mean(self.p_col))
+        # print(self.nfft)
 
         # set (width x width) square submatrix around the first correlation peak as masked
         for i in range(-width, width + 1):
             for j in range(-width, width + 1):
-                # try:
                 row_idx = self.p_row + i
                 col_idx = self.p_col + j
-                idx = (row_idx >= 0) & (row_idx < self.window_size) & (col_idx >= 0) & (col_idx < self.window_size)
+                idx = (row_idx >= 0) & (row_idx < self.nfft) & (col_idx >= 0) & (col_idx < self.nfft)
                 tmp[idx, row_idx[idx], col_idx[idx]] = ma.masked
-                # except IndexError:
-                #     print('########## mask index error! ##########')
+                # print(i, j, sum(idx), sum(row_idx >= 0), sum(row_idx <self.nfft), sum(col_idx >= 0), sum(col_idx < self.nfft))
+
+                # tmp[range(self.batch_size), row_idx, col_idx] = ma.masked
 
         row2, col2, corr_max2 = self._find_peak(tmp)
+        # print(np.mean(self.p_row - row2))
 
         return corr_max2
 
@@ -631,8 +634,7 @@ class CorrelationFunction:
 
         # if the first peak is on the borders, the correlation map is wrong
         # return zero, since we have no signal.
-        sig2noise[np.array(self.p_row == 0) * np.array(self.p_row == self.data.shape[1])
-                  * np.array(self.p_col == 0) * np.array(self.p_col == self.data.shape[2])] = 0.0
+        sig2noise[np.array(self.p_row == 0) * np.array(self.p_row == self.data.shape[1]) * np.array(self.p_col == 0) * np.array(self.p_col == self.data.shape[2])] = 0.0
 
         return sig2noise.reshape(self.n_rows, self.n_cols)
 
