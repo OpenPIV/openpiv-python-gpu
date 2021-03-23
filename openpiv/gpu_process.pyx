@@ -817,7 +817,7 @@ def gpu_piv_def(frame_a,
         val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
 
     # other parameters
-    smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
+    smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
     sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
     # Initialize skcuda miscellaneous library
