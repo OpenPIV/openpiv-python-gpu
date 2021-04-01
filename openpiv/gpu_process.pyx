@@ -874,44 +874,6 @@ def gpu_piv_def(frame_a,
     cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
     cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
 
-    # #### GPU arrays ####
-    # # define the main array f that contains all the data
-    # cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
-    #
-    # # initialize x and y values
-    # cdef float diff
-    # for K in range(nb_iter_max):
-    #     f[K, 0, :, 0] = w[K] / 2  # init x on first row
-    #     f[K, :, 0, 1] = w[K] / 2  # init y on first column
-    #     diff = w[K] - overlap[K]
-    #     for I in range(1, n_row[K]):
-    #         f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
-    #     for J in range(1, n_col[K]):
-    #         f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
-    #
-    # # initialize mask
-    # mask_b = np.ones((ht, wd))
-    # if mask is not None:
-    #     mask_b = mask
-    #
-    # cdef DTYPEb_t [:, :] mask_view = mask_b.astype(np.uint8)
-    # cdef Py_ssize_t x_idx
-    # cdef Py_ssize_t y_idx
-    #
-    # if mask is not None:
-    #     assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
-    #     for K in range(nb_iter_max):
-    #         for I in range(0, n_row[K]):
-    #             for J in range(0, n_col[K]):
-    #                 x_idx = int(f[K, I, J, 0])
-    #                 y_idx = int(f[K, I, J, 1])
-    #                 f[K, I, J, 6] = mask_view[x_idx, y_idx]
-    # else:
-    #     f[:, :, :, 6] = 1
-
-    ##########################################
-    # code here can go into the gpu_init()
-
     # GPU ARRAYS
     # define the main array f that contains all the data
     cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
@@ -919,34 +881,33 @@ def gpu_piv_def(frame_a,
     # initialize x and y values
     cdef float diff
     for K in range(nb_iter_max):
+        diff = w[K] - overlap[K]
+        # f[K, :, :, 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32),
+        #             (n_col[K], 1))  # init x on rows
+        # f[K, :, :, 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32),
+        #     (n_row[K], 1))  # init x on rows
+
         f[K, 0, :, 0] = w[K] / 2  # init x on first row
         f[K, :, 0, 1] = w[K] / 2  # init y on first column
-        diff = w[K] - overlap[K]
 
         for I in range(1, n_row[K]):
             f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
         for J in range(1, n_col[K]):
             f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
 
-    # initialize mask
-    mask_b = np.ones((ht, wd))
-    if mask is not None:
-        mask_b = mask
-
-    cdef DTYPEb_t[:, :] mask_view
-    cdef Py_ssize_t x_idx
-    cdef Py_ssize_t y_idx
+    cdef DTYPEi_t[:, :] x_idx
+    cdef DTYPEi_t[:, :] y_idx
 
     if mask is not None:
         assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
+
         for K in range(nb_iter_max):
-            x_idx1 = f[K, :, :, 0].astype(DTYPEi)
-            y_idx1 = f[K, :, :, 1].astype(DTYPEi)
-            mask_view = mask_b[y_idx1, x_idx1]
-            f[K, :, :, 6] = mask_view
+            x_idx = f[K, :, :, 1].astype(DTYPEi)
+            y_idx = f[K, :, :, 0].astype(DTYPEi)
+            f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
 
     else:
-        f[:, :, :, 6] = 1
+        f[:, :, :, 6] = 1  # maybe this can be skipped by initializing F to 1
     ###########################################
 
     # Move f to the GPU for the whole calculation
@@ -1040,15 +1001,11 @@ def gpu_piv_def(frame_a,
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
                 gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
                 if smoothing:
-                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par)  # check if .copy() is needed
-                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par)
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par, retain_input=True)  # check if .copy() is needed
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par, retain_input=True)
 
             else:
                 if smoothing:
-                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2].copy(), s=smoothing_par)  # delete
-                    # d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3].copy(), s=smoothing_par)
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2], s=smoothing_par, retain_input=True)
                     d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3], s=smoothing_par, retain_input=True)
                 else:
@@ -1065,11 +1022,12 @@ def gpu_piv_def(frame_a,
     f = d_f.get()
 
     # assemble the u, v and x, y fields for outputs
-    k = nb_iter_max - 1
-    x = f[k, :, :, 1]
-    y = f[k, ::-1, :, 0]
-    u = f[k, :, :, 2] / dt
-    v = -f[k, :, :, 3] / dt
+    k_f = nb_iter_max - 1
+    x = f[k_f, :, :, 1]
+    y = f[k_f, ::-1, :, 0]
+    u = f[k_f, :, :, 2] / dt
+    v = -f[k_f, :, :, 3] / dt
+    mask = f[k_f, :, :, 6]
 
     print("[DONE]\n")
 
@@ -1395,8 +1353,6 @@ def gpu_update(d_f, i_peak, j_peak, n_row, n_col, dt, k):
         main array in WiDIM algorithm
     i_peak, j_peak : array - 2D float
         correlation function peak at each iteration
-    sig2noise : 3D array
-        signal to noise ratio at each IW at each iteration
     n_row, n_col : int
         number of rows and columns in the current iteration
     dt : float

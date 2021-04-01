@@ -1,10 +1,10 @@
 test the masking - complete first week of March
-
-debug s2n
-
 complete the Jupyter notebook tutorial - complete first week of March
+fix the validation API
 
-memory optimizations - complete in March
+make the coordinate system consistent
+
+memory optimizations - complete in April
     reuse same arrays as previous iterations
         write an outside class to store the common GPU data
     define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
