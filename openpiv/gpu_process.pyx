@@ -881,16 +881,18 @@ def gpu_piv_def(frame_a,
     for K in range(nb_iter_max):
         diff = w[K] - overlap[K]
         # the two lines below are marginally slower (O(1 ms)) than the 6 lines below them
-        # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
-        # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
+        # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
+        # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
 
-        f[K, 0, :, 0] = w[K] / 2  # init x on first row
-        f[K, :, 0, 1] = w[K] / 2  # init y on first column
+        f[K, :, 0, 0] = w[K] / 2  # init x on first column
+        f[K, 0, :, 1] = w[K] / 2  # init y on first row
 
-        for I in range(1, n_row[K]):
-            f[K, I, :, 0] = f[K, I - 1, 0, 0] + diff  # init x on subsequent rows
+        # init x on subsequent columns
         for J in range(1, n_col[K]):
-            f[K, :, J, 1] = f[K, 0, J - 1, 1] + diff  # init y on subsequent columns
+            f[K, :, J, 0] = f[K, 0, J - 1, 0] + diff
+        # init y on subsequent rows
+        for I in range(1, n_row[K]):
+            f[K, I, :, 1] = f[K, I - 1, 0, 1] + diff
 
     cdef DTYPEi_t[:, :] x_idx
     cdef DTYPEi_t[:, :] y_idx
@@ -899,8 +901,8 @@ def gpu_piv_def(frame_a,
         assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
 
         for K in range(nb_iter_max):
-            x_idx = f[K, :, :, 1].astype(DTYPEi)
-            y_idx = f[K, :, :, 0].astype(DTYPEi)
+            x_idx = f[K, :, :, 0].astype(DTYPEi)
+            y_idx = f[K, :, :, 1].astype(DTYPEi)
             f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
 
     # else:  # delete
@@ -1019,8 +1021,8 @@ def gpu_piv_def(frame_a,
 
     # assemble the u, v and x, y fields for outputs
     k_f = nb_iter_max - 1
-    x = f[k_f, :, :, 1]
-    y = f[k_f, ::-1, :, 0]
+    x = f[k_f, :, :, 0]
+    y = f[k_f, ::-1, :, 1]
     u = f[k_f, :, :, 2] / dt
     v = -f[k_f, :, :, 3] / dt
     mask = f[k_f, :, :, 6]
