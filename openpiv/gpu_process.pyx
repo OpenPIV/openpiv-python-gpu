@@ -814,7 +814,7 @@ def gpu_piv_def(frame_a,
     ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
 
     # validation method
-    val_tols = [0, 0, 0, 0]
+    val_tols = [None, None, None, None]
     val_methods = validation_method if type(validation_method) == str else (validation_method,)
     if 'median_velocity' in val_methods:
         val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
