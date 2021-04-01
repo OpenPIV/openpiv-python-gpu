@@ -23,7 +23,7 @@ ctypedef np.int32_t DTYPEi_t
 DTYPEb = np.uint8
 ctypedef np.uint8_t DTYPEb_t
 
-#GPU can only hold 32 bit numbers
+# GPU can only hold 32 bit numbers
 DTYPEf = np.float32
 ctypedef np.float32_t DTYPEf_t
 
@@ -800,9 +800,7 @@ def gpu_piv_def(frame_a,
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
 
     """
-    ####################################################
     # INITIALIZATIONS
-    ####################################################
     # input checks
     ht, wd = frame_a.shape
     dt = np.float32(dt)
@@ -876,7 +874,7 @@ def gpu_piv_def(frame_a,
 
     # GPU ARRAYS
     # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
+    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.ones([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
 
     # initialize x and y values
     cdef float diff
@@ -905,9 +903,8 @@ def gpu_piv_def(frame_a,
             y_idx = f[K, :, :, 0].astype(DTYPEi)
             f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
 
-    else:
-        f[:, :, :, 6] = 1  # maybe this can be skipped by initializing F to 1
-    ###########################################
+    # else:  # delete
+    #     f[:, :, :, 6] = 1  # maybe this can be skipped by initializing F to 1
 
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
