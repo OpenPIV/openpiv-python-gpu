@@ -733,16 +733,16 @@ def gpu_piv_def(frame_a,
         the ratio of overlap between two windows (between 0 and 1).
     dt : float
         Time delay separating the two frames.
-    mask : array, 2D dtype=np.int32
-        Two-dimensional array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+    mask : ndarray
+        2D, dtype=np.int32. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
     smoothing : bool
         Whether to smooth the intermediate fields.
     nb_validation_iter : int
         Number of iterations per validation cycle.
-    validation_method : tuple or str
-        method used for validation (in addition to the sig2noise method). Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
+    validation_method : {tuple, 'median_velocity'}
+        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
     trust_1st_iter : bool
         With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
 
@@ -817,7 +817,7 @@ def gpu_piv_def(frame_a,
     val_tols = [0, 0, 0, 0]
     val_methods = validation_method if type(validation_method) == str else (validation_method,)
     if 'median_velocity' in val_methods:
-        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
+        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
 
     # other parameters
     smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
@@ -882,10 +882,9 @@ def gpu_piv_def(frame_a,
     cdef float diff
     for K in range(nb_iter_max):
         diff = w[K] - overlap[K]
-        # f[K, :, :, 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32),
-        #             (n_col[K], 1))  # init x on rows
-        # f[K, :, :, 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32),
-        #     (n_row[K], 1))  # init x on rows
+        # the two lines below are marginally slower (O(1 ms)) than the 6 lines below them
+        # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
+        # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
 
         f[K, 0, :, 0] = w[K] / 2  # init x on first row
         f[K, :, 0, 1] = w[K] / 2  # init y on first column

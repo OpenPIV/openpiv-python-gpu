@@ -119,11 +119,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     d_val_list = gpuarray.to_gpu(val_list)
 
     # cast inputs to appropriate data types
-    sig2noise = sig2noise.astype(np.float32)
-    s2n_tol = np.float32(s2n_tol)
-    median_tol = np.float32(median_tol)
-    mean_tol = np.float32(mean_tol)
-    div_tol = np.float32(div_tol)
     n_row = np.int32(n_row)
     n_col = np.int32(n_col)
     w = np.float32(w)
@@ -132,7 +127,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     block_size = 32
     x_blocks = int(n_col * n_row / block_size + 1)
 
-    # TODO correct the coordinate system
     # send velocity field to GPU
     d_u = d_f[k, 0:n_row, 0:n_col, 2].copy()
     d_v = d_f[k, 0:n_row, 0:n_col, 3].copy()
@@ -146,10 +140,9 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     ######################
     # sig2noise validation
     ######################
-
-    # # move data to the gpu
-    # if s2n_tol > 0:
-    #     assert True,'sig2noise validation code reached!'
+    # if s2n_tol is not None:
+    #     sig2noise = sig2noise.astype(np.float32)
+    #     s2n_tol = np.float32(s2n_tol)
     #     d_sig2noise = gpuarray.to_gpu(sig2noise)
     #
     #     # Launch signal to noise kernel and free sig2noise data
@@ -164,7 +157,9 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     # median_velocity validation
     ############################
 
-    if median_tol > 0:
+    if median_tol is not None:
+        median_tol = np.float32(median_tol)
+
         # get rms data and mean velocity data.
         d_u_median, d_v_median = gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col)
         d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
@@ -183,24 +178,27 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     # mean_velocity validation
     ##########################
 
-    if mean_tol > 0:
-        # get rms data and mean velocity data.
-        # d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col)
-        d_u_rms, d_v_rms = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
-
-        mean_validation = mod_validation.get_function("mean_validation")
-        mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-        # Free gpu memory
-        d_u_rms.gpudata.free()
-        d_v_rms.gpudata.free()
-        # del d_u_rms, d_v_rms
+    # if mean_tol is not None:
+    #     mean_tol = np.float32(mean_tol)
+    #
+    #     # get rms data and mean velocity data.
+    #     d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, n_row, n_col)
+    #     d_u_rms, d_v_rms = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
+    #
+    #     mean_validation = mod_validation.get_function("mean_validation")
+    #     mean_validation(d_val_list, d_u_rms, d_v_rms, d_u_mean, d_v_mean, d_u, d_v, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    #
+    #     # Free gpu memory
+    #     d_u_rms.gpudata.free()
+    #     d_v_rms.gpudata.free()
+    #     # del d_u_rms, d_v_rms
 
     #######################
     # divergence validation
     #######################
 
-    # if div_tol > 0:
+    # if div_tol is not None:
+    #     div_tol = np.float32(div_tol)
     #     assert True, 'divergence validation code reached!'
     #     d_div, d_u, d_v = gpu_divergence(d_u, d_v, w, n_row, n_col)
     #
