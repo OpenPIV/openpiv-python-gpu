@@ -905,9 +905,6 @@ def gpu_piv_def(frame_a,
             y_idx = f[K, :, :, 1].astype(DTYPEi)
             f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
 
-    # else:  # delete
-    #     f[:, :, :, 6] = 1  # maybe this can be skipped by initializing F to 1
-
     # Move f to the GPU for the whole calculation
     d_f = gpuarray.to_gpu(f)
 
