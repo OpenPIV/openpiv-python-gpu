@@ -1,12 +1,12 @@
-complete the Jupyter notebook tutorial - complete first week of March
-
-make the coordinate system consistent
-
 memory optimizations - complete in April
     reuse same arrays as previous iterations
         write an outside class to store the common GPU data
     define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
         profile this
+
+update cython style
+
+complete the Jupyter notebook tutorial - complete first week of March
 
 push to mother repository - complete in March
 
@@ -15,3 +15,5 @@ profile for the slowest parts of the code
 fix edge treatment to have less errors
     validation of edges
 Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
+
+reduce the number of temporary gpus arrays created

@@ -672,24 +672,7 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
-def gpu_init(window_size_iters=(1, 2),
-                min_window_size=16,
-                overlap_ratio=0.5,
-                dt=1,
-                mask=None,
-                deform=True,
-                smoothing=True,
-                nb_validation_iter=1,
-                validation_method='median_velocity',
-                trust_1st_iter=True,
-                **kwargs):
-    """Initializes the arrays used in the GPU code so that large batches can be completed faster."""
-
-    return
-
-
-def gpu_piv_def(frame_a,
-                frame_b,
+def gpu_piv_def(frame_a, frame_b,
                 window_size_iters=(1, 2),
                 min_window_size=16,
                 overlap_ratio=0.5,
@@ -800,240 +783,368 @@ def gpu_piv_def(frame_a,
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
 
     """
-    # INITIALIZATIONS
-    # input checks
-    ht, wd = frame_a.shape
-    dt = np.float32(dt)
-    ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
-    nb_iter_max = sum(ws_iters)
-    num_ws = len(ws_iters)
+    piv_gpu = PIVGPU(window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smoothing, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
+    return piv_gpu(frame_a, frame_b)
 
-    # windows sizes
-    ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
 
-    # validation method
-    val_tols = [None, None, None, None]
-    val_methods = validation_method if type(validation_method) == str else (validation_method,)
-    if 'median_velocity' in val_methods:
-        val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
 
-    # other parameters
-    smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
-    sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
+class PIVGPU:
+    """This class is the object-oriented implementation of the GPU PIV function.
 
-    # Initialize skcuda miscellaneous library
-    cu_misc.init()
+    Parameters
+    ----------
+    frame_shape : tuple
+        (ht, wd) of the image series
+    window_size_iters : tuple or int
+        Number of iterations performed at each window size
+    min_window_size : tuple or int
+        Length of the sides of the square deformation. Only support multiples of 8.
+    overlap_ratio : float
+        the ratio of overlap between two windows (between 0 and 1).
+    dt : float
+        Time delay separating the two frames.
+    mask : ndarray
+        2D, dtype=np.int32. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+    deform : bool
+        Whether to deform the windows by the velocity gradient at each iteration.
+    smoothing : bool
+        Whether to smooth the intermediate fields.
+    nb_validation_iter : int
+        Number of iterations per validation cycle.
+    validation_method : {tuple, 'median_velocity'}
+        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
+    trust_1st_iter : bool
+        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
 
-    # cast images as floats
-    cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
-    cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
+    Other Parameters
+    ----------------
+    median_tol : int
+        Tolerance of the median validation.
+    subpixel_method : string
+         one of the following methods to estimate subpixel location of the peak:
+         'centroid' [replaces default if correlation map is negative],
+         'gaussian' [default if correlation map is positive],
+         'parabolic'.
+    sig2noise_method : string
+        defines the method of signal-to-noise-ratio measure,
+        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
+    width : int
+        the half size of the region around the first
+        correlation peak to ignore for finding the second
+        peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
 
-    # Send images to the gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a_f)
-    d_frame_b_f = gpuarray.to_gpu(frame_b_f)
+    Methods
+    -------
+    __call__ :
+        main method to process image pairs
 
-    cdef Py_ssize_t K # main iteration index
-    cdef Py_ssize_t I, J  # interrogation locations indices
-    cdef Py_ssize_t i, j  # indices for various works
-    cdef float mean_u, mean_v, rms_u, rms_v, residual_0, div
-    cdef int residual, nb_w_ind
-    cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=1] w = np.asarray(ws, dtype=DTYPEi)
-    cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
+    """
+    def __init__(self,
+                frame_shape,
+                window_size_iters=(1, 2),
+                min_window_size=16,
+                overlap_ratio=0.5,
+                dt=1,
+                mask=None,
+                deform=True,
+                smoothing=True,
+                nb_validation_iter=1,
+                validation_method='median_velocity',
+                trust_1st_iter=True,
+                **kwargs):
+        # input checks
+        ht, wd = frame_shape
+        dt = np.float32(dt)
+        ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
+        num_ws = len(ws_iters)
 
-    # overlap init
-    for K in range(nb_iter_max):
-        overlap[K] = int(np.floor(overlap_ratio * w[K]))
+        self.dt = dt
+        self.deform = deform
+        self.smoothing = smoothing
+        self.nb_iter_max = nb_iter_max = sum(ws_iters)
+        self.nb_validation_iter = nb_validation_iter
+        self.trust_1st_iter = trust_1st_iter
 
-    # n_col and n_row init
-    for K in range(nb_iter_max):
-        n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
-        n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
+        # windows sizes
+        ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
 
-    # define u, v & x, y fields (only used as outputs of this program)
-    cdef np.ndarray[DTYPEf_t, ndim=2] u = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] v = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] x = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] y = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        # validation method
+        self.val_tols = [None, None, None, None]
+        val_methods = validation_method if type(validation_method) == str else (validation_method,)
+        if 'median_velocity' in val_methods:
+            self.val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
 
-    # define temporary arrays and reshaped arrays to store the correlation function output
-    cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        # other parameters
+        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
+        self.sig2noise_methodd = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
-    # define arrays for signal to noise ratio
-    cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
+        cdef Py_ssize_t K  # main iteration index
+        cdef Py_ssize_t I, J  # interrogation locations indices
+        cdef float diff
+        cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
+        cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
+        cdef np.ndarray[DTYPEi_t, ndim=1] w = np.asarray(ws, dtype=DTYPEi)
+        cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
 
-    # define arrays used for the validation process
-    # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
-    cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-    cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
-    cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
+        # overlap init
+        for K in range(nb_iter_max):
+            overlap[K] = int(np.floor(overlap_ratio * w[K]))
 
-    # GPU ARRAYS
-    # define the main array f that contains all the data
-    cdef np.ndarray[DTYPEf_t, ndim=4] f = np.ones([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
+        # n_col and n_row init
+        for K in range(nb_iter_max):
+            n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
+            n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
 
-    # initialize x and y values
-    cdef float diff
-    for K in range(nb_iter_max):
-        diff = w[K] - overlap[K]
-        # the two lines below are marginally slower (O(1 ms)) than the 6 lines below them
-        # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
-        # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
+        self.n_row = n_row
+        self.n_col = n_col
+        self.w = w
+        self.overlap = overlap
 
-        f[K, :, 0, 0] = w[K] / 2  # init x on first column
-        f[K, 0, :, 1] = w[K] / 2  # init y on first row
+        # # define temporary arrays and reshaped arrays to store the correlation function output
+        # cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+        # cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+        # cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        # cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
-        # init x on subsequent columns
-        for J in range(1, n_col[K]):
-            f[K, :, J, 0] = f[K, 0, J - 1, 0] + diff
-        # init y on subsequent rows
-        for I in range(1, n_row[K]):
-            f[K, I, :, 1] = f[K, I - 1, 0, 1] + diff
+        self.i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+        self.j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+        self.i_peak = i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        self.j_peak = j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
-    cdef DTYPEi_t[:, :] x_idx
-    cdef DTYPEi_t[:, :] y_idx
+        # define arrays for signal to noise ratio
+        # cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
 
-    if mask is not None:
-        assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
+        self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
+
+        # define arrays used for the validation process
+        # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
+        cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+        cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
+        cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
+
+        # GPU ARRAYS
+        # define the main array f that contains all the data
+        cdef np.ndarray[DTYPEf_t, ndim=4] f = np.ones([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
+
+        # initialize x and y values
+        for K in range(nb_iter_max):
+            diff = w[K] - overlap[K]
+            # the two lines below are marginally slower (O(1 ms)) than the 6 lines below them
+            # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
+            # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
+
+            f[K, :, 0, 0] = w[K] / 2  # init x on first column
+            f[K, 0, :, 1] = w[K] / 2  # init y on first row
+
+            # init x on subsequent columns
+            for J in range(1, n_col[K]):
+                f[K, :, J, 0] = f[K, 0, J - 1, 0] + diff
+            # init y on subsequent rows
+            for I in range(1, n_row[K]):
+                f[K, I, :, 1] = f[K, I - 1, 0, 1] + diff
+
+        cdef DTYPEi_t[:, :] x_idx
+        cdef DTYPEi_t[:, :] y_idx
+
+        if mask is not None:
+            assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
+
+            for K in range(nb_iter_max):
+                x_idx = f[K, :, :, 0].astype(DTYPEi)
+                y_idx = f[K, :, :, 1].astype(DTYPEi)
+                f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
+
+        # Initialize skcuda miscellaneous library
+        cu_misc.init()
+
+        # Move f to the GPU for the whole calculation
+        self.d_f = gpuarray.to_gpu(f)
+
+        # define arrays to store the displacement vector
+        self.d_shift = gpuarray.zeros([2, n_row[-1], n_col[-1]], dtype=DTYPEf)
+        self.d_strain = gpuarray.zeros([4, n_row[-1], n_col[-1]], dtype=DTYPEf)
+
+        # define arrays to store all the mean velocity at each point in each iteration
+        self.d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
+        self.d_v_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
+
+    def __call__(self, frame_a, frame_b):
+        """Processes an image pair.
+
+        Parameters
+        ----------
+        frame_a, frame_b : array, 2D dtype=np.float32
+
+        Returns
+        -------
+        x : array
+            2D, the x-axis component of the interpolation locations, in pixels-lengths starting from 0 at left edge.
+        y : array
+            2D, the y-axis component of the interpolation locations, in pixels starting from 0 at bottom edge.
+        u : array
+            2D, the u velocity component, in pixels/seconds.
+        v : array
+            2D, the v velocity component, in pixels/seconds.
+        mask : array
+            2D, a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
+
+        """
+        # recover class variables
+        dt = self.dt
+        deform = self.deform
+        smoothing = self.smoothing
+        nb_iter_max = self.nb_iter_max
+        nb_validation_iter = self.nb_validation_iter
+        trust_1st_iter = self.trust_1st_iter
+        val_tols = self.val_tols
+        smoothing_par = self.smoothing_par
+        sig2noise_method = self.sig2noise_method
+        d_f =  self.d_f
+        d_shift = self.d_shift
+        d_strain = self.d_strain
+        d_u_mean = self.d_u_mean
+        d_v_mean = self.d_v_mean
+
+        # type declarations
+        cdef Py_ssize_t K  # main iteration index
+        cdef Py_ssize_t i, j  # indices for various works
+        cdef int n_val, residual
+        cdef np.ndarray[DTYPEi_t, ndim=1] n_row = self.n_row
+        cdef np.ndarray[DTYPEi_t, ndim=1] n_col = self.n_col
+        cdef np.ndarray[DTYPEi_t, ndim=1] w = self.w
+        cdef np.ndarray[DTYPEi_t, ndim=1] overlap = self.overlap
+        cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = self.i_tmp
+        cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = self.j_tmp
+        cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = self.i_peak
+        cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = self.j_peak
+        cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = self.sig2noise
+
+        # cast images as floats
+        cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
+        cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
+
+        # Send images to the gpu
+        d_frame_a_f = gpuarray.to_gpu(frame_a_f)
+        d_frame_b_f = gpuarray.to_gpu(frame_b_f)
 
         for K in range(nb_iter_max):
-            x_idx = f[K, :, :, 0].astype(DTYPEi)
-            y_idx = f[K, :, :, 1].astype(DTYPEi)
-            f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
+            print("//////////////////////////////////////////////////////////////////")
+            print("ITERATION {}".format(K))
 
-    # Move f to the GPU for the whole calculation
-    d_f = gpuarray.to_gpu(f)
+            d_shift_arg = None
+            d_strain_arg = None
+            if K > 0:
+                # Calculate second frame displacement (shift)
+                d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
+                d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
+                d_shift_arg = d_shift[:, :n_row[K], :n_col[K]]
 
-    # define arrays to store the displacement vector
-    d_shift = gpuarray.zeros([2, n_row[-1], n_col[-1]], dtype=DTYPEf)
-    d_strain = gpuarray.zeros([4, n_row[-1], n_col[-1]], dtype=DTYPEf)
+                # calculate the strain rate tensor
+                if deform:
+                    d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
+                    if w[K] != w[K - 1]:
+                        gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
+                    else:
+                        gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
 
-    # define arrays to store all the mean velocity at each point in each iteration
-    d_u_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
-    d_v_mean = gpuarray.zeros([nb_iter_max, n_row[-1], n_col[-1]], dtype=DTYPEf)
+            # Get correlation function
+            c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
-    # MAIN LOOP
-    for K in range(nb_iter_max):
+            # Get window displacement to subpixel accuracy
+            i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
+
+            # reshape the peaks
+            i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+            j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+            assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
+            assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
+
+            # Get signal to noise ratio
+            sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
+
+            # update the field with new values
+            gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+
+            # normalize the residual by the maximum quantization error of 0.5 pixel
+            try:
+                residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
+                print("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
+            except OverflowError:
+                print('[DONE]--Overflow in residuals.\n')
+
+            # VALIDATION
+            if K == 0 and trust_1st_iter:
+                print('No validation--trusting 1st iteration.')
+
+            for i in range(nb_validation_iter):
+                print('Validation iteration {}:'.format(i))
+
+                # reset validation list
+                validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+
+                # get list of places that need to be validated
+                validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
+
+                # do the validation
+                n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
+                if n_val > 0:
+                    print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
+                    gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+                else:
+                    print('No invalid vectors!')
+
+                print("[DONE]\n")
+
+            # NEXT ITERATION
+            # go to next iteration: compute the predictors dpx and dpy from the current displacements
+            if K < nb_iter_max - 1:
+                # interpolate if dimensions do not agree
+                if w[K + 1] != w[K]:
+                    v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
+
+                    # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
+                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
+                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
+                    if smoothing:
+                        d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par, retain_input=True)  # check if .copy() is needed
+                        d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par, retain_input=True)
+
+                else:
+                    if smoothing:
+                        d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2], s=smoothing_par, retain_input=True)
+                        d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3], s=smoothing_par, retain_input=True)
+                    else:
+                        d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
+                        d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
+
+                print("[DONE] -----> going to iteration {}.\n".format(K + 1))
+
+        # RETURN RESULTS
         print("//////////////////////////////////////////////////////////////////")
-        print("ITERATION {}".format(K))
+        print("End of iterative process. Rearranging vector fields.")
 
-        d_shift_arg = None
-        d_strain_arg = None
-        if K > 0:
-            # Calculate second frame displacement (shift)
-            d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
-            d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
-            d_shift_arg = d_shift[:, :n_row[K], :n_col[K]]
+        f = d_f.get()
 
-            # calculate the strain rate tensor
-            if deform:
-                d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
-                if w[K] != w[K - 1]:
-                    gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
-                else:
-                    gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
+        # assemble the u, v and x, y fields for outputs
+        k_f = nb_iter_max - 1
+        x = f[k_f, :, :, 0]
+        y = f[k_f, ::-1, :, 1]
+        u = f[k_f, :, :, 2] / dt
+        v = -f[k_f, :, :, 3] / dt
+        mask = f[k_f, :, :, 6]
 
-        # Get correlation function
-        c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
+        print("[DONE]\n")
 
-        # Get window displacement to subpixel accuracy
-        i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
+        # # delete images from gpu memory
+        d_frame_a_f.gpudata.free()
+        d_frame_b_f.gpudata.free()
+        # d_f.gpudata.free()
+        # d_shift.gpudata.free()
+        # d_strain.gpudata.free()
+        # d_u_mean.gpudata.free()
+        # d_v_mean.gpudata.free()
 
-        # reshape the peaks
-        i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
-        j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
-        assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
-        assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
-
-        # Get signal to noise ratio
-        sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
-
-        # update the field with new values
-        gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
-
-        # normalize the residual by the maximum quantization error of 0.5 pixel
-        try:
-            residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
-            print("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
-        except OverflowError:
-            print('[DONE]--Overflow in residuals.\n')
-
-        # VALIDATION
-        if K == 0 and trust_1st_iter:
-            print('No validation--trusting 1st iteration.')
-
-        for i in range(nb_validation_iter):
-            print('Validation iteration {}:'.format(i))
-
-            # reset validation list
-            validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-
-            # get list of places that need to be validated
-            validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
-
-            # do the validation
-            n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
-            if n_val > 0:
-                print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
-                gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
-            else:
-                print('No invalid vectors!')
-
-            print("[DONE]\n")
-
-        # NEXT ITERATION
-        # go to next iteration: compute the predictors dpx and dpy from the current displacements
-        if K < nb_iter_max - 1:
-            # interpolate if dimensions do not agree
-            if w[K + 1] != w[K]:
-                v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
-
-                # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
-                gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
-                gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
-                if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par, retain_input=True)  # check if .copy() is needed
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par, retain_input=True)
-
-            else:
-                if smoothing:
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 2], s=smoothing_par, retain_input=True)
-                    d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K, :n_row[K], :n_col[K], 3], s=smoothing_par, retain_input=True)
-                else:
-                    d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
-                    d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
-
-
-            print("[DONE] -----> going to iteration {}.\n".format(K + 1))
-
-    # RETURN RESULTS
-    print("//////////////////////////////////////////////////////////////////")
-    print("End of iterative process. Rearranging vector fields.")
-
-    f = d_f.get()
-
-    # assemble the u, v and x, y fields for outputs
-    k_f = nb_iter_max - 1
-    x = f[k_f, :, :, 0]
-    y = f[k_f, ::-1, :, 1]
-    u = f[k_f, :, :, 2] / dt
-    v = -f[k_f, :, :, 3] / dt
-    mask = f[k_f, :, :, 6]
-
-    print("[DONE]\n")
-
-    # delete images from gpu memory
-    d_frame_a_f.gpudata.free()
-    d_frame_b_f.gpudata.free()
-    d_f.gpudata.free()
-    d_shift.gpudata.free()
-
-    # end(start_time)
-    return x, y, u, v, mask, sig2noise
+        return x, y, u, v, mask, sig2noise
 
 
 def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
