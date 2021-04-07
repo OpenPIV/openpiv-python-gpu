@@ -920,7 +920,7 @@ class PIVGPU:
         # define arrays used for the validation process
         # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated  # delete
         # cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-        self.validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+        self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
         # GPU ARRAYS
         # define the main array f that contains all the data
@@ -1023,7 +1023,7 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] i_peak = self.i_peak
         cdef DTYPEf_t[:, :] j_peak = self.j_peak
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
-        # cdef DTYPEi_t[:, :] validation_list = self.validation_list
+        cdef DTYPEi_t[:, :] val_list = self.val_list
 
         # # cast images as floats  # delete
         # cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
@@ -1068,16 +1068,18 @@ class PIVGPU:
             # reshape the peaks
             # i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
             # j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
-            i_peak[:n_row[K], :n_col[K]] = np.reshape(sp_i, (n_row[K], n_col[K]))
-            j_peak[:n_row[K], :n_col[K]] = np.reshape(sp_j, (n_row[K], n_col[K]))
+            self.i_peak[:n_row[K], :n_col[K]] = np.reshape(sp_i, (n_row[K], n_col[K]))
+            self.j_peak[:n_row[K], :n_col[K]] = np.reshape(sp_j, (n_row[K], n_col[K]))
             assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
             assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
             # Get signal to noise ratio
-            sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
+            # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
+            self.sig2noise = c.sig2noise_ratio(method=sig2noise_method)
 
             # update the field with new values
-            gpu_update(d_f, i_peak[:n_row[K], :n_col[K]], j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+            # gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+            gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
             try:
@@ -1098,15 +1100,15 @@ class PIVGPU:
 
                 # get list of places that need to be validated
                 # validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
-                val_list, d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
+                self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
 
                 # do the validation
                 # n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
-                n_val = n_row[K] * n_col[K] - np.sum(val_list)
+                n_val = n_row[K] * n_col[K] - np.sum(val_list[:n_row[K], :n_col[K]])
                 if n_val > 0:
                     print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
                     # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
-                    gpu_replace_vectors(d_f, val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+                    gpu_replace_vectors(d_f, self.val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
                 else:
                     print('No invalid vectors!')
 
@@ -1549,14 +1551,14 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
         one that the code is in now. (1st index for F).
     side : string
         the axis of interest : can be either 'x_axis' or 'y_axis'
-    d_pos_index : GPUArray - 1D int
-        index of the point in the frame you want to validate (along the axis 'side').
-    w : 1D array - int
-        array of window sizes
-    overlap : array - 1D int
-        overlap in number of pixels
-    n_row, n_col : array - 1D
-        number of rows and columns in the F dataset in each iteration
+    d_pos_index : GPUArray
+        1D int, index of the point in the frame you want to validate (along the axis 'side').
+    w : ndarray
+        1D int, array of window sizes
+    overlap : ndarray
+        1D int, overlap in number of pixels
+    n_row, n_col : ndarray
+        1D int, number of rows and columns in the F dataset in each iteration
 
     Returns
     -------
@@ -1611,6 +1613,8 @@ def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):
     w_b = np.float32(w[k])
     k = np.int32(k)
     n = np.int32(d_pos_index.size)
+    n_row = np.int32(n_row)
+    n_col = np.int32(n_col)
 
     # define gpu settings
     block_size = 32
