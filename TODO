@@ -4,8 +4,6 @@ memory optimizations - complete in April
     define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
         profile this
 
-update cython style
-
 complete the Jupyter notebook tutorial - complete first week of March
 
 push to mother repository - complete in March

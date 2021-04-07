@@ -731,16 +731,18 @@ def gpu_piv_def(frame_a, frame_b,
 
     Returns
     -------
-    x : array
+    x : ndarray
         2D, the x-axis component of the interpolation locations, in pixels-lengths starting from 0 at left edge.
-    y : array
+    y : ndarray
         2D, the y-axis component of the interpolation locations, in pixels starting from 0 at bottom edge.
-    u : array
+    u : ndarray
         2D, the u velocity component, in pixels/seconds.
-    v : array
+    v : ndarray
         2D, the v velocity component, in pixels/seconds.
-    mask : array
-        2D, a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
+    mask : ndarray
+        2D, the boolean values (True for vectors interpolated from previous iteration).
+    s2n : ndarray
+        2D, the signal to noise ratio of the final velocity field.
 
     Other Parameters
     ----------------
@@ -852,12 +854,15 @@ class PIVGPU:
                 validation_method='median_velocity',
                 trust_1st_iter=True,
                 **kwargs):
+        # type declarations
+        cdef Py_ssize_t K, I, J, nb_iter_max
+        cdef float diff
+
         # input checks
         ht, wd = frame_shape
         dt = np.float32(dt)
         ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
         num_ws = len(ws_iters)
-
         self.dt = dt
         self.deform = deform
         self.smoothing = smoothing
@@ -878,9 +883,7 @@ class PIVGPU:
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
         self.sig2noise_methodd = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
-        cdef Py_ssize_t K  # main iteration index
-        cdef Py_ssize_t I, J  # interrogation locations indices
-        cdef float diff
+        # Cython buffer definitions
         cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
         cdef DTYPEi_t[:] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
         cdef DTYPEi_t[:] w = np.asarray(ws, dtype=DTYPEi)
@@ -895,30 +898,29 @@ class PIVGPU:
             n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
             n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
 
-        self.n_row = n_row
-        self.n_col = n_col
-        self.w = w
-        self.overlap = overlap
+        self.n_row = np.asarray(n_row)
+        self.n_col = np.asarray(n_col)
+        self.w = np.asarray(w)
+        self.overlap = np.asarray(overlap)
 
         # # define temporary arrays and reshaped arrays to store the correlation function output
-        # cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
+        # cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)  # delete
         # cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
         # cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
         # cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-
         self.i_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
         self.j_tmp = np.zeros(n_row[-1] * n_col[-1], dtype=DTYPEf)
-        self.i_peak = i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
-        self.j_peak = j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        self.i_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
+        self.j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPEf)
 
         # define arrays for signal to noise ratio
-        # cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
-
+        # cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)  # delete
         self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
 
         # define arrays used for the validation process
-        # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
-        cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+        # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated  # delete
+        # cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+        self.validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
         # GPU ARRAYS
         # define the main array f that contains all the data
@@ -983,8 +985,10 @@ class PIVGPU:
             2D, the u velocity component, in pixels/seconds.
         v : array
             2D, the v velocity component, in pixels/seconds.
-        mask : array
-            2D, a two dimensional array containing the boolean values (True for vectors interpolated from previous iteration)
+        mask : ndarray
+            2D, the boolean values (True for vectors interpolated from previous iteration).
+        s2n : ndarray
+            2D, the signal to noise ratio of the final velocity field.
 
         """
         # recover class variables
@@ -1006,7 +1010,10 @@ class PIVGPU:
         # type declarations
         cdef Py_ssize_t K  # main iteration index
         cdef Py_ssize_t i, j  # indices for various works
-        cdef int n_val, residual
+        cdef int n_val
+        cdef float residual
+
+        # Cython buffers
         cdef DTYPEi_t[:] n_row = self.n_row
         cdef DTYPEi_t[:] n_col = self.n_col
         cdef DTYPEi_t[:] w = self.w
@@ -1016,6 +1023,7 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] i_peak = self.i_peak
         cdef DTYPEf_t[:, :] j_peak = self.j_peak
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
+        cdef DTYPEf_t[:, :] validation_list = self.validation_list
 
         # cast images as floats
         cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
@@ -1025,6 +1033,7 @@ class PIVGPU:
         d_frame_a_f = gpuarray.to_gpu(frame_a_f)
         d_frame_b_f = gpuarray.to_gpu(frame_b_f)
 
+        # MAIN LOOP
         for K in range(nb_iter_max):
             print("//////////////////////////////////////////////////////////////////")
             print("ITERATION {}".format(K))
@@ -1065,7 +1074,7 @@ class PIVGPU:
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
             try:
-                residual = np.sum(i_peak[:n_row[K], :n_col[K]] ** 2 + j_peak[:n_row[K], :n_col[K]] ** 2)
+                residual = np.sum(np.power(i_peak[:n_row[K], :n_col[K]], 2) + np.power(j_peak[:n_row[K], :n_col[K]], 2))
                 print("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
             except OverflowError:
                 print('[DONE]--Overflow in residuals.\n')
@@ -1077,14 +1086,14 @@ class PIVGPU:
             for i in range(nb_validation_iter):
                 print('Validation iteration {}:'.format(i))
 
-                # reset validation list
-                validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+                # # reset validation list  # delete
+                # validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
                 # get list of places that need to be validated
                 validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
 
                 # do the validation
-                n_val = n_row[-1] * n_col[-1] - np.sum(validation_list)
+                n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
                 if n_val > 0:
                     print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
                     gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
