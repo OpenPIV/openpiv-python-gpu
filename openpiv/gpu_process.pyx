@@ -785,7 +785,7 @@ def gpu_piv_def(frame_a, frame_b,
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
 
     """
-    piv_gpu = PIVGPU(window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smoothing, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
+    piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smoothing, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
     return piv_gpu(frame_a, frame_b)
 
 
@@ -881,7 +881,7 @@ class PIVGPU:
 
         # other parameters
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
-        self.sig2noise_methodd = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
+        self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
         # Cython buffer definitions
         cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
@@ -1023,15 +1023,17 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] i_peak = self.i_peak
         cdef DTYPEf_t[:, :] j_peak = self.j_peak
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
-        cdef DTYPEf_t[:, :] validation_list = self.validation_list
+        # cdef DTYPEi_t[:, :] validation_list = self.validation_list
 
-        # cast images as floats
-        cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
-        cdef DTYPEf_t[:, :] frame_b_f = frame_b.astype(np.float32)
+        # # cast images as floats  # delete
+        # cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
+        # cdef DTYPEf_t[:, :] frame_b_f = frame_b.astype(np.float32)
 
         # Send images to the gpu
-        d_frame_a_f = gpuarray.to_gpu(frame_a_f)
-        d_frame_b_f = gpuarray.to_gpu(frame_b_f)
+        # d_frame_a_f = gpuarray.to_gpu(frame_a_f.astype(np.float32))  # delete
+        # d_frame_b_f = gpuarray.to_gpu(frame_b_f.astype(np.float32))
+        d_frame_a_f = gpuarray.to_gpu(frame_a.astype(np.float32))
+        d_frame_b_f = gpuarray.to_gpu(frame_b.astype(np.float32))
 
         # MAIN LOOP
         for K in range(nb_iter_max):
@@ -1058,11 +1060,16 @@ class PIVGPU:
             c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
             # Get window displacement to subpixel accuracy
-            i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()
+            sp_i, sp_j = c.subpixel_peak_location()
+            # i_tmp[:n_row[K] * n_col[K]] = sp_i
+            # j_tmp[:n_row[K] * n_col[K]] = sp_j
+            # i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()  # delete
 
             # reshape the peaks
-            i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
-            j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+            # i_peak[:n_row[K], :n_col[K]] = np.reshape(i_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+            # j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
+            i_peak[:n_row[K], :n_col[K]] = np.reshape(sp_i, (n_row[K], n_col[K]))
+            j_peak[:n_row[K], :n_col[K]] = np.reshape(sp_j, (n_row[K], n_col[K]))
             assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
             assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
@@ -1090,13 +1097,16 @@ class PIVGPU:
                 # validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
                 # get list of places that need to be validated
-                validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
+                # validation_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
+                val_list, d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
 
                 # do the validation
-                n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
+                # n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
+                n_val = n_row[K] * n_col[K] - np.sum(val_list)
                 if n_val > 0:
                     print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
-                    gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+                    # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+                    gpu_replace_vectors(d_f, val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
                 else:
                     print('No invalid vectors!')
 

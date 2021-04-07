@@ -146,7 +146,7 @@ def find_second_peak_3D(corr, i=None, j=None, z=None, width=2):
     """
 
     if i is None or j is None or z is None:
-        (i, j, z), tmp = find_first_peak(corr)  # TODO: why tmp?
+        (i, j, z), tmp = find_first_peak(corr)  # TODO.md: why tmp?
 
     # create a masked view of the corr
     tmp = corr.view(ma.MaskedArray)
@@ -259,7 +259,7 @@ def find_subpixel_peak_position(corr, subpixel_method="gaussian"):
             subp_peak_position = default_peak_position
 
     except IndexError:
-        subp_peak_position = default_peak_position  # TODO: is this a good idea??
+        subp_peak_position = default_peak_position  # TODO.md: is this a good idea??
 
     return np.array(subp_peak_position) - np.array(default_peak_position)
 
