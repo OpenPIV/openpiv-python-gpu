@@ -881,10 +881,10 @@ class PIVGPU:
         cdef Py_ssize_t K  # main iteration index
         cdef Py_ssize_t I, J  # interrogation locations indices
         cdef float diff
-        cdef np.ndarray[DTYPEi_t, ndim=1] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
-        cdef np.ndarray[DTYPEi_t, ndim=1] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
-        cdef np.ndarray[DTYPEi_t, ndim=1] w = np.asarray(ws, dtype=DTYPEi)
-        cdef np.ndarray[DTYPEi_t, ndim=1] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
+        cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
+        cdef DTYPEi_t[:] n_col = np.zeros(nb_iter_max, dtype=DTYPEi)
+        cdef DTYPEi_t[:] w = np.asarray(ws, dtype=DTYPEi)
+        cdef DTYPEi_t[:] overlap = np.zeros(nb_iter_max, dtype=DTYPEi)
 
         # overlap init
         for K in range(nb_iter_max):
@@ -918,9 +918,7 @@ class PIVGPU:
 
         # define arrays used for the validation process
         # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated
-        cdef np.ndarray[DTYPEi_t, ndim=2] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-        cdef np.ndarray[DTYPEf_t, ndim=3] neighbours = np.zeros([2, 3, 3], dtype=DTYPEf)
-        cdef np.ndarray[DTYPEi_t, ndim=2] neighbours_present = np.zeros([3, 3], dtype=DTYPEi)
+        cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
 
         # GPU ARRAYS
         # define the main array f that contains all the data
@@ -1009,19 +1007,19 @@ class PIVGPU:
         cdef Py_ssize_t K  # main iteration index
         cdef Py_ssize_t i, j  # indices for various works
         cdef int n_val, residual
-        cdef np.ndarray[DTYPEi_t, ndim=1] n_row = self.n_row
-        cdef np.ndarray[DTYPEi_t, ndim=1] n_col = self.n_col
-        cdef np.ndarray[DTYPEi_t, ndim=1] w = self.w
-        cdef np.ndarray[DTYPEi_t, ndim=1] overlap = self.overlap
-        cdef np.ndarray[DTYPEf_t, ndim=1] i_tmp = self.i_tmp
-        cdef np.ndarray[DTYPEf_t, ndim=1] j_tmp = self.j_tmp
-        cdef np.ndarray[DTYPEf_t, ndim=2] i_peak = self.i_peak
-        cdef np.ndarray[DTYPEf_t, ndim=2] j_peak = self.j_peak
-        cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = self.sig2noise
+        cdef DTYPEi_t[:] n_row = self.n_row
+        cdef DTYPEi_t[:] n_col = self.n_col
+        cdef DTYPEi_t[:] w = self.w
+        cdef DTYPEi_t[:] overlap = self.overlap
+        cdef DTYPEf_t[:] i_tmp = self.i_tmp
+        cdef DTYPEf_t[:] j_tmp = self.j_tmp
+        cdef DTYPEf_t[:, :] i_peak = self.i_peak
+        cdef DTYPEf_t[:, :] j_peak = self.j_peak
+        cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
 
         # cast images as floats
-        cdef np.ndarray[DTYPEf_t, ndim=2] frame_a_f = frame_a.astype(np.float32)
-        cdef np.ndarray[DTYPEf_t, ndim=2] frame_b_f = frame_b.astype(np.float32)
+        cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
+        cdef DTYPEf_t[:, :] frame_b_f = frame_b.astype(np.float32)
 
         # Send images to the gpu
         d_frame_a_f = gpuarray.to_gpu(frame_a_f)
