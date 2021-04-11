@@ -1,3 +1,5 @@
+# cython: profile=True
+
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
 
 import pycuda.gpuarray as gpuarray
@@ -14,6 +16,7 @@ from math import sqrt
 from openpiv.gpu_validation import gpu_validation
 # import cupy
 from openpiv.smoothn import smoothn as smoothn
+from time import process_time_ns
 
 cimport numpy as np
 
@@ -426,9 +429,6 @@ class CorrelationFunction:
         d_win_a_zp.gpudata.free()
         d_win_b_zp.gpudata.free()
 
-        # delete classes for the plan for free any associated memory
-        del plan_forward, plan_inverse
-
         return corr
 
 
@@ -450,17 +450,42 @@ class CorrelationFunction:
             column position of corr peak
 
         """
+        cdef Py_ssize_t i
+        cdef Py_ssize_t size = self.batch_size
+
         # Reshape matrix
         array_reshape = array.reshape(self.batch_size, self.nfft ** 2)
         s = self.nfft
 
         # Get index and value of peak
-        ind = np.argmax(array_reshape, axis=1)
-        maximum = np.amax(array_reshape, axis=1)
+        max_ind = np.argmax(array_reshape, axis=1)
+        maximum = array_reshape[range(self.batch_size), max_ind]
+        # maximum = np.amax(array_reshape, axis=1)
 
         # row and column information of peak
-        row = ind // s
-        col = ind % s
+        row = max_ind // s
+        col = max_ind % s
+
+        # # return the center if the correlation peak is zero
+        # cdef float[:, :] array_view = array_reshape
+        # cdef float[:] maximum_view = maximum
+        # cdef long[:] row_view = row
+        # cdef long[:] col_view = col
+        # cdef long w = int(s / 2)
+        # cdef int zero_idx = int(self.nfft ** 2 / 2 + s / 2)
+        # cdef Py_ssize_t i
+        # cdef Py_ssize_t size = self.batch_size
+        #
+        # for i in range(size):
+        #     if array_view[i, zero_idx] == maximum_view[i]:
+        #         row_view[i] = w
+        #         col_view[i] = w
+
+        # # return the center if the correlation peak is zero (same as cython code above)
+        # w = s / 2
+        # c_idx = np.asarray((array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum)).nonzero()
+        # row[c_idx] = w
+        # col[c_idx] = w
 
         # return the center if the correlation peak is zero
         cdef float[:, :] array_view = array_reshape
@@ -468,20 +493,11 @@ class CorrelationFunction:
         cdef long[:] row_view = row
         cdef long[:] col_view = col
         cdef long w = int(s / 2)
-        cdef int idx = int(self.nfft ** 2 / 2 + s / 2)
-        cdef Py_ssize_t i
-        cdef Py_ssize_t size = self.batch_size
 
         for i in range(size):
-            if array_view[i, idx] == maximum_view[i]:
+            if abs(maximum_view[i]) < 0.1:
                 row_view[i] = w
                 col_view[i] = w
-
-        # # return the center if the correlation peak is zero (same as cython code above)
-        # w = s / 2
-        # c_idx = np.asarray((array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum)).nonzero()
-        # row[c_idx] = w
-        # col[c_idx] = w
 
         return row, col, maximum
 
@@ -1163,7 +1179,7 @@ class PIVGPU:
         # d_u_mean.gpudata.free()
         # d_v_mean.gpudata.free()
 
-        return x, y, u, v, mask, sig2noise
+        return x, y, u, v, mask, self.sig2noise
 
 
 def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
