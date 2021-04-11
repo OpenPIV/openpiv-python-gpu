@@ -14,10 +14,10 @@
 
 - [ ] push to mother repository
 
-- [ ] profile for the slowest parts of the code
+- [x] profile for the slowest parts of the code
 
 - [ ] fix edge treatment to have less errors
     - [ ] validation of edges
 - [ ] Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
 
-- [ ] reduce the number of temporary gpus arrays created
+- [ ] reduce the number of temporary gpu arrays created

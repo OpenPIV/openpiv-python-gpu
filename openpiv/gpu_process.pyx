@@ -695,7 +695,7 @@ def gpu_piv_def(frame_a, frame_b,
                 dt=1,
                 mask=None,
                 deform=True,
-                smoothing=True,
+                smooth=True,
                 nb_validation_iter=1,
                 validation_method='median_velocity',
                 trust_1st_iter=True,
@@ -736,7 +736,7 @@ def gpu_piv_def(frame_a, frame_b,
         2D, dtype=np.int32. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
-    smoothing : bool
+    smooth : bool
         Whether to smooth the intermediate fields.
     nb_validation_iter : int
         Number of iterations per validation cycle.
@@ -769,6 +769,8 @@ def gpu_piv_def(frame_a, frame_b,
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
+    sig2noise : bool
+        whether the signal-to-noise ratio should be computed and returned. Setting this to False speeds up the computation significatly.
     sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
@@ -801,7 +803,7 @@ def gpu_piv_def(frame_a, frame_b,
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
 
     """
-    piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smoothing, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
+    piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smooth, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
     return piv_gpu(frame_a, frame_b)
 
 
@@ -825,7 +827,7 @@ class PIVGPU:
         2D, dtype=np.int32. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
-    smoothing : bool
+    smooth : bool
         Whether to smooth the intermediate fields.
     nb_validation_iter : int
         Number of iterations per validation cycle.
@@ -843,6 +845,8 @@ class PIVGPU:
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
+    sig2noise : bool
+        whether the signal-to-noise ratio should be computed and returned.  Setting this to False speeds up the computation significatly.
     sig2noise_method : string
         defines the method of signal-to-noise-ratio measure,
         ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
@@ -858,18 +862,18 @@ class PIVGPU:
 
     """
     def __init__(self,
-                frame_shape,
-                window_size_iters=(1, 2),
-                min_window_size=16,
-                overlap_ratio=0.5,
-                dt=1,
-                mask=None,
-                deform=True,
-                smoothing=True,
-                nb_validation_iter=1,
-                validation_method='median_velocity',
-                trust_1st_iter=True,
-                **kwargs):
+                 frame_shape,
+                 window_size_iters=(1, 2),
+                 min_window_size=16,
+                 overlap_ratio=0.5,
+                 dt=1,
+                 mask=None,
+                 deform=True,
+                 smooth=True,
+                 nb_validation_iter=1,
+                 validation_method='median_velocity',
+                 trust_1st_iter=True,
+                 **kwargs):
         # type declarations
         cdef Py_ssize_t K, I, J, nb_iter_max
         cdef float diff
@@ -881,7 +885,7 @@ class PIVGPU:
         num_ws = len(ws_iters)
         self.dt = dt
         self.deform = deform
-        self.smoothing = smoothing
+        self.smooth = smooth
         self.nb_iter_max = nb_iter_max = sum(ws_iters)
         self.nb_validation_iter = nb_validation_iter
         self.trust_1st_iter = trust_1st_iter
@@ -897,6 +901,7 @@ class PIVGPU:
 
         # other parameters
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
+        self.return_sig2noise = kwargs['sig2noise'] if 'sig2noise' in kwargs else True
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
 
         # Cython buffer definitions
@@ -1010,7 +1015,7 @@ class PIVGPU:
         # recover class variables
         dt = self.dt
         deform = self.deform
-        smoothing = self.smoothing
+        smoothing = self.smooth
         nb_iter_max = self.nb_iter_max
         nb_validation_iter = self.nb_validation_iter
         trust_1st_iter = self.trust_1st_iter
@@ -1091,7 +1096,8 @@ class PIVGPU:
 
             # Get signal to noise ratio
             # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
-            self.sig2noise = c.sig2noise_ratio(method=sig2noise_method)
+            if self.return_sig2noise:
+                self.sig2noise = c.sig2noise_ratio(method=sig2noise_method)
 
             # update the field with new values
             # gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
