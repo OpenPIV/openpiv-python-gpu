@@ -527,9 +527,6 @@ class CorrelationFunction:
         cdef Py_ssize_t i
         cdef Py_ssize_t j
 
-        # print(np.mean(self.p_row), np.mean(self.p_col))
-        # print(self.nfft)
-
         # set (width x width) square submatrix around the first correlation peak as masked
         for i in range(-width, width + 1):
             for j in range(-width, width + 1):
@@ -537,12 +534,8 @@ class CorrelationFunction:
                 col_idx = self.p_col + j
                 idx = (row_idx >= 0) & (row_idx < self.nfft) & (col_idx >= 0) & (col_idx < self.nfft)
                 tmp[idx, row_idx[idx], col_idx[idx]] = ma.masked
-                # print(i, j, sum(idx), sum(row_idx >= 0), sum(row_idx <self.nfft), sum(col_idx >= 0), sum(col_idx < self.nfft))
-
-                # tmp[range(self.batch_size), row_idx, col_idx] = ma.masked
 
         row2, col2, corr_max2 = self._find_peak(tmp)
-        # print(np.mean(self.p_row - row2))
 
         return corr_max2
 
@@ -596,7 +589,6 @@ class CorrelationFunction:
         # Do subpixel approximation. Add small to avoid zero divide.
         row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.nfft / 2
         col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.nfft / 2
-
         return row_sp, col_sp
 
 
@@ -953,7 +945,6 @@ class PIVGPU:
             # the two lines below are marginally slower (O(1 ms)) than the 6 lines below them
             # f[K, :n_row[K], :n_col[K], 0] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_col[K] - 1), n_col[K], dtype=np.float32), (n_row[K], 1))  # init x on cols
             # f[K, :n_row[K], :n_col[K], 1] = np.tile(np.linspace(w[K] / 2, w[K] / 2 + diff * (n_row[K] - 1), n_row[K], dtype=np.float32), (n_col[K], 1)).T  # init y on rows
-
             f[K, :, 0, 0] = w[K] / 2  # init x on first column
             f[K, 0, :, 1] = w[K] / 2  # init y on first row
 

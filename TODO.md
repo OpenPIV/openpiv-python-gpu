@@ -1,4 +1,6 @@
 # TODO
+- [x] profile for the slowest parts of the code
+
 - [ ] memory optimizations
     - [x] reuse same arrays as previous iterations
     - [x] write an outside class to store the common GPU data
@@ -9,15 +11,17 @@
 - [ ] correlation class
     - [ ] move methods out of init()
     - [ ] define fewer GPU arrays
-
-- [ ] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
+    - [ ] Use CUDA kernel in subpixel location
 
 - [ ] push to mother repository
 
-- [x] profile for the slowest parts of the code
+- [ ] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
+
+- [ ] reduce the number of temporary gpu arrays created
 
 - [ ] fix edge treatment to have less errors
     - [ ] validation of edges
+    
 - [ ] Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
 
-- [ ] reduce the number of temporary gpu arrays created
+
