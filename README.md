@@ -1,54 +1,87 @@
+# OpenPIV
+[![Build Status](https://travis-ci.org/OpenPIV/openpiv-python.svg?branch=master)](https://travis-ci.org/OpenPIV/openpiv-python)
+[![Build status](https://ci.appveyor.com/api/projects/status/4ht2vwvur22jmn6b?svg=true)](https://ci.appveyor.com/project/alexlib/openpiv-python)
+[![DOI](https://zenodo.org/badge/4213/OpenPIV/openpiv-python.svg)](https://zenodo.org/badge/latestdoi/4213/OpenPIV/openpiv-python)
 
-[![DOI](https://zenodo.org/badge/148214993.svg)](https://zenodo.org/badge/latestdoi/148214993)
-
-# OpenPIV Python version with GPU support
-GPU accelerated version of OpenPIV in Python. The algorithm and functions are mostly the same 
-as the CPU version. The main difference is that it runs much faster. The source code has been 
-augmented with CUDA, so it will only run on NVIDIA GPUs.
-
+OpenPIV consists in a Python and Cython modules for scripting and executing the analysis of 
+a set of PIV image pairs. In addition, a Qt graphical user interface is in 
+development, to ease the use for those users who don't have python skills.
 
 ## Warning
-The OpenPIV GPU version is still in pre-beta state. This means that
+
+The OpenPIV python version is still in beta state. This means that
 it still might have some bugs and the API may change. However testing and contributing
 is very welcome, especially if you can contribute with new algorithms and features.
-
-Validation of the code for instantaneous and time averaged flow has been done, and a 
-paper on that topic has been submitted and will be published in the near future
 
 Development is currently done on a Linux/Mac OSX environment, but as soon as possible 
 Windows will be tested. If you have access to one of these platforms
 please test the code. 
 
-
-## Test without installation
-You can test the code without needing to install anything locally. Included in this 
-repository is the IPython Notebook [Openpiv_Python_Cython_GPU_demo.ipynb](Openpiv_Python_Cython_GPU_demo.ipynb). 
-When viewing the file on Github there will be a link to view the notebook with Colaboratory. 
-Clicking this will load the notebook into Googles free cloud computing service and you can test
-the GPU capabilities. 
+## Test it without installation
+Click the link - thanks to BinderHub, Jupyter and Conda you can now get it in your browser with zero installation:
+[![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/openpiv/openpiv-python-example/master?filepath=index.ipynb)
 
 
-## Install From Source
+## Installing
 
-Make sure you have installed all the dependancies (`numpy, matplotlib, scipy, cython, skcuda, pycuda`).
-The GPU version will only install if it detects both `skcuda` and `pycuda`. Otherwise, only the CPU version will be installed. 
+You can use Conda <http://conda.io>:  
 
-Clone the repository from Github onto your computer:
+    conda install -c conda-forge openpiv
 
-    git clone https://github.com/OpenPIV/openpiv-python-gpu.git
+We are listed on PyPI: <https://pypi.python.org/pypi/OpenPIV>, so you could just try:
 
-Compile the cython and CUDA code (this can take a while):
+    pip install openpiv
+
+or 
+
+    easy_install openpiv
+    
+Note that if dependicies of Numpy, Scipy and Cython are not present, on Ubuntu Linux, install those as:
+
+    sudo apt-get install cython python-numpy python-scipy
+    pip2.7 install OpenPIV
+    
+## GPU Support
+
+If you have a CUDA enabled NVIDIA GPU in your system, you can run GPU accelerated PIV functions. 
+You will need to install PyCuda and scikit-cuda
+
+    pip install pycuda
+    pip install scikit-cuda
+
+### To build from source
+
+Download the package from the Github: https://github.com/OpenPIV/openpiv-python/archive/master.zip
+or clone using git
+
+    git clone https://github.com/OpenPIV/openpiv-python.git
+
+Using distutils create a local (in the same directory) compilation of the Cython files:
 
     python setup.py build_ext --inplace
-  
-After this the GPU functions should be good to go. You will likely need to add the openpiv directory to the PYTHONPATH to be able to import the functions. 
 
-## How to cite this work
+Or for the global installation, use:
 
-Dallas CA, Wu M, Chou VP, Liberzon A, Sullivan PE. GPU Accelerated Open Source Particle Image Velocimetry Software for High Performance Computing Systems. ASME. J. Fluids Eng. 2019;():. [doi:10.1115/1.4043422](http://fluidsengineering.asmedigitalcollection.asme.org/article.aspx?articleid=2730543).
-  
+    python setup.py install 
+
+
+### Latest developments
+
+Latest developments go into @alexlib repository <https://github.com/alexlib/openpiv-python>
+
+## Documentation
+
+The OpenPIV documentation is available on the project web page at <http://openpiv.readthedocs.org>
+
 
 ## Contributors
-1. OpenPIV team, https://groups.google.com/forum/#!forum/openpiv-users
-2. Cameron Dallas https://github.com/CameronDallas5000
-3. Alex Liberzon https://github.com/alexlib
+
+1. [Alex Liberzon](http://github.com/alexlib)
+2. [Roi Gurka](http://github.com/roigurka)
+3. [Zachary J. Taylor](http://github.com/zjtaylor)
+4. [David Lasagna](http://github.com/gasagna)
+5. [Mathias Aubert](http://github.com/MathiasAubert)
+6. [Pete Bachant](http://github.com/petebachant)
+7. Cameron Dallas (http://github.com/CameronDallas5000)
+8. Cecyl Curry (http://github.com/leycec)
+
