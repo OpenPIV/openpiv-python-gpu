@@ -1,87 +1,65 @@
-# OpenPIV
-[![Build Status](https://travis-ci.org/OpenPIV/openpiv-python.svg?branch=master)](https://travis-ci.org/OpenPIV/openpiv-python)
-[![Build status](https://ci.appveyor.com/api/projects/status/4ht2vwvur22jmn6b?svg=true)](https://ci.appveyor.com/project/alexlib/openpiv-python)
-[![DOI](https://zenodo.org/badge/4213/OpenPIV/openpiv-python.svg)](https://zenodo.org/badge/latestdoi/4213/OpenPIV/openpiv-python)
+# OpenPIV GPU
+This is a GPU-accelerated version of openpiv-python, which can be found at https://github.com/OpenPIV/openpiv-python.git
 
-OpenPIV consists in a Python and Cython modules for scripting and executing the analysis of 
-a set of PIV image pairs. In addition, a Qt graphical user interface is in 
-development, to ease the use for those users who don't have python skills.
+## Installation
+The requirements for the process.py module are OpenPIV (GPU version) and the standard Python scientific libraries (SciPy, Matplotlib, etc.).
+The PIV analysis on velocity fields are not dependent on OpenPIV, however.
 
-## Warning
+OpenPIV requires CUDA, which may be difficult to install. In addition to the instructions at https://github.com/OpenPIV/openpiv-python-gpu, the procedure below might help with installing OpenPIV.
 
-The OpenPIV python version is still in beta state. This means that
-it still might have some bugs and the API may change. However testing and contributing
-is very welcome, especially if you can contribute with new algorithms and features.
+### 0. Nvidia drivers:
+Update to the latest supported drivers.
 
-Development is currently done on a Linux/Mac OSX environment, but as soon as possible 
-Windows will be tested. If you have access to one of these platforms
-please test the code. 
+https://www.nvidia.com/Download/index.aspx
 
-## Test it without installation
-Click the link - thanks to BinderHub, Jupyter and Conda you can now get it in your browser with zero installation:
-[![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/openpiv/openpiv-python-example/master?filepath=index.ipynb)
+### 1. CUDA toolkit:
 
+Download CUDA from Nvidia website:
 
-## Installing
+https://developer.nvidia.com/cuda-downloads
 
-You can use Conda <http://conda.io>:  
+If installing on Windows, Visual Studio C++ compiler with CLI support needs to be installed before CUDA. It can be downloaded from:
 
-    conda install -c conda-forge openpiv
+https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-We are listed on PyPI: <https://pypi.python.org/pypi/OpenPIV>, so you could just try:
+Ensure that cl.exe is on your Windows PATH
 
-    pip install openpiv
+If installing on Linux, follow the instructions for Linux at:
 
-or 
+https://docs.nvidia.com/cuda/
 
-    easy_install openpiv
-    
-Note that if dependicies of Numpy, Scipy and Cython are not present, on Ubuntu Linux, install those as:
+Ensure that the post-installation instructions are followed and test the install before proceeding to then next step.
 
-    sudo apt-get install cython python-numpy python-scipy
-    pip2.7 install OpenPIV
-    
-## GPU Support
+Ensure that CUDA is compiled and on the PATH:
 
-If you have a CUDA enabled NVIDIA GPU in your system, you can run GPU accelerated PIV functions. 
-You will need to install PyCuda and scikit-cuda
+	nvcc -V
 
-    pip install pycuda
+### 2. scikit-CUDA:
+Install scikit-CUDA, which should install PyCUDA as well. If this throws errors, CUDA cwas probably not installed properly in the step above.
+        
     pip install scikit-cuda
 
-### To build from source
+### 3. OpenPIV:
+To install the OpenPIV, it can either be installed to the python environment by:
 
-Download the package from the Github: https://github.com/OpenPIV/openpiv-python/archive/master.zip
-or clone using git
-
-    git clone https://github.com/OpenPIV/openpiv-python.git
-
-Using distutils create a local (in the same directory) compilation of the Cython files:
+    pip install git+git://github.com/OpenPIV/openpiv-python-gpu.git
+        
+or cloned for local development by:
 
     python setup.py build_ext --inplace
 
-Or for the global installation, use:
+    git clone https://github.com/ericyang125/PIV-GPU.git
+    pip install -e /path/to/package
+    
+## Getting started.
+To get started, see the tutorial Jupyter notebook.
 
-    python setup.py install 
+##Copyright statement
+`smoothn.py` is a Python version of `smoothn.m` originally created by D. Garcia [https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn], written by Prof. Lewis and available on Github [https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py]. We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license.
 
-
-### Latest developments
-
-Latest developments go into @alexlib repository <https://github.com/alexlib/openpiv-python>
-
-## Documentation
-
-The OpenPIV documentation is available on the project web page at <http://openpiv.readthedocs.org>
-
-
-## Contributors
-
-1. [Alex Liberzon](http://github.com/alexlib)
-2. [Roi Gurka](http://github.com/roigurka)
-3. [Zachary J. Taylor](http://github.com/zjtaylor)
-4. [David Lasagna](http://github.com/gasagna)
-5. [Mathias Aubert](http://github.com/MathiasAubert)
-6. [Pete Bachant](http://github.com/petebachant)
-7. Cameron Dallas (http://github.com/CameronDallas5000)
-8. Cecyl Curry (http://github.com/leycec)
-
+# Changes from base repository
+piv_gpu is no longer supported
+median validation is the main method of validation, along with smoothn used in intermediate fields
+window deformation is implemented to improve estimation of velocity gradient
+API for the function is different for the GPU function, which is now called pif_gpu_def
+performance/reliability has been improved by various other changes

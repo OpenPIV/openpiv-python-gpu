@@ -11,7 +11,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
+but WITHOUT ANY WARRANTY without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
@@ -25,16 +25,30 @@ import os.path
 import multiprocessing
 
 import numpy as np
-import scipy.misc
-import matplotlib.pyplot as pl
+import matplotlib.pyplot as plt
 import matplotlib.patches as pt
-import matplotlib.image as mpltimg
-from scipy import ndimage
-from skimage import filters, io
-from builtins import range
+
+# from builtins import range
+from imageio import imread as _imread, imsave as _imsave
+from skimage.feature import canny
 
 
-def display_vector_field( filename, on_img=False, image_name='None', window_size=32, scaling_factor=1, **kw):
+def unique(array):
+    uniq, index = np.unique(array, return_index=True)
+    return uniq[index.argsort()]
+
+
+def display_vector_field(
+    filename,
+    on_img=False,
+    image_name="None",
+    window_size=32,
+    scaling_factor=1,
+    widim=False,
+    ax=None,
+    width=0.0025,
+    **kw
+):
     """ Displays quiver plot of the data stored in the file 
     
     
@@ -44,17 +58,23 @@ def display_vector_field( filename, on_img=False, image_name='None', window_size
         the absolute path of the text file
 
     on_img : Bool, optional
-        if True, display the vector field on top of the image provided by image_name
+        if True, display the vector field on top of the image provided by 
+        image_name
 
     image_name : string, optional
         path to the image to plot the vector field onto when on_img is True
 
     window_size : int, optional
-        when on_img is True, provide the interogation window size to fit the background image to the vector field
+        when on_img is True, provide the interrogation window size to fit the 
+        background image to the vector field
 
     scaling_factor : float, optional
-        when on_img is True, provide the scaling factor to scale the background image to the vector field
+        when on_img is True, provide the scaling factor to scale the background
+        image to the vector field
     
+    widim : bool, optional, default is False
+        when widim == True, the y values are flipped, i.e. y = y.max() - y
+        
     Key arguments   : (additional parameters, optional)
         *scale*: [None | float]
         *width*: [None | float]
@@ -68,36 +88,65 @@ def display_vector_field( filename, on_img=False, image_name='None', window_size
     Examples
     --------
     --- only vector field
-    >>> openpiv.tools.display_vector_field('./exp1_0000.txt',scale=100, width=0.0025) 
+    >>> openpiv.tools.display_vector_field('./exp1_0000.txt',scale=100, 
+                                           width=0.0025) 
 
     --- vector field on top of image
-    >>> openpiv.tools.display_vector_field('./exp1_0000.txt', on_img=True, image_name='exp1_001_a.bmp', window_size=32, scaling_factor=70, scale=100, width=0.0025)
+    >>> openpiv.tools.display_vector_field('./exp1_0000.txt', on_img=True, 
+                                          image_name='exp1_001_a.bmp', 
+                                          window_size=32, scaling_factor=70, 
+                                          scale=100, width=0.0025)
     
     """
-    
+
     a = np.loadtxt(filename)
-    fig=pl.figure()
-    pl.hold(True)
-    if on_img: # plot a background image
+    # parse
+    x, y, u, v, mask = a[:, 0], a[:, 1], a[:, 2], a[:, 3], a[:, 4]
+
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.get_figure()
+
+    if on_img is True:  # plot a background image
         im = imread(image_name)
-        im = negative(im) #plot negative of the image for more clarity
-        imsave('neg.tif', im)
-        im = mpltimg.imread('neg.tif')
-        xmax=np.amax(a[:,0])+window_size/(2*scaling_factor)
-        ymax=np.amax(a[:,1])+window_size/(2*scaling_factor)
-        implot = pl.imshow(im, origin='lower', cmap="Greys_r",extent=[0.,xmax,0.,ymax])
-    invalid = a[:,4].astype('bool')
-    fig.canvas.set_window_title('Vector field, '+str(np.count_nonzero(invalid))+' wrong vectors')
+        im = negative(im)  # plot negative of the image for more clarity
+        # imsave('neg.tif', im)
+        # im = imread('neg.tif')
+        xmax = np.amax(x) + window_size / (2 * scaling_factor)
+        ymax = np.amax(y) + window_size / (2 * scaling_factor)
+        ax.imshow(im, cmap="Greys_r", extent=[0.0, xmax, 0.0, ymax])
+        # plt.draw()
+
+    invalid = mask.astype("bool")  
     valid = ~invalid
-    pl.quiver(a[invalid,0],a[invalid,1],a[invalid,2],a[invalid,3],color='r',**kw)
-    pl.quiver(a[valid,0],a[valid,1],a[valid,2],a[valid,3],color='b',**kw)
-    pl.draw()
-    pl.show()
+
+    # visual conversion for the data on image
+    # to be consistent with the image coordinate system
+
+    # if on_img:
+    #     y = y.max() - y
+    #     v *= -1
+
+    ax.quiver(
+        x[invalid], y[invalid], u[invalid], v[invalid], color="r", width=width, **kw)
+    ax.quiver(x[valid], y[valid], u[valid], v[valid], color="b", width=width,**kw)
+    
+    # if on_img is False:
+    #     ax.invert_yaxis()
+    
+    ax.set_aspect(1.)
+    # fig.canvas.set_window_title('Vector field, '+str(np.count_nonzero(invalid))+' wrong vectors')
+
+    plt.show()
+
+    return fig, ax
 
 
-def imread( filename, flatten=0 ):
+def imread(filename, flatten=0):
     """Read an image file into a numpy array
-    using skimage.io.imread
+    using imageio.imread
     
     Parameters
     ----------
@@ -121,12 +170,20 @@ def imread( filename, flatten=0 ):
     
     
     """
-    
-    return io.imread( filename, as_grey = True)
+    im = _imread(filename)
+    if np.ndim(im) > 2:
+        im = rgb2gray(im)
 
-def imsave( filename, arr ):
+    return im
+
+
+def rgb2gray(rgb):
+    return np.dot(rgb[..., :3], [0.299, 0.587, 0.144])
+
+
+def imsave(filename, arr):
     """Write an image file from a numpy array
-    using scipy.misc.imread
+    using imageio.imread
     
     Parameters
     ----------
@@ -143,21 +200,31 @@ def imsave( filename, arr ):
     >>> imsave( 'negative-image.tif', image2)
     
     """
-    
-    if np.amax(arr) < 256 and np.amin(arr) >= 0:
-        scipy.misc.imsave( filename, arr )
+
+    if np.ndim(arr) > 2:
+        arr = rgb2gray(arr)
+
+    if np.amin(arr) < 0:
+        arr -= arr.min()
+
+    if np.amax(arr) > 255:
+        arr /= arr.max()
+        arr *= 255
+
+    if filename.endswith("tif"):
+        _imsave(filename, arr, format="TIFF")
     else:
-        raise ValueError('please provide a 2d array of grey levels (value in [0, 255])')
+        _imsave(filename, arr)
 
 
-def convert16bitsTIF( filename, save_name):
-    img = pl.imread( filename )
-    img2 = np.zeros([img.shape[0],img.shape[1]], dtype = np.int32)
+def convert16bitsTIF(filename, save_name):
+    img = imread(filename)
+    img2 = np.zeros([img.shape[0], img.shape[1]], dtype=np.int32)
     for I in range(img.shape[0]):
         for J in range(img.shape[1]):
-            img2[I,J]=img[I,J,0]
-    imsave( save_name, img2)
-    print("converted");
+            img2[I, J] = img[I, J, 0]
+
+    imsave(save_name, img2)
 
 
 def mark_background(threshold, list_img, filename):
@@ -167,20 +234,19 @@ def mark_background(threshold, list_img, filename):
     mark = np.zeros(list_frame[0].shape, dtype=np.int32)
     background = np.zeros(list_frame[0].shape, dtype=np.int32)
     for I in range(mark.shape[0]):
-        print((" row ", I , " / " , mark.shape[0]));
+        print((" row ", I, " / ", mark.shape[0]))
         for J in range(mark.shape[1]):
             sum1 = 0
             for K in range(len(list_frame)):
                 sum1 = sum1 + list_frame[K][I, J]
-            if sum1 < threshold*len(list_img):
-                mark[I,J] = 0
+            if sum1 < threshold * len(list_img):
+                mark[I, J] = 0
             else:
-                mark[I,J]=1
-            background[I,J]=mark[I,J]*255
+                mark[I, J] = 1
+            background[I, J] = mark[I, J] * 255
     imsave(filename, background)
-    print("done with background");
+    print("done with background")
     return background
-
 
 
 def mark_background2(list_img, filename):
@@ -189,233 +255,142 @@ def mark_background2(list_img, filename):
         list_frame.append(imread(list_img[I]))
     background = np.zeros(list_frame[0].shape, dtype=np.int32)
     for I in range(background.shape[0]):
-        print((" row ", I , " / " , background.shape[0]));
+        print((" row ", I, " / ", background.shape[0]))
         for J in range(background.shape[1]):
             min_1 = 255
             for K in range(len(list_frame)):
-                if min_1 > list_frame[K][I,J]:
-                    min_1 = list_frame[K][I,J]
-            background[I,J]=min_1
+                if min_1 > list_frame[K][I, J]:
+                    min_1 = list_frame[K][I, J]
+            background[I, J] = min_1
     imsave(filename, background)
-    print("done with background");
+    print("done with background")
     return background
+
 
 def edges(list_img, filename):
     back = mark_background(30, list_img, filename)
-    edges = filter.canny(back, sigma=3)
+    edges = canny(back, sigma=3)
     imsave(filename, edges)
+
 
 def find_reflexions(list_img, filename):
     background = mark_background2(list_img, filename)
     reflexion = np.zeros(background.shape, dtype=np.int32)
     for I in range(background.shape[0]):
-        print((" row ", I , " / " , background.shape[0]));
+        print((" row ", I, " / ", background.shape[0]))
         for J in range(background.shape[1]):
-            if background[I,J] > 253:
-                reflexion[I,J] = 255
+            if background[I, J] > 253:
+                reflexion[I, J] = 255
     imsave(filename, reflexion)
-    print("done with reflexions");
+    print("done with reflexions")
     return reflexion
 
 
 def find_boundaries(threshold, list_img1, list_img2, filename, picname):
-    f = open(filename, 'w')
-    print("mark1..");
+    f = open(filename, "w")
+    print("mark1..")
     mark1 = mark_background(threshold, list_img1, "mark1.bmp")
-    print("[DONE]");
-    print((mark1.shape));
-    print("mark2..");
+    print("[DONE]")
+    print((mark1.shape))
+    print("mark2..")
     mark2 = mark_background(threshold, list_img2, "mark2.bmp")
-    print("[DONE]");
-    print("computing boundary");
-    print((mark2.shape));
+    print("[DONE]")
+    print("computing boundary")
+    print((mark2.shape))
     list_bound = np.zeros(mark1.shape, dtype=np.int32)
     for I in range(list_bound.shape[0]):
-        print(( "bound row ", I , " / " , mark1.shape[0]));
+        print(("bound row ", I, " / ", mark1.shape[0]))
         for J in range(list_bound.shape[1]):
-            list_bound[I,J]=0
-            if mark1[I,J]==0:
-                list_bound[I,J]=125
-            if I>1 and J>1 and I<list_bound.shape[0]-2 and J< list_bound.shape[1]-2:
+            list_bound[I, J] = 0
+            if mark1[I, J] == 0:
+                list_bound[I, J] = 125
+            if (
+                I > 1
+                and J > 1
+                and I < list_bound.shape[0] - 2
+                and J < list_bound.shape[1] - 2
+            ):
                 for K in range(5):
                     for L in range(5):
-                        if mark1[I-2+K,J-2+L] != mark2[I-2+K,J-2+L]:
-                            list_bound[I,J]=255
+                        if mark1[I - 2 + K, J - 2 + L] != mark2[I - 2 + K, J - 2 + L]:
+                            list_bound[I, J] = 255
             else:
-                list_bound[I,J]=255
-            f.write(str(I)+'\t'+str(J)+'\t'+str(list_bound[I,J])+'\n')
-    print('[DONE]');
+                list_bound[I, J] = 255
+            f.write(str(I) + "\t" + str(J) + "\t" + str(list_bound[I, J]) + "\n")
+    print("[DONE]")
     f.close()
     imsave(picname, list_bound)
     return list_bound
 
 
-def load_vectors(filename, skip = 1,  uncrt = None):
-    """
-    Loads the velocity fields / uncertainty from an OpenPIV  data output file
-    returns the data from each file in a 3D matrix
-    
-    Parameters
-    ----------
-    filename: string
-        The absolute path to the PIV data
-
-    skip: int
-        Number of header lines to skip in the data files. Defaults to 2 as that is what the save function defaults to. 
-
-    uncrt: tuple
-        Column (zero indexed) of the u and v velocity uncertainty. 
-        Default is None, which returns no uncertainty. 
-        
-    Returns
-    -------
-    x,y : 2D numpy array
-        The x and y locations of the velocity vector. Since each frame is the same,
-        only one 2D array for each is returned
-
-    u,v : 3D numpy array
-        The u amd v velocity fields for each piv file
-
-    mask : 3D array
-        Values that were masked during the validation process.
-    """
-    
-    if uncrt is None:
-        # data is in 1D arrays. Reshape to 2D arrays.
-        x, y, u, v, mask = data_unravel(filename, skip=skip)
-        
-        return(x,y,u,v,mask)
-    else:
-        x,y,u,v, mask, Ux, Uy = data_unravel(filename, skip=skip, uncrt=uncrt)
-
-
-def data_unravel(filename, maskCol=4, skip=1, uncrt=None):
-    """
-    Takes data stored as flattened arrays and turns it back into 2D arrays.
-    This is necessary for the fast bilinear spline in the image_dewarp function to work. 
-
-    Parameters
-    ----------
-    filename: string
-        name of the file piv data results are stored in
-
-    maskCol: int
-        column where the mask data is stored
-
-    uncrt: 2 component tuple
-        contains the column index of the u and v uncertainties 
-
-    Returns
-    -------
-    x,y: 2d array, float
-        coordinates of the velocity vectors
-
-    u,v: 2d array, float
-        velocity vectors
-
-    mask: 2d array, bool
-        location of the masked elements
-
-    Ux, Uy: 2d array,
-        u and v uncertainties for each vector
-    """
-
-    data = np.loadtxt(filename, skiprows = skip)
-    x_tmp = data[:,0]
-    y_tmp = data[:,1]
-    u_tmp = data[:,2]
-    v_tmp = data[:,3]
-    mask_tmp = data[:,maskCol]
-
-    if uncrt is not None:
-        Ux_tmp = data[:, uncrt[0]]
-        Uy_tmp = data[:, uncrt[1]]
-
-    # sort position inputs
-    xs = np.sort(x_tmp, axis=0)
-    ys = np.sort(y_tmp, axis=0)
-
-    # number or rows will be how many columns are the same and vise versa
-    row = int(max(np.where(xs[0] == xs)[0]) + 1)
-    col = int(max(np.where(ys[0] == ys)[0]) + 1)
-
-    assert row*col == x_tmp.size, "nrows and/or ncols is wrong"
-    assert row*col == y_tmp.size, "nrows and/or ncols is wrong"
-
-    # Reshape arrays
-    if uncrt is not None:
-        x = x_tmp.reshape(row, col)
-        y = y_tmp.reshape(row, col)
-        u = u_tmp.reshape(row, col)
-        v = v_tmp.reshape(row, col)
-        mask = mask_tmp.reshape(row, col)
-        Ux = Ux_tmp.reshape(row, col)
-        Uy = Uy_tmp.reshape(row, col)
-        
-        return x, y, u, v, mask, Ux, Uy
-    else:
-        x = x_tmp.reshape(row, col)
-        y = y_tmp.reshape(row, col)
-        u = u_tmp.reshape(row, col)
-        v = v_tmp.reshape(row, col)
-        mask = mask_tmp.reshape(row, col)
-        return x, y, u, v, mask
-
-
-def save( x, y, u, v, mask, filename, fmt='%8.4f', delimiter='\t', units = ["m", "m", "m/s", "m/s"] ):
+def save(x, y, u, v, mask, filename, fmt="%8.4f", delimiter="\t"):
     """Save flow field to an ascii file.
-    
+
     Parameters
     ----------
     x : 2d np.ndarray
-        a two dimensional array containing the x coordinates of the 
+        a two dimensional array containing the x coordinates of the
         interrogation window centers, in pixels.
-        
+
     y : 2d np.ndarray
-        a two dimensional array containing the y coordinates of the 
+        a two dimensional array containing the y coordinates of the
         interrogation window centers, in pixels.
-        
+
     u : 2d np.ndarray
         a two dimensional array containing the u velocity components,
         in pixels/seconds.
-        
+
     v : 2d np.ndarray
         a two dimensional array containing the v velocity components,
         in pixels/seconds.
-        
+
     mask : 2d np.ndarray
         a two dimensional boolen array where elements corresponding to
         invalid vectors are True.
-        
+
     filename : string
         the path of the file where to save the flow field
-        
+
     fmt : string
         a format string. See documentation of numpy.savetxt
         for more details.
-    
+
     delimiter : string
         character separating columns
 
-    units : list
-        the units to put in the header of the saved file
-        
     Examples
     --------
-    
-    >>> openpiv.tools.save( x, y, u, v, 'field_001.txt', fmt='%6.3f', delimiter='\t')
-    
+
+    openpiv.tools.save( x, y, u, v, 'field_001.txt', fmt='%6.3f',
+                        delimiter='\t')
+
     """
+    if isinstance(u, np.ma.MaskedArray):
+        u = u.filled(0.)
+        v = v.filled(0.)
+
     # build output array
-    out = np.vstack( [m.ravel() for m in [x, y, u, v, mask] ] )
-            
-    # make header for the file.
-    header = "x [{}],\t y [{}],\t u [{}],\t v [{}],\t mask".format(units[0], units[1], units[2], units[3])
+    out = np.vstack([m.flatten() for m in [x, y, u, v, mask]])
 
     # save data to file.
-    np.savetxt( filename, out.T, fmt=fmt, delimiter=delimiter, header=header )
+    np.savetxt(
+        filename,
+        out.T,
+        fmt=fmt,
+        delimiter=delimiter,
+        header="x"
+        + delimiter
+        + "y"
+        + delimiter
+        + "u"
+        + delimiter
+        + "v"
+        + delimiter
+        + "mask",
+    )
 
-def display( message ):
+
+def display(message):
     """Display a message to standard output.
     
     Parameters
@@ -425,11 +400,12 @@ def display( message ):
     
     """
     sys.stdout.write(message)
-    sys.stdout.write('\n')
+    sys.stdout.write("\n")
     sys.stdout.flush()
 
-class Multiprocesser():
-    def __init__ ( self, data_dir, pattern_a, pattern_b = None  ):
+
+class Multiprocesser:
+    def __init__(self, data_dir, pattern_a, pattern_b=None):
         """A class to handle and process large sets of images.
 
         This class is responsible of loading image datasets
@@ -461,26 +437,34 @@ class Multiprocesser():
     
         """
         # load lists of images
-         
-        self.files_a = sorted( glob.glob( os.path.join( os.path.abspath(data_dir), pattern_a ) ) )
-        
+
+        self.files_a = sorted(
+            glob.glob(os.path.join(os.path.abspath(data_dir), pattern_a))
+        )
+
         if pattern_b is None:
             self.files_b = self.files_a[1:]
             self.files_a = self.files_a[:-1]
-        else:    
-            self.files_b = sorted( glob.glob( os.path.join( os.path.abspath(data_dir), pattern_b ) ) )
-        
+        else:
+            self.files_b = sorted(
+                glob.glob(os.path.join(os.path.abspath(data_dir), pattern_b))
+            )
+
         # number of images
         self.n_files = len(self.files_a)
-        
+
         # check if everything was fine
         if not len(self.files_a) == len(self.files_b):
-            raise ValueError('Something failed loading the image file. There should be an equal number of "a" and "b" files.')
-            
-        if not len(self.files_a):
-            raise ValueError('Something failed loading the image file. No images were found. Please check directory and image template name.')
+            raise ValueError(
+                'Something failed loading the image file. There should be an equal number of "a" and "b" files.'
+            )
 
-    def run( self, func, n_cpus=1 ):
+        if not len(self.files_a):
+            raise ValueError(
+                "Something failed loading the image file. No images were found. Please check directory and image template name."
+            )
+
+    def run(self, func, n_cpus=1):
         """Start to process images.
         
         Parameters
@@ -496,19 +480,24 @@ class Multiprocesser():
         """
 
         # create a list of tasks to be executed.
-        image_pairs = [ (file_a, file_b, i) for file_a, file_b, i in zip( self.files_a, self.files_b, range(self.n_files) ) ]
-        
+        image_pairs = [
+            (file_a, file_b, i)
+            for file_a, file_b, i in zip(
+                self.files_a, self.files_b, range(self.n_files)
+            )
+        ]
+
         # for debugging purposes always use n_cpus = 1,
         # since it is difficult to debug multiprocessing stuff.
         if n_cpus > 1:
-            pool = multiprocessing.Pool( processes = n_cpus )
-            res = pool.map( func, image_pairs )
+            pool = multiprocessing.Pool(processes=n_cpus)
+            res = pool.map(func, image_pairs)
         else:
             for image_pair in image_pairs:
-                func( image_pair )
-                
+                func(image_pair)
 
-def negative( image):
+
+def negative(image):
     """ Return the negative of an image
     
     Parameter
@@ -520,10 +509,10 @@ def negative( image):
     (255-image) : 2d np.ndarray of grey levels
 
     """
-    return (255-image)
+    return 255 - image
 
 
-def display_windows_sampling( x, y, window_size, skip=0,  method='standard'):
+def display_windows_sampling(x, y, window_size, skip=0, method="standard"):
     """ Displays a map of the interrogation points and windows
     
     
@@ -553,43 +542,83 @@ def display_windows_sampling( x, y, window_size, skip=0,  method='standard'):
 
     
     """
-    
-    fig=pl.figure()
-    pl.hold(True)
-    if skip < 0 or skip +1 > len(x[0])*len(y):
-        fig.canvas.set_window_title('interrogation points map')
-        pl.scatter(x, y, color='g') #plot interrogation locations
+
+    fig = plt.figure()
+    if skip < 0 or skip + 1 > len(x[0]) * len(y):
+        fig.canvas.set_window_title("interrogation points map")
+        plt.scatter(x, y, color="g")  # plot interrogation locations
     else:
-        nb_windows = len(x[0])*len(y)/(skip+1)
-        #standard method --> display uniformly picked windows
-        if method == 'standard':
-            pl.scatter(x, y, color='g')#plot interrogation locations (green dots)
-            fig.canvas.set_window_title('interrogation window map')
-            #plot the windows as red squares
+        nb_windows = len(x[0]) * len(y) / (skip + 1)
+        # standard method --> display uniformly picked windows
+        if method == "standard":
+            plt.scatter(x, y, color="g")  # plot interrogation locations (green dots)
+            fig.canvas.set_window_title("interrogation window map")
+            # plot the windows as red squares
             for i in range(len(x[0])):
                 for j in range(len(y)):
-                    if j%2 == 0:
-                        if i%(skip+1) == 0:
-                            x1 = x[0][i] - window_size/2
-                            y1 = y[j][0] - window_size/2
-                            pl.gca().add_patch(pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
+                    if j % 2 == 0:
+                        if i % (skip + 1) == 0:
+                            x1 = x[0][i] - window_size / 2
+                            y1 = y[j][0] - window_size / 2
+                            plt.gca().add_patch(
+                                pt.Rectangle(
+                                    (x1, y1),
+                                    window_size,
+                                    window_size,
+                                    facecolor="r",
+                                    alpha=0.5,
+                                )
+                            )
                     else:
-                        if i%(skip+1) == 1 or skip==0:
-                            x1 = x[0][i] - window_size/2
-                            y1 = y[j][0] - window_size/2
-                            pl.gca().add_patch(pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
-        #random method --> display randomly picked windows
-        elif method == 'random':
-            pl.scatter(x, y, color='g')#plot interrogation locations
-            fig.canvas.set_window_title('interrogation window map, showing randomly '+str(nb_windows)+' windows')
+                        if i % (skip + 1) == 1 or skip == 0:
+                            x1 = x[0][i] - window_size / 2
+                            y1 = y[j][0] - window_size / 2
+                            plt.gca().add_patch(
+                                pt.Rectangle(
+                                    (x1, y1),
+                                    window_size,
+                                    window_size,
+                                    facecolor="r",
+                                    alpha=0.5,
+                                )
+                            )
+        # random method --> display randomly picked windows
+        elif method == "random":
+            plt.scatter(x, y, color="g")  # plot interrogation locations
+            fig.canvas.set_window_title(
+                "interrogation window map, showing randomly "
+                + str(nb_windows)
+                + " windows"
+            )
             for i in range(nb_windows):
-                k=np.random.randint(len(x[0])) #pick a row and column index
-                l=np.random.randint(len(y))
-                x1 = x[0][k] - window_size/2
-                y1 = y[l][0] - window_size/2
-                pl.gca().add_patch(pt.Rectangle((x1, y1), window_size, window_size, facecolor='r', alpha=0.5))
+                k = np.random.randint(len(x[0]))  # pick a row and column index
+                l = np.random.randint(len(y))
+                x1 = x[0][k] - window_size / 2
+                y1 = y[l][0] - window_size / 2
+                plt.gca().add_patch(
+                    pt.Rectangle(
+                        (x1, y1), window_size, window_size, facecolor="r", alpha=0.5
+                    )
+                )
         else:
-            raise ValueError('method not valid: choose between standard and random')
-    pl.draw()
-    pl.show()
-   
+            raise ValueError("method not valid: choose between standard and random")
+    plt.draw()
+    plt.show()
+
+
+def transform_coordinates(x, y, u, v):
+    """ Converts coordinate systems from/to the image based / physical based 
+    
+    Input/Output: x,y,u,v
+
+        image based is 0,0 top left, x = columns to the right, y = rows downwards
+        and so u,v 
+
+        physical or right hand one is that leads to the positive vorticity with 
+        the 0,0 origin at bottom left to be counterclockwise
+    
+    """
+    y = y[::-1, :]
+    v *= -1
+    return x, y, u, v
+        

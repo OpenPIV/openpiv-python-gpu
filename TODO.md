@@ -1,22 +1,34 @@
-# List of things to do
-This list is in no particular order of importance
+# TODO
+- [x] profile for the slowest parts of the code
 
-## Break down massive F array
-In the WiDIM function, there is a massive array that holds all the variables for every iteration.
-It is insanely hard to work with for the GPU, and should be broken down into multiple smaller arrays. 
+- [ ] memory optimizations
+    - [x] reuse same arrays as previous iterations
+    - [x] write an outside class to store the common GPU data
+    - [ ] reconcile the definition of new arrays with how it was originally coded
 
-## Multithreading
-Spin off multiple threads to utilize multiple GPUs
+- [x] complete the Jupyter notebook tutorial
+     - [ ] basic
+     - [ ] advanced
 
-## Port to Python 3
-I don't think this would be that hard. Change up some print statements, get rid of the progress bar
+- [ ] correlation class
+    - [ ] move methods out of init()
+    - [ ] define fewer GPU arrays
+    - [ ] Use CUDA kernel in subpixel location - this can gain ~10% performance
 
-## Move GPU functions to new file
-Move some GPU functions to a new file. Makes the code cleaner and makes development/testing easier.
+- [ ] push to mother repository
 
-## Check dependencies
-Need to auto install dependencies, or at least look for dependencies and then list the ones
-that are not on the system.
+- [ ] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 
+- [ ] reduce the number of temporary gpu arrays created
 
+- [ ] re-enable other validation methods
 
+- [ ] fix edge treatment to have less errors
+    - [ ] validation of edges
+    - [ ] validation of points next to mask
+    - [ ] interpolation onto edges
+    
+- [ ] Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
+    - [ ] validate next to masked points
+
+- [ ] Merge/deprecate the various branches
