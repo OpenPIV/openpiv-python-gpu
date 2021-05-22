@@ -1,5 +1,4 @@
 from os import path
-
 from setuptools import setup, find_packages
 from setuptools.extension import Extension
 from Cython.Build import cythonize
@@ -18,9 +17,7 @@ except ImportError:
     print("No GPU support found. Continuing install.")
     pass
 
-extensions = [
-    Extension("openpiv.widim", ["openpiv/widim.pyx"],
-              include_dirs=[numpy.get_include()])]
+extensions = []
 
 if GPU_SUPPORT:
     gpu_module = Extension(name="openpiv.gpu_process",
@@ -39,23 +36,22 @@ extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_
 # read the contents of your README file
 this_directory = path.abspath(path.dirname(__file__))
 # with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
-with open(path.join(this_directory, 'README.md')) as f:
+with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
     name="OpenPIV",
-    version='0.23.4',
+    version='0.23.6',
     cmdclass={'build_ext': build_ext},
     ext_modules=extensions,
     packages=find_packages(),
     include_package_data=True,
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     setup_requires=[
         'setuptools',
-        'cython>=0.29.14',
-        'numpy'
     ],
     install_requires=[
-        'cython>=0.29.14',
         'numpy',
         'imageio',
         'matplotlib>=3',
