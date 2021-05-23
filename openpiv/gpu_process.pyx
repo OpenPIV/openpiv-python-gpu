@@ -1,6 +1,10 @@
 # cython: profile=True
 
-"""This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support."""
+"""This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support.
+
+Note that all data must 32-bit at most to be stored on GPUs.
+
+"""
 
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
@@ -32,7 +36,7 @@ ctypedef np.float32_t DTYPEf_t
 
 
 class CorrelationFunction:
-    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x, d_shift=None, d_strain=None):
+    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x, exteneded_size=None, d_shift=None, d_strain=None):
         """A class representing a cross correlation function.
 
         NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
@@ -49,6 +53,8 @@ class CorrelationFunction:
             pixel overlap between interrogation windows
         nfft_x : int
             window size for fft
+        extended_size : int
+            extended window size to search in the second frame
         d_shift : GPUArray - 2D ([dx, dy])
             dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
             This is using the x-y convention of this code where x is the row and y is the column.
@@ -680,6 +686,115 @@ def get_field_shape(image_size, window_size, overlap):
              (image_size[1] - window_size) // (window_size-overlap) + 1)
 
 
+def gpu_extended_search_area(frame_a,
+            frame_b,
+            window_size,
+            overlap_ratio,
+            dt,
+            search_area_size,
+            **kwargs
+            ):
+    """The implementation of the one-step direct correlation with the same size windows.
+
+    Support for extended search area of the second window has yet to be implimetned. This module is meant to be used
+    with an iterative method to cope with the loss of pairs due to particle movement out of the search area.
+
+    This function is an adaptation of the original extended_search_area_piv function. This has been rewritten with PyCuda and CUDA-C to run on an NVIDIA GPU.
+
+    Reference:
+    Particle-Imaging Techniques for Experimental Fluid Mechanics
+    Annual Review of Fluid Mechanics
+    Vol. 23: 261-304 (Volume publication date January 1991)
+    DOI: 10.1146/annurev.fl.23.010191.001401
+
+    Parameters
+    ----------
+    frame_a, frame_b : array, 2D dtype=np.float32
+        Two-dimensional array of integers containing grey levels of the first and second frames.
+    window_size : int
+        The size of the (square) interrogation window for the first frame.
+    search_area_size : int
+        The size of the (square) interrogation window for the second frame.
+    overlap_ratio : float
+        The ratio of overlap between two windows (between 0 and 1)
+    dt : float
+        Time delay separating the two frames.
+
+    Returns
+    -------
+    u : ndarray
+        2D, the u velocity component, in pixels/seconds.
+    v : ndarray
+        2D, the v velocity component, in pixels/seconds.
+    mask : ndarray
+        2D, the boolean values (True for vectors interpolated from previous iteration).
+    s2n : ndarray
+        2D, the signal to noise ratio of the final velocity field.
+
+
+    Other Parameters
+    ----------------
+    subpixel_method : string
+         one of the following methods to estimate subpixel location of the peak:
+         'centroid' [replaces default if correlation map is negative],
+         'gaussian' [default if correlation map is positive],
+         'parabolic'.
+    sig2noise : bool
+        whether the signal-to-noise ratio should be computed and returned. Setting this to False speeds up the computation significatly.
+    sig2noise_method : string
+        defines the method of signal-to-noise-ratio measure,
+        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
+    width : int
+        the half size of the region around the first
+        correlation peak to ignore for finding the second
+        peak. [default: 2]. Only used if sig2noise_method==peak2peak.
+    nfftx : int
+        the size of the 2D FFT in x-direction (default: 2 x windows_a.shape[0] is recommended)
+
+
+    Examples
+    --------
+
+    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
+
+    """
+    # Extract the parameters
+    return_sig2noise = kwargs['sig2noise'] if 'sig2noise' in kwargs else True
+    sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
+
+    # cast images as floats and sent to gpu
+    d_frame_a_f = gpuarray.to_gpu(frame_a.astype(np.float32))
+    d_frame_b_f = gpuarray.to_gpu(frame_b.astype(np.float32))
+
+    # Get correlation function
+    c = CorrelationFunction(d_frame_a_f, d_frame_b_f, search_area_size, overlap_ratio)
+
+    # Free gpu memory
+    d_frame_a_f.gpudata.free()
+    d_frame_b_f.gpudata.free()
+
+    # Get window displacement to subpixel accuracy
+    sp_i, sp_j = c.subpixel_peak_location()
+
+    # vector field shape
+    n_row, n_col = c.return_shape()
+
+    # reshape the peaks
+    i_peak = np.reshape(sp_i, (n_row, n_col))
+    j_peak = np.reshape(sp_j, (n_row, n_col))
+
+    # calculate velocity fields
+    u =  ((j_peak - c.nfft / 2) - (search_area_size - window_size) / 2) / dt
+    v = -((i_peak - c.nfft / 2) - (search_area_size - window_size) / 2) / dt
+
+    # get the signal-to-noise ratio
+    if return_sig2noise:
+        sig2noise = c.sig2noise_ratio(method=sig2noise_method)
+        return u,v, sig2noise
+    else:
+        return u, v
+
+
 def gpu_piv_def(frame_a, frame_b,
                 window_size_iters=(1, 2),
                 min_window_size=16,
@@ -692,20 +807,18 @@ def gpu_piv_def(frame_a, frame_b,
                 validation_method='median_velocity',
                 trust_1st_iter=True,
                 **kwargs):
-    """Implementation of the WiDIM algorithm (Window Displacement Iterative Method) with window deformation.
+    """Advanced GPU-accelerated
 
-    This is an iterative  method to cope with  the lost of pairs due to particles
-    motion and get rid of the limitation in velocity range due to the window size.
-    The possibility of window size coarsening is implemented.
+
     Example : minimum window size of 16 * 16 pixels and coarse_level of 2 gives a 1st
     iteration with a window size of 64 * 64 pixels, then 32 * 32 then 16 * 16.
-        ----Algorithm : At each step, a predictor of the displacement (dp) is applied based on the results of the previous iteration.
-                        Each window is correlated with a shifted window.
-                        The displacement obtained from this correlation is the residual displacement (dc)
-                        The new displacement (d) is obtained with dx = dpx + dcx and dy = dpy + dcy
-                        The velocity field is validated and wrong vectors are replaced by mean value of surrounding vectors from the previous iteration (or by bilinear interpolation if the window size of previous iteration was different)
-                        The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
-                            dpx_k+1 = dx_k
+    --Algorithm : At each step, a predictor of the displacement (dp) is applied based on the results of the previous iteration.
+                    Each window is correlated with a shifted window.
+                    The displacement obtained from this correlation is the residual displacement (dc)
+                    The new displacement (d) is obtained with dx = dpx + dcx and dy = dpy + dcy
+                    The velocity field is validated and wrong vectors are replaced by mean value of surrounding vectors from the previous iteration (or by bilinear interpolation if the window size of previous iteration was different)
+                    The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
+                        dpx_k+1 = dx_k
 
     WiDIM described in
     Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset. Exp Fluids 26:513–523
@@ -715,13 +828,13 @@ def gpu_piv_def(frame_a, frame_b,
     Parameters
     ----------
     frame_a, frame_b : array, 2D dtype=np.float32
-        Two-dimensional array of integers containing grey levels of the first and second frames
+        Two-dimensional array of integers containing grey levels of the first and second frames.
     window_size_iters : tuple or int
         Number of iterations performed at each window size
     min_window_size : tuple or int
-        Length of the sides of the square deformation. Only support multiples of 8.
+        Length of the sides of the square deformation. Only supports multiples of 8.
     overlap_ratio : float
-        the ratio of overlap between two windows (between 0 and 1).
+        The ratio of overlap between two windows (between 0 and 1).
     dt : float
         Time delay separating the two frames.
     mask : ndarray
@@ -769,14 +882,14 @@ def gpu_piv_def(frame_a, frame_b,
     width : int
         the half size of the region around the first
         correlation peak to ignore for finding the second
-        peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
+        peak. [default: 2]. Only used if sig2noise_method==peak2peak.
 
     Example
     -------
     >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
 
     --------------------------------------
-    Method of implementation : to improve the speed of the program, all data have been placed in the same huge
+    Method of implementation: to improve the speed of the program, all data have been placed in the same huge
     4-dimensions 'f' array. (this prevent the definition of a new array for each iteration) However, during the coarsening process a large part of the array is not used.
     Structure of array f:
     --The 1st index is the main iteration (K)   --> length is nb_iter_max
@@ -789,7 +902,7 @@ def gpu_piv_def(frame_a, frame_b,
                     | 3 --> dy        |
                     | 4 --> dpx       |
                     | 5 --> dpy       |
-                    | 8 --> mask      |
+                    | 6 --> mask      |
     Storage of data with indices is not good for comprehension so its very important to comment on each single operation.
     A python dictionary type could have been used (and would be much more intuitive)
     but its equivalent in c language (type map) is very slow compared to a numpy ndarray.
@@ -1037,13 +1150,6 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
         cdef DTYPEi_t[:, :] val_list = self.val_list
 
-        # # cast images as floats  # delete
-        # cdef DTYPEf_t[:, :] frame_a_f = frame_a.astype(np.float32)
-        # cdef DTYPEf_t[:, :] frame_b_f = frame_b.astype(np.float32)
-
-        # Send images to the gpu
-        # d_frame_a_f = gpuarray.to_gpu(frame_a_f.astype(np.float32))  # delete
-        # d_frame_b_f = gpuarray.to_gpu(frame_b_f.astype(np.float32))
         d_frame_a_f = gpuarray.to_gpu(frame_a.astype(np.float32))
         d_frame_b_f = gpuarray.to_gpu(frame_b.astype(np.float32))
 
@@ -1091,8 +1197,8 @@ class PIVGPU:
                 self.sig2noise = c.sig2noise_ratio(method=sig2noise_method)
 
             # update the field with new values
-            # gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
-            gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], dt, K)
+            # gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], K)
+            gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], K)
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
             try:
@@ -1153,7 +1259,6 @@ class PIVGPU:
 
         # RETURN RESULTS
         print("//////////////////////////////////////////////////////////////////")
-        print("End of iterative process. Rearranging vector fields.")
 
         f = d_f.get()
 
@@ -1176,7 +1281,10 @@ class PIVGPU:
         # d_u_mean.gpudata.free()
         # d_v_mean.gpudata.free()
 
-        return x, y, u, v, mask, self.sig2noise
+        if self.return_sig2noise:
+            return x, y, u, v, mask, self.sig2noise
+        else:
+            return x, y, u, v, mask
 
 
 def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
@@ -1482,7 +1590,7 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
 
 
 #  CUDA GPU FUNCTIONS
-def gpu_update(d_f, i_peak, j_peak, n_row, n_col, dt, k):
+def gpu_update(d_f, i_peak, j_peak, n_row, n_col, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
     Parameters
@@ -1493,21 +1601,18 @@ def gpu_update(d_f, i_peak, j_peak, n_row, n_col, dt, k):
         correlation function peak at each iteration
     n_row, n_col : int
         number of rows and columns in the current iteration
-    dt : float
-        time between images
     k : int
         main loop iteration
 
     """
     mod_update = SourceModule("""
-        __global__ void update_values(float *F, float *i_peak, float *j_peak, int fourth_dim, float dt)
+        __global__ void update_values(float *F, float *i_peak, float *j_peak, int fourth_dim)
         {
             // F is where all the data is stored at a particular K
             // i_peak / j_peak is the correlation peak location
             // sig2noise = sig2noise ratio from correlation function
             // cols = number of columns of IWs
             // fourth_dim  = size of the fourth dimension of F
-            // dt = time step between frames
 
             int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -1534,7 +1639,7 @@ def gpu_update(d_f, i_peak, j_peak, n_row, n_col, dt, k):
 
     # update the values
     update_values = mod_update.get_function("update_values")
-    update_values(d_f_tmp, d_i_peak, d_j_peak, fourth_dim, dt, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    update_values(d_f_tmp, d_i_peak, d_j_peak, fourth_dim, block=(block_size, 1, 1), grid=(x_blocks, 1))
     d_f[k, 0:n_row, 0:n_col, :] = d_f_tmp
 
     # Free gpu memory

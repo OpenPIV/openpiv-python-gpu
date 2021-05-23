@@ -5,6 +5,8 @@
   - [x] reuse same arrays as previous iterations
   - [x] write an outside class to store the common GPU data
   - [ ] reconcile the definition of new arrays with how it was originally coded
+  - [ ] predefine arrays for u, v, x, y, mask
+  - [ ] don't calculate x, y for every iteration
 
 - [x] complete the Jupyter notebook tutorial
    - [x] basic
