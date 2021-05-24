@@ -699,13 +699,13 @@ def gpu_extended_search_area(frame_a,
     Support for extended search area of the second window has yet to be implimetned. This module is meant to be used
     with an iterative method to cope with the loss of pairs due to particle movement out of the search area.
 
-    This function is an adaptation of the original extended_search_area_piv function. This has been rewritten with PyCuda and CUDA-C to run on an NVIDIA GPU.
+    This function is an adaptation of the original extended_search_area_piv function rewritten with PyCuda and CUDA-C to run on an NVIDIA GPU.
 
-    Reference:
-    Particle-Imaging Techniques for Experimental Fluid Mechanics
-    Annual Review of Fluid Mechanics
-    Vol. 23: 261-304 (Volume publication date January 1991)
-    DOI: 10.1146/annurev.fl.23.010191.001401
+    References
+    ----------
+        Particle-Imaging Techniques for Experimental Fluid Mechanics Annual Review of Fluid Mechanics
+            Vol. 23: 261-304 (Volume publication date January 1991)
+            DOI: 10.1146/annurev.fl.23.010191.001401
 
     Parameters
     ----------
@@ -807,23 +807,29 @@ def gpu_piv_def(frame_a, frame_b,
                 validation_method='median_velocity',
                 trust_1st_iter=True,
                 **kwargs):
-    """Advanced GPU-accelerated
+    """An iterative GPU-accelerated algorithm that uses translation and deformation of interrogation windows.
 
+    At every iteration, the estimate of the displacement and gradient are used to shift and deform the interrogation
+    windows used in the next iteration. One or more iterations can be performed before the the estimated velocity is
+    interpolated onto a finer mesh. This is done until the final mesh and number of iterations is met.
 
-    Example : minimum window size of 16 * 16 pixels and coarse_level of 2 gives a 1st
-    iteration with a window size of 64 * 64 pixels, then 32 * 32 then 16 * 16.
-    --Algorithm : At each step, a predictor of the displacement (dp) is applied based on the results of the previous iteration.
-                    Each window is correlated with a shifted window.
-                    The displacement obtained from this correlation is the residual displacement (dc)
-                    The new displacement (d) is obtained with dx = dpx + dcx and dy = dpy + dcy
-                    The velocity field is validated and wrong vectors are replaced by mean value of surrounding vectors from the previous iteration (or by bilinear interpolation if the window size of previous iteration was different)
-                    The new predictor is obtained by bilinear interpolation of the displacements of the previous iteration:
-                        dpx_k+1 = dx_k
+    Algorithm Details
+    -----------------
+    Only window sizes that are multiples of 8 are supported now, and the minimum window size is 8.
+    Windows are shifted symmetrically to reduce bias errors.
+    The displacement obtained after each correlation is the residual displacement dc.
+    The new displacement is computed by dx = dpx + dcx and dy = dpy + dcy.
+    Validation is done by any combination of signal-to-noise ratio, mean, median
+    Smoothn can be used between iterations to improve the estimate and replace missing values.
 
-    WiDIM described in
-    Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset. Exp Fluids 26:513–523
-    Deformation descrbed in
-    Meunier, P., & Leweke, T. (2003). Analysis and treatment of errors due to high velocity gradients in particle image velocimetry. Experiments in fluids, 35(5), 408-421.
+    References
+    ----------
+    Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset.
+        Exp Fluids 26:513–523
+    Meunier, P., & Leweke, T. (2003). Analysis and treatment of errors due to high velocity gradients in particle image velocimetry.
+        Experiments in fluids, 35(5), 408-421.
+    Garcia, D. (2010). Robust smoothing of gridded data in one and higher dimensions with missing values.
+        Computational statistics & data analysis, 54(4), 1167-1178.
 
     Parameters
     ----------
@@ -888,7 +894,8 @@ def gpu_piv_def(frame_a, frame_b,
     -------
     >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
 
-    --------------------------------------
+    """
+    """
     Method of implementation: to improve the speed of the program, all data have been placed in the same huge
     4-dimensions 'f' array. (this prevent the definition of a new array for each iteration) However, during the coarsening process a large part of the array is not used.
     Structure of array f:
