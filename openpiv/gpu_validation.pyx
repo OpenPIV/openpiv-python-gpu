@@ -18,7 +18,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         signal to noise ratio of each velocity
     n_row, n_col : int
         number of rows and columns in the velocity field
-    w : float
+    w : int
         number of pixels between each interrogation window center
     s2n_tol : float
         minimum value for sig2noise

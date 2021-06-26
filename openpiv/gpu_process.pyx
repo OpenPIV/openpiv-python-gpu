@@ -682,8 +682,8 @@ def get_field_shape(image_size, window_size, overlap):
         the shape of the resulting flow field
 
     """
-    return ((image_size[0] - window_size) // (window_size-overlap) + 1,
-             (image_size[1] - window_size) // (window_size-overlap) + 1)
+    spacing = window_size - overlap
+    return DTYPEi((image_size[0] - spacing) // spacing), DTYPEi((image_size[1] - spacing) // spacing)
 
 
 def gpu_extended_search_area(frame_a,
@@ -875,6 +875,8 @@ def gpu_piv_def(frame_a, frame_b,
     ----------------
     median_tol : int
         Tolerance of the median validation.
+    smoothing_par : float
+        Argument to smoothn to apply to the intermediate velocity fields
     subpixel_method : string
          one of the following methods to estimate subpixel location of the peak:
          'centroid' [replaces default if correlation map is negative],
@@ -952,11 +954,13 @@ class PIVGPU:
     ----------------
     median_tol : int
         Tolerance of the median validation.
+    smoothing_par : float
+        Argument to smoothn to apply to the intermediate velocity fields
     subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
-         'centroid' [replaces default if correlation map is negative],
-         'gaussian' [default if correlation map is positive],
-         'parabolic'.
+        one of the following methods to estimate subpixel location of the peak:
+        'centroid' [replaces default if correlation map is negative],
+        'gaussian' [default if correlation map is positive],
+        'parabolic'.
     sig2noise : bool
         whether the signal-to-noise ratio should be computed and returned.  Setting this to False speeds up the computation significatly.
     sig2noise_method : string
@@ -1299,22 +1303,22 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
 
     Parameters
     ----------
-    d_f : gpuarray - 3D, float
-        main array that stores all velocity data
-    validation_list : array - 2D, int
-        indicates which values must be validate. 1 indicates no validation needed, 0 indicated validation is needed
-    d_u_mean, d_v_mean : gpuarray - 3D, float
-        mean velocity surrounding each point
+    d_f : GPUArray
+        3D float, main array that stores all velocity data
+    validation_list : ndarray
+        2D int, indicates which values must be validate. 1 indicates no validation needed, 0 indicated validation is needed
+    d_u_mean, d_v_mean : GPUArray
+        3D float, mean velocity surrounding each point
     nb_iter_max : int
         total number of iterations
     k : int
         main loop iteration count
-    n_row, n_col : array - int
-        number of rows an columns in each main loop iteration
-    w : int
-        pixels between interrogation windows
-    overlap : float
-        ratio of overlap between interrogation windows
+    n_row, n_col : ndarray
+        int, number of rows an columns in each main loop iteration
+    w : ndarray
+        int, pixels between interrogation windows
+    overlap : ndarray
+        int, ratio of overlap between interrogation windows
     dt : float
         time between image frames
 
@@ -1374,10 +1378,10 @@ def gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, k, dat):
         indicates which values must be validated. True means it needs to be validated, False means no validation is needed.
     n_row, n_col : array - 1D
         number rows and columns in each iteration
-    w : int
-        number of pixels between interrogation windows
-    overlap : int
-        overlap of the interrogation windows
+    w : ndarray
+       int,  number of pixels between interrogation windows
+    overlap : ndarray
+        int, overlap of the interrogation windows
     k : int
         current iteration
     dat : int
