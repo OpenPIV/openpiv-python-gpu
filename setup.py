@@ -50,8 +50,11 @@ setup(
     long_description_content_type='text/markdown',
     setup_requires=[
         'setuptools',
+        'cython',
+        'numpy'
     ],
     install_requires=[
+        'cython',
         'numpy',
         'imageio',
         'matplotlib>=3',
