@@ -36,7 +36,7 @@ ctypedef np.float32_t DTYPEf_t
 
 
 class CorrelationFunction:
-    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x, exteneded_size=None, d_shift=None, d_strain=None):
+    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x=None, extended_size=None, d_shift=None, d_strain=None):
         """A class representing a cross correlation function.
 
         NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
@@ -55,8 +55,8 @@ class CorrelationFunction:
             window size for fft
         extended_size : int
             extended window size to search in the second frame
-        d_shift : GPUArray - 2D ([dx, dy])
-            dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
+        d_shift : GPUArray
+            2D ([dx, dy]), dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
             This is using the x-y convention of this code where x is the row and y is the column.
         d_strain : GPUArray
             2D strain tensor. First dimension is (u_x, u_y, v_x, v_y)
@@ -70,9 +70,8 @@ class CorrelationFunction:
         self.n_rows, self.n_cols = np.int32(get_field_shape(self.shape, window_size, overlap))
         self.batch_size = np.int32(self.n_rows * self.n_cols)
 
-        if nfft_x == 0:
+        if nfft_x is None:
             self.nfft = np.int32(2 * self.window_size)
-            assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
         else:
             self.nfft = np.int32(nfft_x)
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
@@ -443,7 +442,7 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        array : array
+        array : ndarray
             array that is image of the correlation function
 
         Returns
@@ -547,10 +546,10 @@ class CorrelationFunction:
 
 
     def subpixel_peak_location(self):
-        """Find subpixel peak approximation using Gaussian method
+        """Find subpixel peak approximation using Gaussian method.
 
         Returns
-        ------
+        -------
         row_sp : array - 1D float
             row max location to subpixel accuracy
         col_sp : array - 1D float
@@ -686,8 +685,7 @@ def get_field_shape(image_size, window_size, overlap):
     return DTYPEi((image_size[0] - spacing) // spacing), DTYPEi((image_size[1] - spacing) // spacing)
 
 
-def gpu_extended_search_area(frame_a,
-            frame_b,
+def gpu_extended_search_area(frame_a, frame_b,
             window_size,
             overlap_ratio,
             dt,
@@ -709,13 +707,14 @@ def gpu_extended_search_area(frame_a,
 
     Parameters
     ----------
-    frame_a, frame_b : array, 2D dtype=np.float32
+    frame_a, frame_b : ndarray
+    2D float
         Two-dimensional array of integers containing grey levels of the first and second frames.
     window_size : int
         The size of the (square) interrogation window for the first frame.
     search_area_size : int
         The size of the (square) interrogation window for the second frame.
-    overlap_ratio : float
+    overlap_ratio : int
         The ratio of overlap between two windows (between 0 and 1)
     dt : float
         Time delay separating the two frames.
@@ -734,23 +733,16 @@ def gpu_extended_search_area(frame_a,
 
     Other Parameters
     ----------------
-    subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
-         'centroid' [replaces default if correlation map is negative],
-         'gaussian' [default if correlation map is positive],
-         'parabolic'.
+    subpixel_method : {'gaussian', 'centroid', 'parabolic'}
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     sig2noise : bool
         whether the signal-to-noise ratio should be computed and returned. Setting this to False speeds up the computation significatly.
-    sig2noise_method : string
-        defines the method of signal-to-noise-ratio measure,
-        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
+    sig2noise_method : {'peak2peak', 'peak2mean', None}
+        Method of signal-to-noise-ratio measur. If None, no measure is performed.
     width : int
-        the half size of the region around the first
-        correlation peak to ignore for finding the second
-        peak. [default: 2]. Only used if sig2noise_method==peak2peak.
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
     nfftx : int
-        the size of the 2D FFT in x-direction (default: 2 x windows_a.shape[0] is recommended)
-
+        The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Examples
     --------
@@ -761,17 +753,15 @@ def gpu_extended_search_area(frame_a,
     # Extract the parameters
     return_sig2noise = kwargs['sig2noise'] if 'sig2noise' in kwargs else True
     sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
+    nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
+    overlap = overlap_ratio * window_size
 
     # cast images as floats and sent to gpu
     d_frame_a_f = gpuarray.to_gpu(frame_a.astype(np.float32))
     d_frame_b_f = gpuarray.to_gpu(frame_b.astype(np.float32))
 
     # Get correlation function
-    c = CorrelationFunction(d_frame_a_f, d_frame_b_f, search_area_size, overlap_ratio)
-
-    # Free gpu memory
-    d_frame_a_f.gpudata.free()
-    d_frame_b_f.gpudata.free()
+    c = CorrelationFunction(d_frame_a_f, d_frame_b_f, search_area_size, overlap, nfftx)
 
     # Get window displacement to subpixel accuracy
     sp_i, sp_j = c.subpixel_peak_location()
@@ -784,13 +774,17 @@ def gpu_extended_search_area(frame_a,
     j_peak = np.reshape(sp_j, (n_row, n_col))
 
     # calculate velocity fields
-    u =  ((j_peak - c.nfft / 2) - (search_area_size - window_size) / 2) / dt
-    v = -((i_peak - c.nfft / 2) - (search_area_size - window_size) / 2) / dt
+    u =  (j_peak - (search_area_size - window_size) / 2) / dt
+    v = -(i_peak - (search_area_size - window_size) / 2) / dt
+
+    # Free gpu memory
+    d_frame_a_f.gpudata.free()
+    d_frame_b_f.gpudata.free()
 
     # get the signal-to-noise ratio
     if return_sig2noise:
         sig2noise = c.sig2noise_ratio(method=sig2noise_method)
-        return u,v, sig2noise
+        return u, v, sig2noise
     else:
         return u, v
 
@@ -833,8 +827,8 @@ def gpu_piv_def(frame_a, frame_b,
 
     Parameters
     ----------
-    frame_a, frame_b : array, 2D dtype=np.float32
-        Two-dimensional array of integers containing grey levels of the first and second frames.
+    frame_a, frame_b : ndarray
+        2D float, integers containing grey levels of the first and second frames.
     window_size_iters : tuple or int
         Number of iterations performed at each window size
     min_window_size : tuple or int
@@ -851,10 +845,10 @@ def gpu_piv_def(frame_a, frame_b,
         Whether to smooth the intermediate fields.
     nb_validation_iter : int
         Number of iterations per validation cycle.
-    validation_method : {tuple, 'median_velocity'}
+    validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
         Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
     trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
+        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
 
     Returns
     -------
@@ -873,24 +867,20 @@ def gpu_piv_def(frame_a, frame_b,
 
     Other Parameters
     ----------------
-    median_tol : int
-        Tolerance of the median validation.
+    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
+        Tolerance of the validation methods.
     smoothing_par : float
-        Argument to smoothn to apply to the intermediate velocity fields
-    subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
-         'centroid' [replaces default if correlation map is negative],
-         'gaussian' [default if correlation map is positive],
-         'parabolic'.
+        Smoothing parameter to pass to Smoothn to apply to the intermediate velocity fields.
+    subpixel_method : {'gaussian', 'centroid', 'parabolic'}
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     sig2noise : bool
         whether the signal-to-noise ratio should be computed and returned. Setting this to False speeds up the computation significatly.
-    sig2noise_method : string
-        defines the method of signal-to-noise-ratio measure,
-        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-    width : int
-        the half size of the region around the first
-        correlation peak to ignore for finding the second
-        peak. [default: 2]. Only used if sig2noise_method==peak2peak.
+    sig2noise_method : {'peak2peak', 'peak2mean', None}
+        Method of signal-to-noise-ratio measurement. If None, no measure is performed.
+    s2n_width : int
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
+    nfftx : int
+        The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Example
     -------
@@ -945,31 +935,27 @@ class PIVGPU:
         Whether to smooth the intermediate fields.
     nb_validation_iter : int
         Number of iterations per validation cycle.
-    validation_method : {tuple, 'median_velocity'}
+    validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
         Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
     trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1 (Default value)
+        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
 
     Other Parameters
     ----------------
-    median_tol : int
-        Tolerance of the median validation.
+    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
+        Tolerance of the validation methods.
     smoothing_par : float
-        Argument to smoothn to apply to the intermediate velocity fields
-    subpixel_method : string
-        one of the following methods to estimate subpixel location of the peak:
-        'centroid' [replaces default if correlation map is negative],
-        'gaussian' [default if correlation map is positive],
-        'parabolic'.
+        Smoothing parameter to pass to Smoothn to apply to the intermediate velocity fields.
+    subpixel_method : {'gaussian', 'centroid', 'parabolic'}
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     sig2noise : bool
-        whether the signal-to-noise ratio should be computed and returned.  Setting this to False speeds up the computation significatly.
-    sig2noise_method : string
-        defines the method of signal-to-noise-ratio measure,
-        ('peak2peak' or 'peak2mean'. If None, no measure is performed.)
-    width : int
-        the half size of the region around the first
-        correlation peak to ignore for finding the second
-        peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
+        whether the signal-to-noise ratio should be computed and returned. Setting this to False speeds up the computation significatly.
+    sig2noise_method : {'peak2peak', 'peak2mean', None}
+        Method of signal-to-noise-ratio measurement. If None, no measure is performed.
+    s2n_width : int
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
+    nfftx : int
+        The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Methods
     -------
@@ -1012,13 +998,21 @@ class PIVGPU:
         # validation method
         self.val_tols = [None, None, None, None]
         val_methods = validation_method if type(validation_method) == str else (validation_method,)
+        if 's2n' in val_methods:
+            self.val_tols[1] = kwargs['s2n_tol'] if 's2n_tol' in kwargs else 1.25  # default tolerance
         if 'median_velocity' in val_methods:
             self.val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
+        if 'mean_velocity' in val_methods:
+            self.val_tols[2] = kwargs['mean_tol'] if 'mean_tol' in kwargs else 2  # default tolerance
+        if 'rms_velocity' in val_methods:
+            self.val_tols[2] = kwargs['rms_tol'] if 'mean_tol' in kwargs else 2  # default tolerance
 
         # other parameters
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
         self.return_sig2noise = kwargs['sig2noise'] if 'sig2noise' in kwargs else True
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
+        self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
+        self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
 
         # Cython buffer definitions
         cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPEi)
@@ -1109,7 +1103,8 @@ class PIVGPU:
 
         Parameters
         ----------
-        frame_a, frame_b : array, 2D dtype=np.float32
+        frame_a, frame_b : ndarray
+            2D float, integers containing grey levels of the first and second frames.
 
         Returns
         -------
@@ -1142,6 +1137,8 @@ class PIVGPU:
         d_strain = self.d_strain
         d_u_mean = self.d_u_mean
         d_v_mean = self.d_v_mean
+        d_shift_arg = None
+        d_strain_arg = None
 
         # type declarations
         cdef Py_ssize_t K  # main iteration index
@@ -1161,6 +1158,7 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
         cdef DTYPEi_t[:, :] val_list = self.val_list
 
+        # cast to 32-bit floats
         d_frame_a_f = gpuarray.to_gpu(frame_a.astype(np.float32))
         d_frame_b_f = gpuarray.to_gpu(frame_b.astype(np.float32))
 
@@ -1169,8 +1167,6 @@ class PIVGPU:
             print("//////////////////////////////////////////////////////////////////")
             print("ITERATION {}".format(K))
 
-            d_shift_arg = None
-            d_strain_arg = None
             if K > 0:
                 # Calculate second frame displacement (shift)
                 d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
@@ -1186,7 +1182,7 @@ class PIVGPU:
                         gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
 
             # Get correlation function
-            c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], 0, d_shift=d_shift_arg, d_strain=d_strain_arg)
+            c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], self.nfftx, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = c.subpixel_peak_location()
@@ -1205,7 +1201,7 @@ class PIVGPU:
             # Get signal to noise ratio
             # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
             if self.return_sig2noise:
-                self.sig2noise = c.sig2noise_ratio(method=sig2noise_method)
+                self.sig2noise = c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
 
             # update the field with new values
             # gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], K)
