@@ -783,7 +783,7 @@ def gpu_extended_search_area(frame_a, frame_b,
         return u, v
 
 
-def gpu_piv_def(frame_a, frame_b,
+def gpu_piv(frame_a, frame_b,
                 window_size_iters=(1, 2),
                 min_window_size=16,
                 overlap_ratio=0.5,
@@ -878,7 +878,7 @@ def gpu_piv_def(frame_a, frame_b,
 
     Example
     -------
-    >>> x, y, u, v, mask = gpu_piv_def(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
+    >>> x, y, u, v, mask = gpu_piv(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
 
     """
     """
