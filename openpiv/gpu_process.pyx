@@ -250,15 +250,9 @@ class CorrelationFunction:
 
         else:
             # use non-translating windows
-            d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
-            d_strain_b = gpuarray.zeros((4, h, w), dtype=np.float32)
-            d_dx_a = gpuarray.zeros((h, w), dtype=np.float32)
-            d_dx_b = gpuarray.zeros((h, w), dtype=np.float32)
-            d_dy_a = gpuarray.zeros((h, w), dtype=np.float32)
-            d_dy_b = gpuarray.zeros((h, w), dtype=np.float32)
-            window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform = mod_ws.get_function("window_slice")
+            window_slice_deform(d_frame_a, d_win_a, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
 
     def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
