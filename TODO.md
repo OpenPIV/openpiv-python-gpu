@@ -2,11 +2,14 @@
 
 ## Bugs
 - [ ] very high overlap ratios throw an error
+- [ ] bias error in non-translating window
+- [ ] diagonal artifacts in gradient field
 
 ## Documentation
-- [x] complete the Jupyter notebook tutorial
+- [x] complete the Jupyter notebook tutorials
    - [x] basic
-   - [ ] advanced
+   - [x] advanced
+- [ ] update the readme to reflect improved functionality
 
 ## Optimizations
 - [ ] memory optimizations
@@ -15,6 +18,7 @@
   - [ ] reconcile the definition of new arrays with how it was originally coded
   - [ ] predefine arrays for u, v, x, y, mask
   - [ ] don't calculate x, y for every iteration
+  - [ ] use shared memory for GPU kernels
 
 - [ ] correlation class
   - [ ] move methods out of init()
@@ -23,6 +27,7 @@
 
 - [ ] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 - [ ] reduce the number of temporary gpu arrays created
+- [ ] make consistent the strain and shift array arguments in the correlation function
 
 ## Features
 - [ ] dismantle the F-structure so that others can more easily contribute
@@ -40,3 +45,5 @@
   - [ ] validation of edges
   - [ ] validation of points next to mask
   - [ ] interpolation onto edges
+  
+- [x] replace vectors with median rather than median of surrounding points to not be affected by outliers

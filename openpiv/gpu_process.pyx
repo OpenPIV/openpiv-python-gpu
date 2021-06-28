@@ -107,9 +107,6 @@ class CorrelationFunction:
         This is necessary to do the FFTs all at once on the GPU. Parts of this code assumes that the interrogation
         windows are square. This populates interrogation windows from the origin of the image.
 
-        Deformation method is described in
-        P. Meunier, T. Leweke, Analysis and treatment of errors due to high velocity gradients in particle image velocimetry, Experiments in Fluids(2003). DOI 10.1007/s00348-003-0673-2.
-
         Parameters
         -----------
         d_frame_a, d_frame_b : GPUArray - 2D float32
@@ -126,12 +123,12 @@ class CorrelationFunction:
         """
         # define window slice algorithm
         mod_ws = SourceModule("""
-            __global__ void window_slice(float *input, float *output, int window_size, int spacing, int n_col, int w, int batch_size)
+            __global__ void window_slice(float *input, float *output, int window_size, int spacing, int n_col, int w)
         {
             int f_range;
             int w_range;
             int IW_size = window_size * window_size;
-            
+
             // indices of image to map from
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
@@ -151,59 +148,57 @@ class CorrelationFunction:
             // w = width (number of columns in the full image)
             // h = height (number of rows in the full image)
 
-            // int f_range;
             int w_range;
             float x_shift;
             float y_shift;
+            // int num_window = n_row * n_col;
 
-            // int IW_size = window_size * window_size;
-            // int num_window = n_col * n_row
-            
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;  // window index
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-            
+
             // Loop through each interrogation window and apply the shift and deformation.
-            
             // get the strain tensor values
             float u_x = strain[ind_i];
             float u_y = strain[num_window + ind_i];
             float v_x = strain[2 * num_window + ind_i];
             float v_y = strain[3 * num_window + ind_i];
-            
+
             // compute the window vector
-            float r_x = ind_x - window_size / 2 + 1;  // r_x = x - x_c
+            float r_x = ind_x - window_size / 2 + 1;  // r_x = x - x_c // (+ 1) reduces the bias error
             float r_y = ind_y - window_size / 2 + 1;  // r_y = y - y_c
-            
+
             // apply deformation operation
-            x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r + u + dx
-            y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r + v + dy
-            
+            x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r * du + dx
+            y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r * dv + dy
+
             // do the mapping
             float x = ind_i % n_col * spacing + x_shift;
             float y = ind_i / n_col * spacing + y_shift;
-            
+
             // do bilinear interpolation
             int x2 = ceilf(x);
             int x1 = floorf(x);
             int y2 = ceilf(y);
             int y1 = floorf(y);
-            
+
             // prevent divide-by-zero
             if (x2 == x1) {x2 = x1 + 1;}
             if (y2 == y1) {y2 = y2 + 1;}
-            
+
+            // find limits of domain
             int outside_range = (x1 >= 0 && x2 < w && y1 >= 0 && y2 < h);
-            
+
+            // terms of the bilinear interpolation
             float f11 = input[(y1 * w + x1) * outside_range];
             float f21 = input[(y1 * w + x2) * outside_range];
             float f12 = input[(y2 * w + x1) * outside_range];
             float f22 = input[(y2 * w + x2) * outside_range];
-            
+
             // indices of image to map to
             w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
-            
+
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
 
@@ -213,7 +208,7 @@ class CorrelationFunction:
         # get field shapes
         h = np.int32(self.shape[0])
         w = np.int32(self.shape[1])
-        grid_spacing = self.window_size - self.overlap
+        spacing = self.window_size - self.overlap
 
         # for debugging
         assert self.window_size >= 8, "Window size is too small."
@@ -223,8 +218,7 @@ class CorrelationFunction:
         block_size = 8
         grid_size = int(self.window_size / block_size)
 
-        # slice up windows
-
+        # slice windows
         if d_shift is not None:
             d_dy = d_shift[1].copy()
             d_dx = d_shift[0].copy()
@@ -241,8 +235,8 @@ class CorrelationFunction:
             d_dy_b = d_dy / 2
             d_dx_b = d_dx / 2
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, grid_spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, grid_spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
             # free displacement GPU memory
             d_dy_a.gpudata.free()
@@ -256,9 +250,15 @@ class CorrelationFunction:
 
         else:
             # use non-translating windows
-            window_slice = mod_ws.get_function("window_slice")
-            window_slice(d_frame_a, d_win_a, self.window_size, grid_spacing, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
-            window_slice(d_frame_b, d_win_b, self.window_size, grid_spacing, self.n_cols, w, self.batch_size, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            d_strain_a = gpuarray.zeros((4, h, w), dtype=np.float32)
+            d_strain_b = gpuarray.zeros((4, h, w), dtype=np.float32)
+            d_dx_a = gpuarray.zeros((h, w), dtype=np.float32)
+            d_dx_b = gpuarray.zeros((h, w), dtype=np.float32)
+            d_dy_a = gpuarray.zeros((h, w), dtype=np.float32)
+            d_dy_b = gpuarray.zeros((h, w), dtype=np.float32)
+            window_slice_deform = mod_ws.get_function("window_slice_deform")
+            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.batch_size, w, h, block=(block_size, block_size, 1), grid=(int(self.batch_size), grid_size, grid_size))
 
 
     def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
@@ -911,7 +911,6 @@ def gpu_piv_def(frame_a, frame_b,
     return piv_gpu(frame_a, frame_b)
 
 
-
 class PIVGPU:
     """This class is the object-oriented implementation of the GPU PIV function.
 
@@ -928,7 +927,7 @@ class PIVGPU:
     dt : float
         Time delay separating the two frames.
     mask : ndarray
-        2D, dtype=np.int32. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+        2D, float. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
     smooth : bool

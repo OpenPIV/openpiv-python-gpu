@@ -101,7 +101,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     d_neighbours, d_neighbours_present = gpu_get_neighbours(d_u, d_v, n_row, n_col)
 
     # compute the mean velocities to be returned
-    d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
+    d_u_median, d_v_median = gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col)
 
     # S2N VALIDATION
     if s2n_tol is not None:
@@ -119,8 +119,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     if median_tol is not None:
         median_tol = np.float32(median_tol)
 
-        # get rms data and mean velocity data.
-        d_u_median, d_v_median = gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col)
+        # get median velocity data
         d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
 
         # launch validation kernel
@@ -128,8 +127,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         neighbour_validation(d_val_list, d_u, d_v, d_u_median, d_v_median, d_u_median_fluc, d_v_median_fluc, n_row, n_col, median_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
         # Free gpu memory
-        d_u_median.gpudata.free()
-        d_v_median.gpudata.free()
+        # d_u_median.gpudata.free()
+        # d_v_median.gpudata.free()
         d_u_median_fluc.gpudata.free()
         d_v_median_fluc.gpudata.free()
 
@@ -137,7 +136,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     if mean_tol is not None:
         mean_tol = np.float32(mean_tol)
 
-        # get mean velocity data.
+        # get mean velocity data
+        d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
         d_u_mean_fluc, d_v_mean_fluc = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
 
         # launch validation kernel
@@ -145,6 +145,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         neighbour_validation(d_val_list, d_u, d_v, d_u_mean, d_v_mean, d_u_mean_fluc, d_v_mean_fluc, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
         # Free gpu memory
+        d_u_mean.gpudata.free()
+        d_v_mean.gpudata.free()
         d_u_mean_fluc.gpudata.free()
         d_v_mean_fluc.gpudata.free()
 
@@ -152,7 +154,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     if rms_tol is not None:
         rms_tol = np.float32(rms_tol)
 
-        # get rms velocity data.
+        # get rms velocity data
         d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
 
         # launch validation kernel
@@ -172,7 +174,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     d_neighbours_present.gpudata.free()
     d_neighbours.gpudata.free()
 
-    return val_list, d_u_mean, d_v_mean
+    return val_list, d_u_median, d_v_median
 
 
 def gpu_find_neighbours(n_row, n_col):
