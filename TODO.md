@@ -47,3 +47,5 @@
   - [ ] interpolation onto edges
   
 - [x] replace vectors with median rather than median of surrounding points to not be affected by outliers
+  
+- [ ] 2D subpixel location implemented in CUDA
