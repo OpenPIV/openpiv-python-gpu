@@ -21,6 +21,7 @@
   - [ ] use shared memory for GPU kernels
 
 - [ ] correlation class
+  - [ ] reduce operations outside of CUDA kernels in iw_arrange()
   - [ ] move methods out of init()
   - [ ] define fewer GPU arrays
   - [ ] Use CUDA kernel in subpixel location - this can gain ~10% performance

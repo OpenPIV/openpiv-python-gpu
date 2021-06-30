@@ -4,6 +4,16 @@ import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 
+cimport numpy as np
+
+# Define 32-bit types
+DTYPE_i = np.int32
+ctypedef np.int32_t DTYPEi_t
+DTYPE_b = np.uint8
+ctypedef np.uint8_t DTYPEb_t
+DTYPE_f = np.float32
+ctypedef np.float32_t DTYPEf_t
+
 
 def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean_tol, rms_tol):
     """Returns an array indicating which indices need to be validated.
@@ -81,13 +91,13 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     """)
 
     # create array to store validation list
-    val_list = np.ones_like(sig2noise, dtype=np.int32)
+    val_list = np.ones_like(sig2noise, dtype=DTYPE_i)
     d_val_list = gpuarray.to_gpu(val_list)
 
     # cast inputs to appropriate data types
-    n_row = np.int32(n_row)
-    n_col = np.int32(n_col)
-    w = np.float32(w)
+    n_row = DTYPE_i(n_row)
+    n_col = DTYPE_i(n_col)
+    w = DTYPE_f(w)
 
     # GPU settings
     block_size = 32
@@ -105,7 +115,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # S2N VALIDATION
     if s2n_tol is not None:
-        s2n_tol = np.float32(s2n_tol)
+        s2n_tol = DTYPE_f(s2n_tol)
         d_sig2noise = gpuarray.to_gpu(sig2noise)
 
         # Launch signal to noise kernel
@@ -117,7 +127,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # MEDIAN VALIDATION
     if median_tol is not None:
-        median_tol = np.float32(median_tol)
+        median_tol = DTYPE_f(median_tol)
 
         # get median velocity data
         d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
@@ -134,7 +144,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # MEAN VALIDATION
     if mean_tol is not None:
-        mean_tol = np.float32(mean_tol)
+        mean_tol = DTYPE_f(mean_tol)
 
         # get mean velocity data
         d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
@@ -152,7 +162,7 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # RMS VALIDATION
     if rms_tol is not None:
-        rms_tol = np.float32(rms_tol)
+        rms_tol = DTYPE_f(rms_tol)
 
         # get rms velocity data
         d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
@@ -244,9 +254,9 @@ def gpu_find_neighbours(n_row, n_col):
     x_blocks = int(n_col * n_row // block_size + 1)
 
     # allocate space for new array
-    neighbours_present = np.ones([n_row, n_col, 3, 3], dtype=np.int32)
+    neighbours_present = np.ones([n_row, n_col, 3, 3], dtype=DTYPE_i)
 
-    assert neighbours_present.dtype == np.int32, "Wrong data type for neighbours present"
+    assert neighbours_present.dtype == DTYPE_i, "Wrong data type for neighbours present"
 
     # send data to gpu
     d_neighbours_present = gpuarray.to_gpu(neighbours_present)
@@ -348,7 +358,7 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
 
     # find neighbours
     d_neighbours_present = gpu_find_neighbours(n_row, n_col)
-    neighbours = np.zeros((n_row, n_col, 2, 3, 3), dtype=np.float32)
+    neighbours = np.zeros((n_row, n_col, 2, 3, 3), dtype=DTYPE_f)
 
     # send data to the gpu
     d_neighbours = gpuarray.to_gpu(neighbours)
@@ -427,8 +437,8 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     """)
 
     # allocate space for arrays
-    u_mean = np.zeros((n_row, n_col), dtype=np.float32)
-    v_mean = np.zeros((n_row, n_col), dtype=np.float32)
+    u_mean = np.zeros((n_row, n_col), dtype=DTYPE_f)
+    v_mean = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
     # define GPU data
     # block_size = 16
@@ -525,8 +535,8 @@ def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row,
     """)
 
     # allocate space for data
-    u_rms = np.zeros((n_row, n_col), dtype=np.float32)
-    v_rms = np.zeros((n_row, n_col), dtype=np.float32)
+    u_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
+    v_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
     # define GPU data
     block_size = 32
@@ -697,8 +707,8 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     """)
 
     # allocate space for arrays
-    u_median = np.zeros((n_row, n_col), dtype=np.float32)
-    v_median = np.zeros((n_row, n_col), dtype=np.float32)
+    u_median = np.zeros((n_row, n_col), dtype=DTYPE_f)
+    v_median = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
     # define GPU data
     block_size = 32
@@ -879,8 +889,8 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
     """)
 
     # allocate space for data
-    u_median_fluc = np.zeros((n_row, n_col), dtype=np.float32)
-    v_median_fluc = np.zeros((n_row, n_col), dtype=np.float32)
+    u_median_fluc = np.zeros((n_row, n_col), dtype=DTYPE_f)
+    v_median_fluc = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
     # define GPU data
     block_size = 32
@@ -978,8 +988,8 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
     """)
 
     # allocate space for data
-    u_rms = np.zeros((n_row, n_col), dtype=np.float32)
-    v_rms = np.zeros((n_row, n_col), dtype=np.float32)
+    u_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
+    v_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
     # define GPU data
     # block_size = 16
@@ -1061,10 +1071,10 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
 #     }
 #     """)
 #
-#     div = np.empty((n_row, n_col), dtype=np.float32)
-#     n_row = np.int32(n_row)
-#     n_col = np.int32(n_col)
-#     w = np.float32(w)
+#     div = np.empty((n_row, n_col), dtype=DTYPE_f)
+#     n_row = DTYPE_i(n_row)
+#     n_col = DTYPE_i(n_col)
+#     w = DTYPE_f(w)
 #
 #     # define GPU data
 #     # block_size = 16
