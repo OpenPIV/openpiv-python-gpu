@@ -2,7 +2,9 @@
 
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support.
 
-Note that all data must 32-bit at most to be stored on GPUs.
+Note that all data must 32-bit at most to be stored on GPUs. All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
+and therefore "d_" signifies that it is a device variable. Please adhere to this standard as it makes developing
+and debugging much easier.
 
 """
 
@@ -37,10 +39,6 @@ class CorrelationFunction:
     def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x=None, extended_size=None, d_shift=None, d_strain=None):
         """A class representing a cross correlation function.
 
-        NOTE: All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
-        and therefore "d_" signifies that it is a device variable. Please adhere to this standard as it makes developing
-        and debugging much easier.
-
         Parameters
         ----------
         d_frame_a, d_frame_b : GPUArray
@@ -58,6 +56,13 @@ class CorrelationFunction:
             This is using the x-y convention of this code where x is the row and y is the column.
         d_strain : GPUArray
             2D strain tensor. First dimension is (u_x, u_y, v_x, v_y)
+            
+        Methods
+        -------
+        subpixel_peak_location
+            return the location of the correlation peak
+        sig2noise_ratio
+            returns the signal-to-noise ratio of the correlation peaks
 
         """
         # PARAMETERS FOR CORRELATION FUNCTION
@@ -75,25 +80,21 @@ class CorrelationFunction:
 
         # temp solution  # delete
         self.extended_size = self.window_size
+        
+        # must do this for skcuda misc library
+        cu_misc.init()
 
         # TODO move these calculations out of init
-        # TODO define GPU arrays more intelligently
         # START DOING CALCULATIONS
         # Return stack of all IWs
-        d_win_a = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        d_win_b = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        self._iw_arrange(d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift, d_strain)
+        d_win_a, d_win_b = self._iw_arrange(d_frame_a, d_frame_b, d_shift, d_strain)
 
         # normalize array by computing the norm of each IW
-        d_win_a_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        d_win_b_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        self._normalize_intensity(d_win_a, d_win_b, d_win_a_norm, d_win_b_norm)
+        d_win_a_norm, d_win_b_norm = self._normalize_intensity(d_win_a, d_win_b)
 
         # TODO pad for extended search area
         # zero pad arrays
-        d_win_a_zp = gpuarray.zeros([self.n_windows, self.nfft, self.nfft], dtype=DTYPE_f)
-        d_win_b_zp = gpuarray.zeros_like(d_win_a_zp)
-        self._zero_pad(d_win_a_norm, d_win_b_norm, d_win_a_zp, d_win_b_zp)
+        d_win_a_zp, d_win_b_zp = self._zero_pad(d_win_a_norm, d_win_b_norm)
 
         # correlate Windows
         self.data = self._correlate_windows(d_win_a_zp, d_win_b_zp)
@@ -101,23 +102,24 @@ class CorrelationFunction:
         # get first peak of correlation function
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
 
-
-    def _iw_arrange(self, d_frame_a, d_frame_b, d_win_a, d_win_b, d_shift, d_strain):
+    def _iw_arrange(self, d_frame_a, d_frame_b, d_shift, d_strain):
         """Creates a 3D array stack of all of the interrogation windows.
 
-        This is necessary to do the FFTs all at once on the GPU. Parts of this code assumes that the interrogation
-        windows are square. This populates interrogation windows from the origin of the image.
+        This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin of the image.
 
         Parameters
         -----------
         d_frame_a, d_frame_b : GPUArray
             2D float, PIV image pair
+        d_shift : GPUArray
+            3D float, shift of the second window
+        d_strain : GPUArray
+            4D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y)
+
+        Returns
+        -------
         d_win_a, d_win_b : GPUArray
             3D float, All interrogation windows stacked on each other
-        d_shift : GPUArray
-            shift of the second window
-        d_strain : GPUArray
-            2D strain rate tensor. First dimension is (u_x, u_y, v_x, v_y)
 
         """
         # define window slice algorithm
@@ -141,12 +143,12 @@ class CorrelationFunction:
 
             output[w_range] = input[f_range];
         }
-        
-            __global__ void window_slice_deform(float *input, float *output, float *dx, float *dy, float *strain, int window_size, int spacing, int n_col, int num_window, int w, int h)
-        {
-            // w = width (number of columns in the full image)
-            // h = height (number of rows in the full image)
 
+            __global__ void window_slice_deform(float *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int n_col, int num_window, int w, int h)
+        {
+            // f : factor to apply to the shift and strain tensors
+            // w : width (number of columns in the full image)
+            // h : height (number of rows in the full image)
             int w_range;
             float x_shift;
             float y_shift;
@@ -158,19 +160,23 @@ class CorrelationFunction:
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
 
             // Loop through each interrogation window and apply the shift and deformation.
+            // get the shift values
+            float dx = shift[ind_i] * f;
+            float dy = shift[num_window + ind_i] * f;
+
             // get the strain tensor values
-            float u_x = strain[ind_i];
-            float u_y = strain[num_window + ind_i];
-            float v_x = strain[2 * num_window + ind_i];
-            float v_y = strain[3 * num_window + ind_i];
+            float u_x = strain[ind_i] * f;
+            float u_y = strain[num_window + ind_i] * f;
+            float v_x = strain[2 * num_window + ind_i] * f;
+            float v_y = strain[3 * num_window + ind_i] * f;
 
             // compute the window vector
             float r_x = ind_x - window_size / 2 + 0.5;  // r_x = x - x_c
             float r_y = ind_y - window_size / 2 + 0.5;  // r_y = y - y_c
 
             // apply deformation operation
-            x_shift = ind_x + dx[ind_i] + r_x * u_x + r_y * u_y;  // r * du + dx
-            y_shift = ind_y + dy[ind_i] + r_x * v_x + r_y * v_y;  // r * dv + dy
+            x_shift = ind_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+            y_shift = ind_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
 
             // do the mapping
             float x = ind_i % n_col * spacing + x_shift;
@@ -202,50 +208,42 @@ class CorrelationFunction:
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
         }
         """)
+        # for debugging
+        assert self.window_size >= 8, "Window size is too small."
+        assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
 
         # get field shapes
         h = DTYPE_i(self.shape[0])
         w = DTYPE_i(self.shape[1])
         spacing = self.window_size - self.overlap
 
-        # for debugging
-        assert self.window_size >= 8, "Window size is too small."
-        assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
+        # create GPU arrays to store the window data
+        d_win_a = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
+        d_win_b = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
 
         # gpu parameters
         block_size = 8
         grid_size = int(self.window_size / block_size)
 
-        # TODO reduce number of operations here--move them into the GPU kernel
+        t1 = process_time_ns()  # debug
         # slice windows
         if d_shift is not None:
-            d_dy = d_shift[1].copy()
-            d_dx = d_shift[0].copy()
-            if d_strain is not None:
-                d_strain_a = -d_strain.copy() / 2
-                d_strain_b = d_strain.copy() / 2
-            else:
-                d_strain_a = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
-                d_strain_b = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
+            # use translating windows
+            if d_strain is None:
+                d_strain = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
+
+            # factors to apply the symmetric shift
+            f_a = DTYPE_f(-0.5)
+            f_b = DTYPE_f(0.5)
 
             # shift frames and deform
-            d_dy_a = -d_dy / 2
-            d_dx_a = -d_dx / 2
-            d_dy_b = d_dy / 2
-            d_dx_b = d_dx / 2
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_dx_a, d_dy_a, d_strain_a, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_dx_b, d_dy_b, d_strain_b, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, d_shift, d_strain, f_a, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_shift, d_strain, f_b, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
-            # free displacement GPU memory
-            d_dy_a.gpudata.free()
-            d_dx_a.gpudata.free()
-            d_dy_b.gpudata.free()
-            d_dx_b.gpudata.free()
-            d_dx.gpudata.free()
-            d_dy.gpudata.free()
-            d_strain_a.gpudata.free()
-            d_strain_b.gpudata.free()
+            # free GPU memory
+            d_shift.gpudata.free()
+            d_strain.gpudata.free()
 
         else:
             # use non-translating windows
@@ -253,21 +251,22 @@ class CorrelationFunction:
             window_slice_deform(d_frame_a, d_win_a, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
             window_slice_deform(d_frame_b, d_win_b, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
+        print('IW_arrange time: {}'.format(process_time_ns() - t1))  # debug
+        return d_win_a, d_win_b
 
-    def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
+
+    def _normalize_intensity(self, d_win_a, d_win_b):
         """Remove the mean from each IW of a 3D stack of IWs.
 
         Parameters
         ----------
-        d_win_a, d_win_b : GPUArray - 3D float32
+        d_win_a, d_win_b : GPUArray
             3D float, stack of first IWs
-        d_win_a_norm, d_win_b_norm : GPUArray - 3D float32
-            3D float, the normalized intensities in the windows
 
         Returns
         -------
-        norm : GPUArray
-            3D, stack of IWs with mean removed
+        d_win_a_norm, d_win_b_norm : GPUArray
+            3D float, the normalized intensities in the windows
 
         """
         mod_norm = SourceModule("""
@@ -283,8 +282,9 @@ class CorrelationFunction:
         }
         """)
 
-        # must do this for skcuda misc library
-        cu_misc.init()
+        # define GPU arrays to store window data
+        d_win_a_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
+        d_win_b_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
 
         # number of pixels in each interrogation window
         iw_size = DTYPE_i(d_win_a.shape[1] * d_win_a.shape[2])
@@ -299,6 +299,7 @@ class CorrelationFunction:
 
         assert d_win_a.size % (block_size ** 2) == 0, 'Not all windows are being normalized. Something wrong with block or grid size.'
 
+        # TODO just modify the existing array
         # get function and norm IWs
         normalize = mod_norm.get_function('normalize')
         normalize(d_win_a, d_win_a_norm, d_mean_a, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
@@ -310,23 +311,21 @@ class CorrelationFunction:
         d_win_a.gpudata.free()
         d_win_b.gpudata.free()
 
+        return d_win_a_norm, d_win_b_norm
 
-    def _zero_pad(self, d_win_a_norm, d_win_b_norm, d_win_a_zp, d_win_b_zp):
+
+    def _zero_pad(self, d_win_a_norm, d_win_b_norm):
         """Function that zero-pads an 3D stack of arrays for use with the skcuda FFT function.
 
         Parameters
         ----------
         d_win_a_norm, d_win_b_norm : GPUArray
             3D float, arrays to be zero padded
-        d_win_a_zp, d_win_b_zp : GPUArray
-            3D float, arrays to be zero padded
 
         Returns
         -------
-        d_winA_zp : GPUArray
-            3D float, initial array that has been zero padded
-        d_search_area_zp : GPUArray
-            3D float, initial array that has been zero padded
+        d_win_a_zp, d_win_b_zp : GPUArray
+            3D float, windows which have been zero-padded
 
         """
         mod_zp = SourceModule("""
@@ -352,6 +351,10 @@ class CorrelationFunction:
             }
         """)
 
+        # define GPU arrays to store the window data
+        d_win_a_zp = gpuarray.zeros([self.n_windows, self.nfft, self.nfft], dtype=DTYPE_f)
+        d_win_b_zp = gpuarray.zeros([self.n_windows, self.nfft, self.nfft], dtype=DTYPE_f)
+
         # gpu parameters
         block_size = 8
         grid_size = int(self.window_size / block_size)
@@ -364,6 +367,8 @@ class CorrelationFunction:
         # Free GPU memory
         d_win_a_norm.gpudata.free()
         d_win_b_norm.gpudata.free()
+
+        return d_win_a_zp, d_win_b_zp
 
 
     def _correlate_windows(self, d_win_a_zp, d_win_b_zp):
@@ -598,8 +603,8 @@ class CorrelationFunction:
 
         Returns
         -------
-        sig2noise : array - float
-            the signal to noise ratio from the correlation map for each vector.
+        sig2noise : ndarray
+            2D float, the signal to noise ratio from the correlation map for each vector.
 
         """
         # compute signal to noise ratio
@@ -1063,9 +1068,6 @@ class PIVGPU:
         else:
             f[:, :, :, 6] = 1
 
-        # Initialize skcuda miscellaneous library
-        cu_misc.init()
-
         # Move f to the GPU for the whole calculation
         self.d_f = gpuarray.to_gpu(f)
 
@@ -1149,11 +1151,11 @@ class PIVGPU:
                 # Calculate second frame displacement (shift)
                 d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
                 d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
-                d_shift_arg = d_shift[:, :n_row[K], :n_col[K]]
+                d_shift_arg = d_shift[:, :n_row[K], :n_col[K]].copy()
 
                 # calculate the strain rate tensor
                 if deform:
-                    d_strain_arg = d_strain[:, :n_row[K], :n_col[K]]
+                    d_strain_arg = d_strain[:, :n_row[K], :n_col[K]].copy()
                     if w[K] != w[K - 1]:
                         gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
                     else:
