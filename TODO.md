@@ -3,7 +3,6 @@
 ## Bugs
 - [ ] very high overlap ratios throw an error
 - [x] bias error in non-translating window
-- [ ] diagonal artifacts in gradient field
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
@@ -28,7 +27,7 @@
 
 - [ ] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 - [ ] reduce the number of temporary gpu arrays created
-- [ ] make consistent the strain and shift array arguments in the correlation function
+- [x] make consistent the strain and shift array arguments in the correlation function
 
 ## Features
 - [ ] dismantle the F-structure so that others can more easily contribute
@@ -48,8 +47,6 @@
   - [ ] interpolation onto edges
   
 - [x] replace vectors with median rather than median of surrounding points to not be affected by outliers
-  
-- [ ] 2D subpixel location implemented in CUDA
 
 ## Object-oriented features
 - [ ] masking routine

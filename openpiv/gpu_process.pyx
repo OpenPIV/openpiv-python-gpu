@@ -56,7 +56,7 @@ class CorrelationFunction:
             This is using the x-y convention of this code where x is the row and y is the column.
         d_strain : GPUArray
             2D strain tensor. First dimension is (u_x, u_y, v_x, v_y)
-            
+
         Methods
         -------
         subpixel_peak_location
@@ -80,7 +80,7 @@ class CorrelationFunction:
 
         # temp solution  # delete
         self.extended_size = self.window_size
-        
+
         # must do this for skcuda misc library
         cu_misc.init()
 
@@ -225,7 +225,6 @@ class CorrelationFunction:
         block_size = 8
         grid_size = int(self.window_size / block_size)
 
-        t1 = process_time_ns()  # debug
         # slice windows
         if d_shift is not None:
             # use translating windows
@@ -251,7 +250,6 @@ class CorrelationFunction:
             window_slice_deform(d_frame_a, d_win_a, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
             window_slice_deform(d_frame_b, d_win_b, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
-        print('IW_arrange time: {}'.format(process_time_ns() - t1))  # debug
         return d_win_a, d_win_b
 
 
@@ -299,7 +297,6 @@ class CorrelationFunction:
 
         assert d_win_a.size % (block_size ** 2) == 0, 'Not all windows are being normalized. Something wrong with block or grid size.'
 
-        # TODO just modify the existing array
         # get function and norm IWs
         normalize = mod_norm.get_function('normalize')
         normalize(d_win_a, d_win_a_norm, d_mean_a, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
