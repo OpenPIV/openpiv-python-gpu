@@ -45,8 +45,8 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_frame_a, d_frame_b : GPUArray - 2D float32
-            image pair
+        d_frame_a, d_frame_b : GPUArray
+            2D float, image pair
         window_size : int
             size of the interrogation window
         overlap : int
@@ -62,7 +62,6 @@ class CorrelationFunction:
             2D strain tensor. First dimension is (u_x, u_y, v_x, v_y)
 
         """
-        ########################################################################################
         # PARAMETERS FOR CORRELATION FUNCTION
         self.shape = d_frame_a.shape
         self.window_size = np.int32(window_size)
@@ -76,9 +75,11 @@ class CorrelationFunction:
             self.nfft = np.int32(nfft_x)
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
 
-        ########################################################################################
-        # START DOING CALCULATIONS
+        # temp solution  # delete
+        self.extended_size = self.window_size
 
+        # TODO move these calculations out of init
+        # START DOING CALCULATIONS
         # Return stack of all IWs
         d_win_a = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
         d_win_b = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
@@ -89,6 +90,7 @@ class CorrelationFunction:
         d_win_b_norm = gpuarray.zeros((self.batch_size, self.window_size, self.window_size), dtype=np.float32)
         self._normalize_intensity(d_win_a, d_win_b, d_win_a_norm, d_win_b_norm)
 
+        # TODO pad for extended search area
         # zero pad arrays
         d_win_a_zp = gpuarray.zeros([self.batch_size, self.nfft, self.nfft], dtype=np.float32)
         d_win_b_zp = gpuarray.zeros_like(d_win_a_zp)
@@ -109,12 +111,10 @@ class CorrelationFunction:
 
         Parameters
         -----------
-        d_frame_a, d_frame_b : GPUArray - 2D float32
-            PIV image pair
-        d_win_a : GPUArray - 3D
-            All frame_a interrogation windows stacked on each other
-        d_win_b : GPUArray - 3D
-            All frame_b interrogation windows stacked on each other
+        d_frame_a, d_frame_b : GPUArray
+            2D float, PIV image pair
+        d_win_a, d_win_b : GPUArray
+            3D float, All interrogation windows stacked on each other
         d_shift : GPUArray
             shift of the second window
         d_strain : GPUArray
@@ -166,6 +166,8 @@ class CorrelationFunction:
             float v_y = strain[3 * num_window + ind_i];
 
             // compute the window vector
+            //float r_x = ind_x - window_size / 2;  // r_x = x - x_c
+            //float r_y = ind_y - window_size / 2;  // r_y = y - y_c
             float r_x = ind_x - window_size / 2 + 1;  // r_x = x - x_c // (+ 1) reduces the bias error
             float r_y = ind_y - window_size / 2 + 1;  // r_y = y - y_c
 
@@ -256,23 +258,19 @@ class CorrelationFunction:
 
 
     def _normalize_intensity(self, d_win_a, d_win_b, d_win_a_norm, d_win_b_norm):
-        """Remove the mean from each IW of a 3D stack of IWs
+        """Remove the mean from each IW of a 3D stack of IWs.
 
         Parameters
         ----------
-        d_win_a : GPUArray - 3D float32
-            stack of first frame IWs
-        d_win_b : GPUArray - 3D float32
-            stack of second frame IWs
-        d_win_a_norm : GPUArray - 3D float32
-            the normalized intensity in the first window
-        d_win_b_norm : GPUArray - 3D float32
-            the normalized intensity in the second window
+        d_win_a, d_win_b : GPUArray - 3D float32
+            3D float, stack of first IWs
+        d_win_a_norm, d_win_b_norm : GPUArray - 3D float32
+            3D float, the normalized intensities in the windows
 
         Returns
         -------
-        norm : GPUArray - 3D
-            stack of IWs with mean removed
+        norm : GPUArray
+            3D, stack of IWs with mean removed
 
         """
         mod_norm = SourceModule("""
@@ -298,7 +296,7 @@ class CorrelationFunction:
         d_mean_a = cu_misc.mean(d_win_a.reshape(self.batch_size, iw_size), axis=1)
         d_mean_b = cu_misc.mean(d_win_b.reshape(self.batch_size, iw_size), axis=1)
 
-        # gpu kernel blocksize parameters
+        # gpu kernel block-size parameters
         block_size = 8
         grid_size = int(d_win_a.size / block_size ** 2)
 
@@ -321,21 +319,17 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_win_a_norm : GPUArray - 3D float32
-            array to be zero padded
-        d_win_b_norm : GPUArray - 3D float32
-            arrays to be zero padded
-        d_win_a_zp : GPUArray - 3D float32
-            array to be zero padded
-        d_win_b_zp : GPUArray - 3D float32
-            arrays to be zero padded
+        d_win_a_norm, d_win_b_norm : GPUArray
+            3D float, arrays to be zero padded
+        d_win_a_zp, d_win_b_zp : GPUArray
+            3D float, arrays to be zero padded
 
         Returns
         -------
-        d_winA_zp : GPUArray - 3D
-            initial array that has been zero padded
-        d_search_area_zp : GPUArray - 3D
-            initial array that has been zero padded
+        d_winA_zp : GPUArray
+            3D float, initial array that has been zero padded
+        d_search_area_zp : GPUArray
+            3D float, initial array that has been zero padded
 
         """
         mod_zp = SourceModule("""
@@ -344,12 +338,10 @@ class CorrelationFunction:
                 // number of pixels in each IW
                 int IW_size = fft_size * fft_size;
                 int arr_size = window_size * window_size;
-
                 int zp_range;
                 int arr_range;
             
-                // indices for each IW
-                // x blocks are windows; y and z blocks are x and y dimensions, respectively
+                // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
                 int ind_i = blockIdx.x;
                 int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
                 int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
@@ -384,15 +376,13 @@ class CorrelationFunction:
 
         Parameters
         ----------
-        d_win_a_zp : GPUArray
-            first window
-        d_win_b_zp : GPUArray
-            second window
+        d_win_a_zp, d_win_b_zp : GPUArray
+            correlation windows
 
         Returns
         -------
-        corr : array - 2D
-            a two dimensional array for the correlation function.
+        corr : ndarray
+            2D, a two dimensional array for the correlation function.
 
         """
         # FFT size
@@ -454,16 +444,14 @@ class CorrelationFunction:
 
         # Reshape matrix
         array_reshape = array.reshape(self.batch_size, self.nfft ** 2)
-        s = self.nfft
 
         # Get index and value of peak
         max_ind = np.argmax(array_reshape, axis=1)
         maximum = array_reshape[range(self.batch_size), max_ind]
-        # maximum = np.amax(array_reshape, axis=1)
 
         # row and column information of peak
-        row = max_ind // s
-        col = max_ind % s
+        row = max_ind // self.nfft
+        col = max_ind % self.nfft
 
         # # return the center if the correlation peak is zero
         # cdef float[:, :] array_view = array_reshape
@@ -486,12 +474,13 @@ class CorrelationFunction:
         # row[c_idx] = w
         # col[c_idx] = w
 
+        # TODO this part can be done on GPU
         # return the center if the correlation peak is zero
         cdef float[:, :] array_view = array_reshape
         cdef float[:] maximum_view = maximum
         cdef long[:] row_view = row
         cdef long[:] col_view = col
-        cdef long w = int(s / 2)
+        cdef long w = int(self.nfft / 2)
 
         for i in range(size):
             if abs(maximum_view[i]) < 0.1:
@@ -523,10 +512,9 @@ class CorrelationFunction:
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
 
-        cdef Py_ssize_t i
-        cdef Py_ssize_t j
+        cdef Py_ssize_t i, j
 
-        # set (width x width) square submatrix around the first correlation peak as masked
+        # set (width x width) square sub-matrix around the first correlation peak as masked
         for i in range(-width, width + 1):
             for j in range(-width, width + 1):
                 row_idx = self.p_row + i
@@ -550,6 +538,7 @@ class CorrelationFunction:
             column max location to subpixel accuracy
 
         """
+        # TODO subtract the nfft half-width before this step. This should only be for subpixel approximation.
         # Define small number to replace zeros and get rid of warnings in calculations
         cdef DTYPEf_t small = 1e-20
 
@@ -586,6 +575,8 @@ class CorrelationFunction:
         cu[cu <= 0] = small
 
         # Do subpixel approximation. Add small to avoid zero divide.
+        # row_sp = row_c - self.nfft / 2  # delete
+        # col_sp = col_c - self.nfft / 2
         row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.nfft / 2
         col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.nfft / 2
         return row_sp, col_sp
@@ -647,9 +638,8 @@ class CorrelationFunction:
 
 
     def return_shape(self):
-        """
-        Return row/column information
-        """
+        """Returns the row and column information."""
+
         return self.n_rows, self.n_cols
 
 
@@ -1042,13 +1032,12 @@ class PIVGPU:
         self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)
 
         # define arrays used for the validation process
-        # in validation list, a 1 means that the location does not need to be validated. A 0 means that it does need to be validated  # delete
-        # cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
-        self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)
+        # cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)  # delete
+        self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi) #  0 means that it does need to be validated.
 
         # GPU ARRAYS
         # define the main array f that contains all the data
-        cdef np.ndarray[DTYPEf_t, ndim=4] f = np.ones([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
+        cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPEf)
 
         # initialize x and y values
         for K in range(nb_iter_max):
@@ -1071,11 +1060,12 @@ class PIVGPU:
 
         if mask is not None:
             assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
-
             for K in range(nb_iter_max):
                 x_idx = f[K, :, :, 0].astype(DTYPEi)
                 y_idx = f[K, :, :, 1].astype(DTYPEi)
                 f[K, :, :, 6] = mask[y_idx, x_idx].astype(DTYPEf)
+        else:
+            f[:, :, :, 6] = 1
 
         # Initialize skcuda miscellaneous library
         cu_misc.init()
@@ -1115,6 +1105,11 @@ class PIVGPU:
             2D, the signal to noise ratio of the final velocity field.
 
         """
+        # type declarations
+        cdef Py_ssize_t K, i
+        cdef int n_val, nb_validation_iter
+        cdef float residual
+
         # recover class variables
         dt = self.dt
         deform = self.deform
@@ -1132,12 +1127,6 @@ class PIVGPU:
         d_v_mean = self.d_v_mean
         d_shift_arg = None
         d_strain_arg = None
-
-        # type declarations
-        cdef Py_ssize_t K  # main iteration index
-        cdef Py_ssize_t i, j  # indices for various works
-        cdef int n_val
-        cdef float residual
 
         # Cython buffers
         cdef DTYPEi_t[:] n_row = self.n_row
@@ -1179,6 +1168,7 @@ class PIVGPU:
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = c.subpixel_peak_location()
+            print(np.linalg.norm(sp_i), np.linalg.norm(sp_j))
             # i_tmp[:n_row[K] * n_col[K]] = sp_i
             # j_tmp[:n_row[K] * n_col[K]] = sp_j
             # i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()  # delete
@@ -1188,8 +1178,6 @@ class PIVGPU:
             # j_peak[:n_row[K], :n_col[K]] = np.reshape(j_tmp[:n_row[K] * n_col[K]], (n_row[K], n_col[K]))
             self.i_peak[:n_row[K], :n_col[K]] = np.reshape(sp_i, (n_row[K], n_col[K]))
             self.j_peak[:n_row[K], :n_col[K]] = np.reshape(sp_j, (n_row[K], n_col[K]))
-            assert not np.isnan(i_peak).any(), 'NaNs in correlation i-peaks!'
-            assert not np.isnan(j_peak).any(), 'NaNs in correlation j-peaks!'
 
             # Get signal to noise ratio
             # sig2noise[0:n_row[K], 0:n_col[K]] = c.sig2noise_ratio(method=sig2noise_method)
@@ -1202,7 +1190,7 @@ class PIVGPU:
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
             try:
-                residual = np.sum(np.power(i_peak[:n_row[K], :n_col[K]], 2) + np.power(j_peak[:n_row[K], :n_col[K]], 2))
+                residual = np.sum(np.power(self.i_peak[:n_row[K], :n_col[K]], 2) + np.power(self.j_peak[:n_row[K], :n_col[K]], 2))
                 print("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
             except OverflowError:
                 print('[DONE]--Overflow in residuals.\n')

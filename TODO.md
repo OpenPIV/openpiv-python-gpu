@@ -2,7 +2,7 @@
 
 ## Bugs
 - [ ] very high overlap ratios throw an error
-- [ ] bias error in non-translating window
+- [x] bias error in non-translating window
 - [ ] diagonal artifacts in gradient field
 
 ## Documentation
@@ -49,3 +49,6 @@
 - [x] replace vectors with median rather than median of surrounding points to not be affected by outliers
   
 - [ ] 2D subpixel location implemented in CUDA
+
+## Object-oriented features
+- [ ] masking routine
