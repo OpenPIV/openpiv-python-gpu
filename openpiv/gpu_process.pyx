@@ -20,7 +20,6 @@ import numpy.ma as ma
 from numpy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
-# import cupy
 from openpiv.smoothn import smoothn as smoothn
 from time import process_time_ns
 
@@ -35,20 +34,53 @@ DTYPE_f = np.float32
 ctypedef np.float32_t DTYPEf_t
 
 
-class CorrelationFunction:
-    def __init__(self, d_frame_a, d_frame_b, window_size, overlap, nfft_x=None, extended_size=None, d_shift=None, d_strain=None):
+class GPUCorrelation:
+    def __init__(self, d_frame_a, d_frame_b, nfft_x=None):
         """A class representing a cross correlation function.
 
         Parameters
         ----------
         d_frame_a, d_frame_b : GPUArray
             2D float, image pair
+        nfft_x : int
+            window size for fft
+
+        Attributes
+        ----------
+        sig2noise_ratio(width=2)
+            returns the signal-to-noise ratio of the correlation peaks
+
+        Methods
+        -------
+        __call__(window_size, extended_size=None, d_shift=None, d_strain=None)
+            returns the peaks of the correlation windows
+
+        """
+        self.p_row = None
+        self.p_col = None
+        self.sig2noise_ratio = None
+        self.d_frame_a = d_frame_a
+        self.d_frame_b = d_frame_b
+        self.shape = DTYPE_i(d_frame_a.shape)
+
+        if nfft_x is None:
+            self.nfft = 2
+        else:
+            self.nfft = nfft_x
+            assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
+
+        # initialize the skcuda library
+        cu_misc.init()
+
+    def __call__(self, window_size, overlap, extended_size=None, d_shift=None, d_strain=None):
+        """Returns the pixel peaks using the specified correlation method.
+
+        Parameters
+        ----------
         window_size : int
             size of the interrogation window
         overlap : int
             pixel overlap between interrogation windows
-        nfft_x : int
-            window size for fft
         extended_size : int
             extended window size to search in the second frame
         d_shift : GPUArray
@@ -57,37 +89,25 @@ class CorrelationFunction:
         d_strain : GPUArray
             2D strain tensor. First dimension is (u_x, u_y, v_x, v_y)
 
-        Methods
+        Returns
         -------
-        subpixel_peak_location
-            return the location of the correlation peak
-        sig2noise_ratio
-            returns the signal-to-noise ratio of the correlation peaks
+        row_sp, col_sp : ndarray
+            3D flaot, locations of the subpixel peaks
 
         """
-        # PARAMETERS FOR CORRELATION FUNCTION
-        self.shape = d_frame_a.shape
+        # for debugging
+        assert window_size >= 8, "Window size is too small."
+        assert window_size % 8 == 0, "Window size should be a multiple of 8."
+
+        # set parameters
         self.window_size = DTYPE_i(window_size)
         self.overlap = DTYPE_i(overlap)
-        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.shape, window_size, overlap))
+        self.fft_size = DTYPE_i(window_size * self.nfft)
+        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.shape, window_size, self.overlap))
         self.n_windows = DTYPE_i(self.n_rows * self.n_cols)
 
-        if nfft_x is None:
-            self.nfft = DTYPE_i(2 * self.window_size)
-        else:
-            self.nfft = DTYPE_i(nfft_x)
-            assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
-
-        # temp solution  # delete
-        self.extended_size = self.window_size
-
-        # must do this for skcuda misc library
-        cu_misc.init()
-
-        # TODO move these calculations out of init
-        # START DOING CALCULATIONS
         # Return stack of all IWs
-        d_win_a, d_win_b = self._iw_arrange(d_frame_a, d_frame_b, d_shift, d_strain)
+        d_win_a, d_win_b = self._iw_arrange(self.d_frame_a, self.d_frame_b, d_shift, d_strain)
 
         # normalize array by computing the norm of each IW
         d_win_a_norm, d_win_b_norm = self._normalize_intensity(d_win_a, d_win_b)
@@ -101,6 +121,12 @@ class CorrelationFunction:
 
         # get first peak of correlation function
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
+
+        # get the subpixel location
+        row_sp, col_sp = self._subpixel_peak_location()
+
+        return row_sp, col_sp
+
 
     def _iw_arrange(self, d_frame_a, d_frame_b, d_shift, d_strain):
         """Creates a 3D array stack of all of the interrogation windows.
@@ -208,13 +234,10 @@ class CorrelationFunction:
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
         }
         """)
-        # for debugging
-        assert self.window_size >= 8, "Window size is too small."
-        assert self.window_size % 8 == 0, "Window size should be a multiple of 8."
 
+        # TODO integer input
         # get field shapes
-        h = DTYPE_i(self.shape[0])
-        w = DTYPE_i(self.shape[1])
+        h, w = self.shape
         spacing = self.window_size - self.overlap
 
         # create GPU arrays to store the window data
@@ -226,6 +249,7 @@ class CorrelationFunction:
         grid_size = int(self.window_size / block_size)
 
         # slice windows
+
         if d_shift is not None:
             # use translating windows
             if d_strain is None:
@@ -295,8 +319,6 @@ class CorrelationFunction:
         block_size = 8
         grid_size = int(d_win_a.size / block_size ** 2)
 
-        assert d_win_a.size % (block_size ** 2) == 0, 'Not all windows are being normalized. Something wrong with block or grid size.'
-
         # get function and norm IWs
         normalize = mod_norm.get_function('normalize')
         normalize(d_win_a, d_win_a_norm, d_mean_a, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
@@ -311,7 +333,7 @@ class CorrelationFunction:
         return d_win_a_norm, d_win_b_norm
 
 
-    def _zero_pad(self, d_win_a_norm, d_win_b_norm):
+    def _zero_pad(self, d_win_a_norm, d_win_b_norm, extend=0):
         """Function that zero-pads an 3D stack of arrays for use with the skcuda FFT function.
 
         Parameters
@@ -349,8 +371,10 @@ class CorrelationFunction:
         """)
 
         # define GPU arrays to store the window data
-        d_win_a_zp = gpuarray.zeros([self.n_windows, self.nfft, self.nfft], dtype=DTYPE_f)
-        d_win_b_zp = gpuarray.zeros([self.n_windows, self.nfft, self.nfft], dtype=DTYPE_f)
+        d_win_a_zp = gpuarray.zeros([self.n_windows, self.fft_size, self.fft_size], dtype=DTYPE_f)
+        d_win_b_zp = gpuarray.zeros([self.n_windows, self.fft_size, self.fft_size], dtype=DTYPE_f)
+
+        # compute the window extension
 
         # gpu parameters
         block_size = 8
@@ -358,8 +382,8 @@ class CorrelationFunction:
 
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
-        zero_pad(d_win_a_zp, d_win_a_norm, self.nfft, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-        zero_pad(d_win_b_zp, d_win_b_norm, self.nfft, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+        zero_pad(d_win_a_zp, d_win_a_norm, self.fft_size, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+        zero_pad(d_win_b_zp, d_win_b_norm, self.fft_size, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
         # Free GPU memory
         d_win_a_norm.gpudata.free()
@@ -385,8 +409,8 @@ class CorrelationFunction:
 
         """
         # FFT size
-        win_h = DTYPE_i(self.nfft)
-        win_w = DTYPE_i(self.nfft)
+        win_h = DTYPE_i(self.fft_size)
+        win_w = DTYPE_i(self.fft_size)
 
         # allocate space on gpu for FFTs
         d_win_i_fft = gpuarray.empty((self.n_windows, win_h, win_w), DTYPE_f)
@@ -442,15 +466,15 @@ class CorrelationFunction:
         cdef Py_ssize_t size = self.n_windows
 
         # Reshape matrix
-        array_reshape = array.reshape(self.n_windows, self.nfft ** 2)
+        array_reshape = array.reshape(self.n_windows, self.fft_size ** 2)
 
         # Get index and value of peak
         max_ind = np.argmax(array_reshape, axis=1)
         maximum = array_reshape[range(self.n_windows), max_ind]
 
         # row and column information of peak
-        row = max_ind // self.nfft
-        col = max_ind % self.nfft
+        row = max_ind // self.fft_size
+        col = max_ind % self.fft_size
 
         # # return the center if the correlation peak is zero
         # cdef float[:, :] array_view = array_reshape
@@ -479,7 +503,7 @@ class CorrelationFunction:
         cdef float[:] maximum_view = maximum
         cdef long[:] row_view = row
         cdef long[:] col_view = col
-        cdef long w = int(self.nfft / 2)
+        cdef long w = int(self.fft_size / 2)
 
         for i in range(size):
             if abs(maximum_view[i]) < 0.1:
@@ -518,7 +542,7 @@ class CorrelationFunction:
             for j in range(-width, width + 1):
                 row_idx = self.p_row + i
                 col_idx = self.p_col + j
-                idx = (row_idx >= 0) & (row_idx < self.nfft) & (col_idx >= 0) & (col_idx < self.nfft)
+                idx = (row_idx >= 0) & (row_idx < self.fft_size) & (col_idx >= 0) & (col_idx < self.fft_size)
                 tmp[idx, row_idx[idx], col_idx[idx]] = ma.masked
 
         row2, col2, corr_max2 = self._find_peak(tmp)
@@ -526,7 +550,7 @@ class CorrelationFunction:
         return corr_max2
 
 
-    def subpixel_peak_location(self):
+    def _subpixel_peak_location(self):
         """Find subpixel peak approximation using Gaussian method.
 
         Returns
@@ -553,10 +577,10 @@ class CorrelationFunction:
         # Move boundary peaks inward one node. Replace later in sig2noise
         row_tmp = np.copy(self.p_row)
         row_tmp[row_tmp < 1] = 1
-        row_tmp[row_tmp > self.nfft - 2] = self.nfft - 2
+        row_tmp[row_tmp > self.fft_size - 2] = self.fft_size - 2
         col_tmp = np.copy(self.p_col)
         col_tmp[col_tmp < 1] = 1
-        col_tmp[col_tmp > self.nfft - 2] = self.nfft - 2
+        col_tmp[col_tmp > self.fft_size - 2] = self.fft_size - 2
 
         # Initialize arrays
         cdef np.ndarray[DTYPEf_t, ndim=1] c = corr_c[range(self.n_windows), row_tmp, col_tmp]
@@ -574,10 +598,8 @@ class CorrelationFunction:
         cu[cu <= 0] = small
 
         # Do subpixel approximation. Add small to avoid zero divide.
-        # row_sp = row_c - self.nfft / 2  # delete
-        # col_sp = col_c - self.nfft / 2
-        row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.nfft / 2
-        col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.nfft / 2
+        row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.fft_size / 2
+        col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.fft_size / 2
         return row_sp, col_sp
 
 
@@ -729,7 +751,7 @@ def gpu_extended_search_area(frame_a, frame_b,
     Examples
     --------
 
-    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap=8, search_area_size=48, dt=0.1)
+    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap=8, search_area_size=32, dt=0.1)
 
     """
     # Extract the parameters
@@ -743,10 +765,10 @@ def gpu_extended_search_area(frame_a, frame_b,
     d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
     # Get correlation function
-    c = CorrelationFunction(d_frame_a_f, d_frame_b_f, search_area_size, overlap, nfftx)
+    c = GPUCorrelation(d_frame_a_f, d_frame_b_f, overlap, nfftx)
 
     # Get window displacement to subpixel accuracy
-    sp_i, sp_j = c.subpixel_peak_location()
+    sp_i, sp_j = c(window_size, overlap, search_area_size)
 
     # vector field shape
     n_row, n_col = c.return_shape()
@@ -763,6 +785,7 @@ def gpu_extended_search_area(frame_a, frame_b,
     d_frame_a_f.gpudata.free()
     d_frame_b_f.gpudata.free()
 
+    # TODO call s2n here
     # get the signal-to-noise ratio
     if return_sig2noise:
         sig2noise = c.sig2noise_ratio(method=sig2noise_method)
@@ -938,6 +961,11 @@ class PIVGPU:
     nfftx : int
         The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
+    Attributes
+    ----------
+    s2n : ndarray
+
+
     Methods
     -------
     __call__ :
@@ -1034,6 +1062,7 @@ class PIVGPU:
         self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPE_i) #  0 means that it does need to be validated.
 
         # GPU ARRAYS
+        # TODO dismantle this array
         # define the main array f that contains all the data
         cdef np.ndarray[DTYPEf_t, ndim=4] f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPE_f)
 
@@ -1056,6 +1085,7 @@ class PIVGPU:
         cdef DTYPEi_t[:, :] x_idx
         cdef DTYPEi_t[:, :] y_idx
 
+        # TODO define mask on its own array
         if mask is not None:
             assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
             for K in range(nb_iter_max):
@@ -1115,7 +1145,7 @@ class PIVGPU:
         val_tols = self.val_tols
         smoothing_par = self.smoothing_par
         sig2noise_method = self.sig2noise_method
-        d_f =  self.d_f
+        d_f = self.d_f
         d_shift = self.d_shift
         d_strain = self.d_strain
         d_u_mean = self.d_u_mean
@@ -1139,12 +1169,16 @@ class PIVGPU:
         d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
         d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
+        # create the correlation object
+        c = GPUCorrelation(d_frame_a_f, d_frame_b_f, self.nfftx)
+
         # MAIN LOOP
         for K in range(nb_iter_max):
             print("//////////////////////////////////////////////////////////////////")
             print("ITERATION {}".format(K))
 
             if K > 0:
+                # TODO make these blocks less copy-intensive
                 # Calculate second frame displacement (shift)
                 d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
                 d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
@@ -1158,12 +1192,8 @@ class PIVGPU:
                     else:
                         gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
 
-            # Get correlation function
-            c = CorrelationFunction(d_frame_a_f, d_frame_b_f, w[K], overlap[K], self.nfftx, d_shift=d_shift_arg, d_strain=d_strain_arg)
-
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = c.subpixel_peak_location()
-            print(np.linalg.norm(sp_i), np.linalg.norm(sp_j))
+            sp_i, sp_j = c(w[K], overlap[K], d_shift=d_shift_arg, d_strain=d_strain_arg)
             # i_tmp[:n_row[K] * n_col[K]] = sp_i
             # j_tmp[:n_row[K] * n_col[K]] = sp_j
             # i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()  # delete

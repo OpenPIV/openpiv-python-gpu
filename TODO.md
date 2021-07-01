@@ -20,8 +20,8 @@
   - [ ] use shared memory for GPU kernels
 
 - [ ] correlation class
-  - [ ] reduce operations outside of CUDA kernels in iw_arrange()
-  - [ ] move methods out of init()
+  - [x] reduce operations outside of CUDA kernels in iw_arrange()
+  - [x] move methods out of init()
   - [ ] define fewer GPU arrays
   - [ ] Use CUDA kernel in subpixel location - this can gain ~10% performance
 
@@ -39,7 +39,7 @@
 - [ ] Implement the extended search area in the second frame
 - [ ] Make the validation functions usable by other algorithms, maybe by wrapping them in a function the does I/O with the GPU
 - [ ] Use CuPy or scikit-cuda to implement the cosine transform used in Smoothn
-  - [ ] validate next to masked points
+- [ ] validate next to masked points
 
 - [ ] fix edge treatment to have fewer errors
   - [ ] validation of edges
