@@ -17,7 +17,7 @@ import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
-from numpy.fft import fftshift
+from scipy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
 from openpiv.smoothn import smoothn as smoothn
@@ -119,11 +119,36 @@ class GPUCorrelation:
         # correlate Windows
         self.data = self._correlate_windows(d_win_a_zp, d_win_b_zp)
 
+        # TRIAL CPU
+        # t1 = process_time_ns()
+
         # get first peak of correlation function
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
 
+        # print('CPU time: {:.3e}'.format((process_time_ns() - t1) * 1e-9))
+
+        # t1 = process_time_ns()
         # get the subpixel location
         row_sp, col_sp = self._subpixel_peak_location()
+
+        # print('CPU time: {:.3e}'.format((process_time_ns() - t1) * 1e-9))
+
+        # # # TRIAL GPU
+        # d_data = gpuarray.to_gpu(self.data)
+        # t1 = process_time_ns()
+        #
+        # # get first peak of correlation function
+        # self.p_row, self.p_col, self.corr_max1 = self._find_peak_gpu(self.data)
+        #
+        # print('GPU time: {:.3e}'.format(process_time_ns() - t1))
+        #
+        # # get the subpixel location
+        # row_sp, col_sp = self._subpixel_peak_location()
+        # # # get the subpixel location
+        # # row_sp, col_sp = self._subpixel_peak_location_gpu()
+
+
+        # print('GPU time: {:.3e}'.format(process_time_ns() - t1))
 
         return row_sp, col_sp
 
@@ -150,7 +175,7 @@ class GPUCorrelation:
         """
         # define window slice algorithm
         mod_ws = SourceModule("""
-            __global__ void window_slice(float *input, float *output, int window_size, int spacing, int n_col, int w)
+            __global__ void window_slice(int *input, float *output, int window_size, int spacing, int n_col, int w)
         {
             int f_range;
             int w_range;
@@ -170,7 +195,7 @@ class GPUCorrelation:
             output[w_range] = input[f_range];
         }
 
-            __global__ void window_slice_deform(float *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int n_col, int num_window, int w, int h)
+            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int n_col, int num_window, int w, int h)
         {
             // f : factor to apply to the shift and strain tensors
             // w : width (number of columns in the full image)
@@ -235,7 +260,6 @@ class GPUCorrelation:
         }
         """)
 
-        # TODO integer input
         # get field shapes
         h, w = self.shape
         spacing = self.window_size - self.overlap
@@ -496,6 +520,53 @@ class GPUCorrelation:
         # c_idx = np.asarray((array_reshape[:, int(self.nfft ** 2 / 2 + w)] == maximum)).nonzero()
         # row[c_idx] = w
         # col[c_idx] = w
+
+        # return the center if the correlation peak is zero
+        cdef float[:, :] array_view = array_reshape
+        cdef float[:] maximum_view = maximum
+        cdef long[:] row_view = row
+        cdef long[:] col_view = col
+        cdef long w = int(self.fft_size / 2)
+
+        for i in range(size):
+            if abs(maximum_view[i]) < 0.1:
+                row_view[i] = w
+                col_view[i] = w
+
+        return row, col, maximum
+
+
+    def _find_peak_gpu(self, array):
+        """Find row and column of highest peak in correlation function
+
+        Parameters
+        ----------
+        array : ndarray
+            array that is image of the correlation function
+
+        Returns
+        -------
+        ind : array - 1D int
+            flattened index of corr peak
+        row : array - 1D int
+            row position of corr peak
+        col : array - 1D int
+            column position of corr peak
+
+        """
+        cdef Py_ssize_t i
+        cdef Py_ssize_t size = self.n_windows
+
+        # Reshape matrix
+        array_reshape = array.reshape(self.n_windows, self.fft_size ** 2)
+
+        # Get index and value of peak
+        max_ind = np.argmax(array_reshape, axis=1)
+        maximum = array_reshape[range(self.n_windows), max_ind]
+
+        # row and column information of peak
+        row = max_ind // self.fft_size
+        col = max_ind % self.fft_size
 
         # TODO this part can be done on GPU
         # return the center if the correlation peak is zero
@@ -761,8 +832,8 @@ def gpu_extended_search_area(frame_a, frame_b,
     overlap = overlap_ratio * window_size
 
     # cast images as floats and sent to gpu
-    d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
-    d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
+    d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
+    d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
     # Get correlation function
     c = GPUCorrelation(d_frame_a_f, d_frame_b_f, overlap, nfftx)
@@ -833,7 +904,7 @@ def gpu_piv(frame_a, frame_b,
     Parameters
     ----------
     frame_a, frame_b : ndarray
-        2D float, integers containing grey levels of the first and second frames.
+        2D int, integers containing grey levels of the first and second frames.
     window_size_iters : tuple or int
         Number of iterations performed at each window size
     min_window_size : tuple or int
@@ -1112,7 +1183,7 @@ class PIVGPU:
         Parameters
         ----------
         frame_a, frame_b : ndarray
-            2D float, integers containing grey levels of the first and second frames.
+            2D int, integers containing grey levels of the first and second frames.
 
         Returns
         -------
@@ -1166,8 +1237,8 @@ class PIVGPU:
         cdef DTYPEi_t[:, :] val_list = self.val_list
 
         # cast to 32-bit floats
-        d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
-        d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
+        d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
+        d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
         # create the correlation object
         c = GPUCorrelation(d_frame_a_f, d_frame_b_f, self.nfftx)
