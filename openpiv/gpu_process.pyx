@@ -102,8 +102,10 @@ class GPUCorrelation:
         # set parameters
         self.window_size = DTYPE_i(window_size)
         self.overlap = DTYPE_i(overlap)
-        self.fft_size = DTYPE_i(window_size * self.nfft)
-        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.shape, window_size, self.overlap))
+        # self.extended_size = self.window_size  # debug
+        self.extended_size = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
+        self.fft_size = DTYPE_i(self.extended_size * self.nfft)
+        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.shape, self.window_size, self.overlap))
         self.n_windows = DTYPE_i(self.n_rows * self.n_cols)
 
         # Return stack of all IWs
@@ -112,46 +114,19 @@ class GPUCorrelation:
         # normalize array by computing the norm of each IW
         d_win_a_norm, d_win_b_norm = self._normalize_intensity(d_win_a, d_win_b)
 
-        # TODO pad for extended search area
         # zero pad arrays
         d_win_a_zp, d_win_b_zp = self._zero_pad(d_win_a_norm, d_win_b_norm)
 
         # correlate Windows
         self.data = self._correlate_windows(d_win_a_zp, d_win_b_zp)
 
-        # TRIAL CPU
-        # t1 = process_time_ns()
-
         # get first peak of correlation function
         self.p_row, self.p_col, self.corr_max1 = self._find_peak(self.data)
 
-        # print('CPU time: {:.3e}'.format((process_time_ns() - t1) * 1e-9))
-
-        # t1 = process_time_ns()
         # get the subpixel location
         row_sp, col_sp = self._subpixel_peak_location()
 
-        # print('CPU time: {:.3e}'.format((process_time_ns() - t1) * 1e-9))
-
-        # # # TRIAL GPU
-        # d_data = gpuarray.to_gpu(self.data)
-        # t1 = process_time_ns()
-        #
-        # # get first peak of correlation function
-        # self.p_row, self.p_col, self.corr_max1 = self._find_peak_gpu(self.data)
-        #
-        # print('GPU time: {:.3e}'.format(process_time_ns() - t1))
-        #
-        # # get the subpixel location
-        # row_sp, col_sp = self._subpixel_peak_location()
-        # # # get the subpixel location
-        # # row_sp, col_sp = self._subpixel_peak_location_gpu()
-
-
-        # print('GPU time: {:.3e}'.format(process_time_ns() - t1))
-
         return row_sp, col_sp
-
 
     def _iw_arrange(self, d_frame_a, d_frame_b, d_shift, d_strain):
         """Creates a 3D array stack of all of the interrogation windows.
@@ -175,35 +150,32 @@ class GPUCorrelation:
         """
         # define window slice algorithm
         mod_ws = SourceModule("""
-            __global__ void window_slice(int *input, float *output, int window_size, int spacing, int n_col, int w)
+            __global__ void window_slice(int *input, float *output, int window_size, int spacing, int diff, int n_col, int wd, int ht)
         {
-            int f_range;
-            int w_range;
-            int IW_size = window_size * window_size;
-
-            // indices of image to map from
+            // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;
             int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
             int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-
-            // loop through each interrogation window
-            f_range = (ind_i / n_col * spacing + ind_y) * w + (ind_i % n_col) * spacing + ind_x;
+            
+            // do the mapping
+            int x = (ind_i % n_col) * spacing + diff + ind_x;
+            int y = (ind_i / n_col) * spacing + diff + ind_y;
+            
+            // find limits of domain
+            int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
 
             // indices of new array to map to
-            w_range = ind_i * IW_size + window_size * ind_y + ind_x;
-
-            output[w_range] = input[f_range];
+            int w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            
+            // apply the mapping
+            output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
         }
 
-            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int n_col, int num_window, int w, int h)
+            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int diff, int n_col, int num_window, int wd, int ht)
         {
             // f : factor to apply to the shift and strain tensors
-            // w : width (number of columns in the full image)
+            // wd : width (number of columns in the full image)
             // h : height (number of rows in the full image)
-            int w_range;
-            float x_shift;
-            float y_shift;
-            // int num_window = n_row * n_col;
 
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;  // window index
@@ -226,12 +198,12 @@ class GPUCorrelation:
             float r_y = ind_y - window_size / 2 + 0.5;  // r_y = y - y_c
 
             // apply deformation operation
-            x_shift = ind_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-            y_shift = ind_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
+            float x_shift = ind_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+            float y_shift = ind_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
 
             // do the mapping
-            float x = ind_i % n_col * spacing + x_shift;
-            float y = ind_i / n_col * spacing + y_shift;
+            float x = (ind_i % n_col) * spacing + x_shift + diff;
+            float y = (ind_i / n_col) * spacing + y_shift + diff;
 
             // do bilinear interpolation
             int x2 = ceilf(x);
@@ -244,16 +216,16 @@ class GPUCorrelation:
             if (y2 == y1) {y2 = y2 + 1;}
 
             // find limits of domain
-            int outside_range = (x1 >= 0 && x2 < w && y1 >= 0 && y2 < h);
+            int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
 
             // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
-            float f11 = input[(y1 * w + x1) * outside_range];
-            float f21 = input[(y1 * w + x2) * outside_range];
-            float f12 = input[(y2 * w + x1) * outside_range];
-            float f22 = input[(y2 * w + x2) * outside_range];
+            float f11 = input[(y1 * wd + x1) * outside_range];
+            float f21 = input[(y1 * wd + x2) * outside_range];
+            float f12 = input[(y2 * wd + x1) * outside_range];
+            float f22 = input[(y2 * wd + x2) * outside_range];
 
             // indices of image to map to
-            w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            int w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
@@ -261,19 +233,19 @@ class GPUCorrelation:
         """)
 
         # get field shapes
-        h, w = self.shape
-        spacing = self.window_size - self.overlap
+        ht, wd = self.shape
+        spacing = DTYPE_i(self.window_size - self.overlap)
+        diff = DTYPE_i(spacing - self.extended_size / 2)
 
         # create GPU arrays to store the window data
-        d_win_a = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        d_win_b = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
+        d_win_a = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
+        d_win_b = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
 
         # gpu parameters
         block_size = 8
-        grid_size = int(self.window_size / block_size)
+        grid_size = int(self.extended_size / block_size)
 
         # slice windows
-
         if d_shift is not None:
             # use translating windows
             if d_strain is None:
@@ -285,8 +257,8 @@ class GPUCorrelation:
 
             # shift frames and deform
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(d_frame_a, d_win_a, d_shift, d_strain, f_a, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, d_shift, d_strain, f_b, self.window_size, spacing, self.n_cols, self.n_windows, w, h, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, d_shift, d_strain, f_a, self.extended_size, spacing, diff, self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, d_shift, d_strain, f_b, self.extended_size, spacing, diff, self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
             # free GPU memory
             d_shift.gpudata.free()
@@ -295,11 +267,10 @@ class GPUCorrelation:
         else:
             # use non-translating windows
             window_slice_deform = mod_ws.get_function("window_slice")
-            window_slice_deform(d_frame_a, d_win_a, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(d_frame_b, d_win_b, self.window_size, spacing, self.n_cols, w, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_a, d_win_a, self.extended_size, spacing, diff, self.n_cols, wd, ht, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            window_slice_deform(d_frame_b, d_win_b, self.extended_size, spacing, diff, self.n_cols, wd, ht, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
         return d_win_a, d_win_b
-
 
     def _normalize_intensity(self, d_win_a, d_win_b):
         """Remove the mean from each IW of a 3D stack of IWs.
@@ -329,8 +300,8 @@ class GPUCorrelation:
         """)
 
         # define GPU arrays to store window data
-        d_win_a_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
-        d_win_b_norm = gpuarray.zeros((self.n_windows, self.window_size, self.window_size), dtype=DTYPE_f)
+        d_win_a_norm = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
+        d_win_b_norm = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
 
         # number of pixels in each interrogation window
         iw_size = DTYPE_i(d_win_a.shape[1] * d_win_a.shape[2])
@@ -356,9 +327,10 @@ class GPUCorrelation:
 
         return d_win_a_norm, d_win_b_norm
 
-
-    def _zero_pad(self, d_win_a_norm, d_win_b_norm, extend=0):
+    def _zero_pad(self, d_win_a_norm, d_win_b_norm):
         """Function that zero-pads an 3D stack of arrays for use with the skcuda FFT function.
+
+        If extended size is passed, then the second window
 
         Parameters
         ----------
@@ -372,49 +344,51 @@ class GPUCorrelation:
 
         """
         mod_zp = SourceModule("""
-            __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size)
+            __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int s0, int s1)
             {
-                // number of pixels in each IW
-                int IW_size = fft_size * fft_size;
-                int arr_size = window_size * window_size;
-                int zp_range;
-                int arr_range;
-            
                 // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
                 int ind_i = blockIdx.x;
                 int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
                 int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+                
+                // don't copy if out of range
+                if (ind_x < s0 || ind_x >= s1 || ind_y < s0 || ind_y >= s1) {return;}
 
                 // get range of values to map
-                arr_range = ind_i * arr_size + window_size * ind_y + ind_x;
-                zp_range = ind_i * IW_size + fft_size * ind_y + ind_x;
+                int arr_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+                int zp_range = ind_i * fft_size * fft_size + fft_size * ind_y + ind_x;
 
                 // apply the map
                 array_zp[zp_range] = array[arr_range];
             }
         """)
+        # compute the window extension
+        s0_a = DTYPE_i((self.extended_size - self.window_size) / 2)
+        s1_a = DTYPE_i(self.extended_size - s0_a)
+        s0_b = DTYPE_i(0)
+        s1_b = self.extended_size
 
         # define GPU arrays to store the window data
         d_win_a_zp = gpuarray.zeros([self.n_windows, self.fft_size, self.fft_size], dtype=DTYPE_f)
         d_win_b_zp = gpuarray.zeros([self.n_windows, self.fft_size, self.fft_size], dtype=DTYPE_f)
 
-        # compute the window extension
-
         # gpu parameters
         block_size = 8
-        grid_size = int(self.window_size / block_size)
+        grid_size = int(self.extended_size / block_size)
 
         # get handle and call function
         zero_pad = mod_zp.get_function('zero_pad')
-        zero_pad(d_win_a_zp, d_win_a_norm, self.fft_size, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-        zero_pad(d_win_b_zp, d_win_b_norm, self.fft_size, self.window_size, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+        zero_pad(d_win_a_zp, d_win_a_norm, self.fft_size, self.extended_size, s0_a, s1_a, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+        zero_pad(d_win_b_zp, d_win_b_norm, self.fft_size, self.extended_size, s0_b, s1_b, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+
+        # np.save('win_a_zp', d_win_a_zp.get())  # debug
+        # np.save('win_b_zp', d_win_b_zp.get())
 
         # Free GPU memory
         d_win_a_norm.gpudata.free()
         d_win_b_norm.gpudata.free()
 
         return d_win_a_zp, d_win_b_zp
-
 
     def _correlate_windows(self, d_win_a_zp, d_win_b_zp):
         """Compute correlation function between two interrogation windows.
@@ -433,8 +407,8 @@ class GPUCorrelation:
 
         """
         # FFT size
-        win_h = DTYPE_i(self.fft_size)
-        win_w = DTYPE_i(self.fft_size)
+        win_h = self.fft_size
+        win_w = self.fft_size
 
         # allocate space on gpu for FFTs
         d_win_i_fft = gpuarray.empty((self.n_windows, win_h, win_w), DTYPE_f)
@@ -466,7 +440,6 @@ class GPUCorrelation:
         d_win_b_zp.gpudata.free()
 
         return corr
-
 
     def _find_peak(self, array):
         """Find row and column of highest peak in correlation function
@@ -535,55 +508,6 @@ class GPUCorrelation:
 
         return row, col, maximum
 
-
-    def _find_peak_gpu(self, array):
-        """Find row and column of highest peak in correlation function
-
-        Parameters
-        ----------
-        array : ndarray
-            array that is image of the correlation function
-
-        Returns
-        -------
-        ind : array - 1D int
-            flattened index of corr peak
-        row : array - 1D int
-            row position of corr peak
-        col : array - 1D int
-            column position of corr peak
-
-        """
-        cdef Py_ssize_t i
-        cdef Py_ssize_t size = self.n_windows
-
-        # Reshape matrix
-        array_reshape = array.reshape(self.n_windows, self.fft_size ** 2)
-
-        # Get index and value of peak
-        max_ind = np.argmax(array_reshape, axis=1)
-        maximum = array_reshape[range(self.n_windows), max_ind]
-
-        # row and column information of peak
-        row = max_ind // self.fft_size
-        col = max_ind % self.fft_size
-
-        # TODO this part can be done on GPU
-        # return the center if the correlation peak is zero
-        cdef float[:, :] array_view = array_reshape
-        cdef float[:] maximum_view = maximum
-        cdef long[:] row_view = row
-        cdef long[:] col_view = col
-        cdef long w = int(self.fft_size / 2)
-
-        for i in range(size):
-            if abs(maximum_view[i]) < 0.1:
-                row_view[i] = w
-                col_view[i] = w
-
-        return row, col, maximum
-
-
     def _find_second_peak(self, int width):
         """Find the value of the second largest peak.
 
@@ -619,7 +543,6 @@ class GPUCorrelation:
         row2, col2, corr_max2 = self._find_peak(tmp)
 
         return corr_max2
-
 
     def _subpixel_peak_location(self):
         """Find subpixel peak approximation using Gaussian method.
@@ -672,7 +595,6 @@ class GPUCorrelation:
         row_sp = row_c + ((np.log(cl) - np.log(cr)) / (2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.fft_size / 2
         col_sp = col_c + ((np.log(cd) - np.log(cu)) / (2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.fft_size / 2
         return row_sp, col_sp
-
 
     def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal to noise ratio.
@@ -727,12 +649,6 @@ class GPUCorrelation:
         sig2noise[np.array(self.p_row == 0) * np.array(self.p_row == self.data.shape[1]) * np.array(self.p_col == 0) * np.array(self.p_col == self.data.shape[2])] = 0.0
 
         return sig2noise.reshape(self.n_rows, self.n_cols)
-
-
-    def return_shape(self):
-        """Returns the row and column information."""
-
-        return self.n_rows, self.n_cols
 
 
 def get_field_shape(image_size, window_size, overlap):
@@ -842,7 +758,7 @@ def gpu_extended_search_area(frame_a, frame_b,
     sp_i, sp_j = c(window_size, overlap, search_area_size)
 
     # vector field shape
-    n_row, n_col = c.return_shape()
+    n_row, n_col = c.shape
 
     # reshape the peaks
     i_peak = np.reshape(sp_i, (n_row, n_col))
@@ -1093,6 +1009,7 @@ class PIVGPU:
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
+        self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else 2
 
         # Cython buffer definitions
         cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
@@ -1248,7 +1165,12 @@ class PIVGPU:
             print("//////////////////////////////////////////////////////////////////")
             print("ITERATION {}".format(K))
 
-            if K > 0:
+            if K == 0:
+                # use extended search area for first iteration
+                extended_size = w[K] * self.extend_ratio
+            else:
+                extended_size = None
+
                 # TODO make these blocks less copy-intensive
                 # Calculate second frame displacement (shift)
                 d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
@@ -1264,7 +1186,7 @@ class PIVGPU:
                         gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = c(w[K], overlap[K], d_shift=d_shift_arg, d_strain=d_strain_arg)
+            sp_i, sp_j = c(w[K], overlap[K], extended_size=extended_size, d_shift=d_shift_arg, d_strain=d_strain_arg)
             # i_tmp[:n_row[K] * n_col[K]] = sp_i
             # j_tmp[:n_row[K] * n_col[K]] = sp_j
             # i_tmp[:n_row[K] * n_col[K]], j_tmp[:n_row[K] * n_col[K]] = c.subpixel_peak_location()  # delete
