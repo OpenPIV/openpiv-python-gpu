@@ -18,6 +18,7 @@
   - [x] predefine arrays for u, v, x, y, mask
   - [x] don't calculate x, y for every iteration
   - [ ] use shared memory for GPU kernels
+  - [ ] confirm if to_gpu() is faster than gpuarray.zeros()
 
 - [ ] correlation class
   - [x] reduce operations outside of CUDA kernels in iw_arrange()

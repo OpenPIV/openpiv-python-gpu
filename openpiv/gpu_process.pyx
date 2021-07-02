@@ -289,23 +289,23 @@ class GPUCorrelation:
             __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size)
         {
             // global thread id for 1D grid of 2D blocks
-            int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
+            int thread_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int meand_idx = threadId / iw_size;
+            int mean_idx = thread_idx / iw_size;
 
-            array_norm[threadId] = array[threadId] - mean[meand_idx];
+            array_norm[thread_idx] = array[thread_idx] - mean[mean_idx];
         }
         
             __global__ void smart_normalize(float *array, float *array_norm, float *mean, float *mean_ratio, int iw_size)
         {
             // global thread id for 1D grid of 2D blocks
-            int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
+            int thread_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int meand_idx = threadId / iw_size;
+            int mean_idx = thread_idx / iw_size;
 
-            array_norm[threadId] = array[threadId] * mean_ratio[meand_idx] - mean[meand_idx];
+            array_norm[thread_idx] = array[thread_idx] * mean_ratio[mean_idx] - mean[mean_idx];
         }
         """)
 
@@ -1056,6 +1056,8 @@ class PIVGPU:
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
+        # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
+        self.im_mask = mask
         self.c = None  # correlation
 
         # Cython buffer definitions
@@ -1183,10 +1185,23 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
         cdef DTYPEi_t[:, :] val_list = self.val_list
 
-        # TODO multiply the images by the masks
-        # cast to 32-bit floats
-        d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
-        d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
+        t1 = process_time_ns()
+        # mask the images and send to gpu
+        if self.im_mask is not None:
+            d_frame_a_f = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
+            d_frame_b_f = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
+
+            # im_mask = gpuarray.to_gpu(self.im_mask.astype(DTYPE_i))
+            # d_frame_a_f0 = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
+            # d_frame_b_f0 = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
+            # d_frame_a_f = d_frame_a_f0 * im_mask
+            # d_frame_b_f = d_frame_b_f0 * im_mask
+
+        else:
+            d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
+            d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
+
+        print('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
 
         # create the correlation object
         self.c = GPUCorrelation(d_frame_a_f, d_frame_b_f, self.nfftx)
@@ -1299,11 +1314,6 @@ class PIVGPU:
         # # delete images from gpu memory
         d_frame_a_f.gpudata.free()
         d_frame_b_f.gpudata.free()
-        # d_f.gpudata.free()
-        # d_shift.gpudata.free()
-        # d_strain.gpudata.free()
-        # d_u_mean.gpudata.free()
-        # d_v_mean.gpudata.free()
 
         return u, v
 
