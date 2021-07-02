@@ -1,7 +1,7 @@
 # TODO
 
 ## Bugs
-- [ ] very high overlap ratios throw an error
+- [x] very high overlap ratios throw an error
 - [x] bias error in non-translating window
 
 ## Documentation

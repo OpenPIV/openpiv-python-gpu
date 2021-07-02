@@ -150,7 +150,7 @@ class GPUCorrelation:
         """
         # define window slice algorithm
         mod_ws = SourceModule("""
-            __global__ void window_slice(int *input, float *output, int window_size, int spacing, int diff, int n_col, int wd, int ht)
+            __global__ void window_slice(int *input, float *output, int ws, int spacing, int diff, int n_col, int wd, int ht)
         {
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int ind_i = blockIdx.x;
@@ -165,13 +165,13 @@ class GPUCorrelation:
             int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
 
             // indices of new array to map to
-            int w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            int w_range = ind_i * ws * ws + ws * ind_y + ind_x;
             
             // apply the mapping
             output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
         }
 
-            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int window_size, int spacing, int diff, int n_col, int num_window, int wd, int ht)
+            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int ws, int spacing, int diff, int n_col, int num_window, int wd, int ht)
         {
             // f : factor to apply to the shift and strain tensors
             // wd : width (number of columns in the full image)
@@ -194,8 +194,8 @@ class GPUCorrelation:
             float v_y = strain[3 * num_window + ind_i] * f;
 
             // compute the window vector
-            float r_x = ind_x - window_size / 2 + 0.5;  // r_x = x - x_c
-            float r_y = ind_y - window_size / 2 + 0.5;  // r_y = y - y_c
+            float r_x = ind_x - ws / 2 + 0.5;  // r_x = x - x_c
+            float r_y = ind_y - ws / 2 + 0.5;  // r_y = y - y_c
 
             // apply deformation operation
             float x_shift = ind_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
@@ -225,7 +225,7 @@ class GPUCorrelation:
             float f22 = input[(y2 * wd + x2) * outside_range];
 
             // indices of image to map to
-            int w_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
+            int w_range = ind_i * ws * ws + ws * ind_y + ind_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
@@ -293,9 +293,9 @@ class GPUCorrelation:
             int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int meanId = threadId / iw_size;
+            int mean_id = threadId / iw_size;
 
-            array_norm[threadId] = array[threadId] - mean[meanId];
+            array_norm[threadId] = array[threadId] - mean[mean_id];
         }
         
             __global__ void smart_normalize(float *array, float *array_norm, float *mean, float *mean_ratio, int iw_size)
@@ -304,9 +304,9 @@ class GPUCorrelation:
             int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int meanId = threadId / iw_size;
+            int mean_id = threadId / iw_size;
 
-            array_norm[threadId] = array[threadId] * mean_ratio[meanId] - mean[meanId];
+            array_norm[threadId] = array[threadId] * mean_ratio[mean_id] - mean[mean_id];
         }
         """)
 
@@ -689,6 +689,9 @@ def get_field_shape(image_size, window_size, overlap):
         the shape of the resulting flow field
 
     """
+    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
+    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+
     spacing = window_size - overlap
     n_row = DTYPE_i((image_size[0] - spacing) // spacing)
     n_col = DTYPE_i((image_size[1] - spacing) // spacing)
@@ -715,6 +718,9 @@ def get_field_coords(window_size, overlap, n_row, n_col):
         the shape of the resulting flow field
 
     """
+    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
+    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+
     spacing = window_size - overlap
     x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_col - 1), n_col, dtype=DTYPE_f), (n_row, 1))
     y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_row - 1), n_row, dtype=DTYPE_f), (n_col, 1)).T
@@ -1019,7 +1025,7 @@ class PIVGPU:
                  **kwargs):
         # type declarations
         cdef Py_ssize_t K, I, J, nb_iter_max
-        cdef float spacing
+        cdef int spacing, ht, wd
 
         # input checks
         ht, wd = frame_shape
@@ -1064,16 +1070,17 @@ class PIVGPU:
 
         # overlap init
         for K in range(nb_iter_max):
-            overlap[K] = int(np.floor(overlap_ratio * w[K]))
+            overlap[K] = int(overlap_ratio * w[K])
 
         # n_col and n_row init
         for K in range(nb_iter_max):
-            n_row[K] = (ht - w[K]) // (w[K] - overlap[K]) + 1
-            n_col[K] = (wd - w[K]) // (w[K] - overlap[K]) + 1
+            spacing = w[K] - overlap[K]
+            n_row[K] = (ht - spacing) // spacing
+            n_col[K] = (wd - spacing) // spacing
 
         self.n_row = np.asarray(n_row)
         self.n_col = np.asarray(n_col)
-        self.w = np.asarray(w)
+        self.ws = np.asarray(w)
         self.overlap = np.asarray(overlap)
 
         # # define temporary arrays and reshaped arrays to store the correlation function output
@@ -1096,8 +1103,8 @@ class PIVGPU:
         # initialize x and y values
         for K in range(nb_iter_max):
             spacing = w[K] - overlap[K]
-            f[K, :, 0, 0] = w[K] / 2  # init x on first column
-            f[K, 0, :, 1] = w[K] / 2  # init y on first row
+            f[K, :, 0, 0] = spacing  # init x on first column
+            f[K, 0, :, 1] = spacing  # init y on first row
 
             # init x on subsequent columns
             for J in range(1, n_col[K]):
@@ -1173,7 +1180,7 @@ class PIVGPU:
         # Cython buffers
         cdef DTYPEi_t[:] n_row = self.n_row
         cdef DTYPEi_t[:] n_col = self.n_col
-        cdef DTYPEi_t[:] w = self.w
+        cdef DTYPEi_t[:] ws = self.ws
         cdef DTYPEi_t[:] overlap = self.overlap
         cdef DTYPEf_t[:, :] i_peak = self.i_peak
         cdef DTYPEf_t[:, :] j_peak = self.j_peak
@@ -1195,7 +1202,7 @@ class PIVGPU:
 
             if K == 0:
                 # use extended search area for first iteration
-                extended_size = w[K] * self.extend_ratio if self.extend_ratio is not None else None
+                extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
                 d_shift_arg = None
                 d_strain_arg = None
             else:
@@ -1210,13 +1217,13 @@ class PIVGPU:
                 # calculate the strain rate tensor
                 if deform:
                     d_strain_arg = d_strain[:, :n_row[K], :n_col[K]].copy()
-                    if w[K] != w[K - 1]:
-                        gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
+                    if ws[K] != ws[K - 1]:
+                        gpu_gradient(d_strain_arg, d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
                     else:
-                        gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], w[K] - overlap[K])
+                        gpu_gradient(d_strain_arg, d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 2].copy(), d_f[K - 1, :n_row[K - 1], :n_col[K - 1], 3].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = self.c(w[K], overlap[K], extended_size=extended_size, d_shift=d_shift_arg, d_strain=d_strain_arg)
+            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=d_shift_arg, d_strain=d_strain_arg)
 
             # reshape the peaks
             self.i_peak[:n_row[K], :n_col[K]] = np.reshape(sp_i, (n_row[K], n_col[K]))
@@ -1244,15 +1251,15 @@ class PIVGPU:
                 print('Validation iteration {}:'.format(i))
 
                 # get list of places that need to be validated
-                self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], w[K], *val_tols)
+                self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], ws[K], *val_tols)
 
                 # do the validation
                 # n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
                 n_val = n_row[K] * n_col[K] - np.sum(val_list[:n_row[K], :n_col[K]])
                 if n_val > 0:
                     print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K], n_val / (n_row[K] * n_col[K])))
-                    # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
-                    gpu_replace_vectors(d_f, self.val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, w, overlap, dt)
+                    # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws, overlap, dt)
+                    gpu_replace_vectors(d_f, self.val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws, overlap, dt)
                 else:
                     print('No invalid vectors!')
 
@@ -1262,12 +1269,12 @@ class PIVGPU:
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
             if K < nb_iter_max - 1:
                 # interpolate if dimensions do not agree
-                if w[K + 1] != w[K]:
+                if ws[K + 1] != ws[K]:
                     v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
 
                     # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
-                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 2)
-                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, w, overlap, K, 3)
+                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, ws, overlap, K, 2)
+                    gpu_interpolate_surroundings(d_f, v_list, n_row, n_col, ws, overlap, K, 3)
                     if smoothing:
                         d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 4] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 2].copy(), s=smoothing_par, retain_input=True)  # check if .copy() is needed
                         d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 5] = gpu_smooth(d_f[K + 1, :n_row[K + 1], :n_col[K + 1], 3].copy(), s=smoothing_par, retain_input=True)
