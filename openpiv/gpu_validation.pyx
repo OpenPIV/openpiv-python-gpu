@@ -3,6 +3,7 @@
 import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
+from time import process_time_ns
 
 cimport numpy as np
 
@@ -15,21 +16,19 @@ DTYPE_f = np.float32
 ctypedef np.float32_t DTYPEf_t
 
 
-def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean_tol, rms_tol):
+def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None, rms_tol=None):
     """Returns an array indicating which indices need to be validated.
 
     Parameters
     ----------
-    d_f : GPUArray
-        4D float, main loop array
-    k : int
-        iteration number
-    sig2noise : ndarray
-        2D float, signal to noise ratio of each velocity
+    d_u, d_v : GPUArray
+        2D float, velocity fields to be validated
     n_row, n_col : int
         number of rows and columns in the velocity field
-    w : int
+    spacing : int
         number of pixels between each interrogation window center
+    sig2noise : ndarray
+        2D float, signal to noise ratio of each velocity
     s2n_tol : float
         minimum value for sig2noise
     median_tol : float
@@ -63,9 +62,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
         if (w_idx >= n_col * n_row) {return;}
 
         // get the val list
-        val_list[w_idx] = val_list[w_idx] * (sig2noise[w_idx] < s2n_tol);
+        val_list[w_idx] = val_list[w_idx] * (sig2noise[w_idx] > s2n_tol);
     }
-
 
     __global__ void neighbour_validation(int *val_list, float *u, float *v, float *u_nb, float *v_nb, float *u_fluc, float *v_fluc, int n_row, int n_col, float tol)
     {
@@ -91,21 +89,20 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
     """)
 
     # create array to store validation list
-    val_list = np.ones_like(sig2noise, dtype=DTYPE_i)
-    d_val_list = gpuarray.to_gpu(val_list)
+    d_val_list = gpuarray.ones_like(d_u, dtype=DTYPE_i)
 
     # cast inputs to appropriate data types
     n_row = DTYPE_i(n_row)
     n_col = DTYPE_i(n_col)
-    w = DTYPE_f(w)
+    spacing = DTYPE_f(spacing)
+    s2n_tol = DTYPE_f(s2n_tol) if s2n_tol is not None else None
+    median_tol = DTYPE_f(median_tol) if median_tol is not None else None
+    mean_tol = DTYPE_f(mean_tol) if mean_tol is not None else None
+    rms_tol = DTYPE_f(rms_tol) if rms_tol is not None else None
 
     # GPU settings
     block_size = 32
     x_blocks = int(n_col * n_row / block_size + 1)
-
-    # send velocity field to GPU
-    d_u = d_f[k, 0:n_row, 0:n_col, 2].copy()
-    d_v = d_f[k, 0:n_row, 0:n_col, 3].copy()
 
     # get neighbours information
     d_neighbours, d_neighbours_present = gpu_get_neighbours(d_u, d_v, n_row, n_col)
@@ -115,7 +112,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # S2N VALIDATION
     if s2n_tol is not None:
-        s2n_tol = DTYPE_f(s2n_tol)
         d_sig2noise = gpuarray.to_gpu(sig2noise)
 
         # Launch signal to noise kernel
@@ -127,8 +123,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # MEDIAN VALIDATION
     if median_tol is not None:
-        median_tol = DTYPE_f(median_tol)
-
         # get median velocity data
         d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
 
@@ -144,8 +138,6 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # MEAN VALIDATION
     if mean_tol is not None:
-        mean_tol = DTYPE_f(mean_tol)
-
         # get mean velocity data
         d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
         d_u_mean_fluc, d_v_mean_fluc = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
@@ -162,9 +154,8 @@ def gpu_validation(d_f, k, sig2noise, n_row, n_col, w, s2n_tol, median_tol, mean
 
     # RMS VALIDATION
     if rms_tol is not None:
-        rms_tol = DTYPE_f(rms_tol)
-
         # get rms velocity data
+        d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
         d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
 
         # launch validation kernel
@@ -930,7 +921,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
 
     """
     mod_rms = SourceModule("""
-    __global__ void u_rms_k(float *u_rms, *u_mean, float *n, int *np, int n_row, int n_col)
+    __global__ void u_rms_k(float *u_rms, float *u_mean, float *n, int *np, int n_row, int n_col)
     {
         // u_rms : rms of surrounding points
         // u_mean : mean velocity of surrounding points
@@ -958,7 +949,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
         __syncthreads();
     }
 
-    __global__ void v_rms_k(float *v_rms, *v_mean, float *n, int *np, int n_row, int n_col)
+    __global__ void v_rms_k(float *v_rms, float *v_mean, float *n, int *np, int n_row, int n_col)
     {
         // v_rms : rms of surrounding points
         // v_mean : mean velocity of surrounding points

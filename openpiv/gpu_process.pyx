@@ -58,7 +58,6 @@ class GPUCorrelation:
         """
         self.p_row = None
         self.p_col = None
-        self.sig2noise_ratio = None
         self.d_frame_a = d_frame_a
         self.d_frame_b = d_frame_b
         self.shape = DTYPE_i(d_frame_a.shape)
@@ -293,9 +292,9 @@ class GPUCorrelation:
             int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int mean_id = threadId / iw_size;
+            int meand_idx = threadId / iw_size;
 
-            array_norm[threadId] = array[threadId] - mean[mean_id];
+            array_norm[threadId] = array[threadId] - mean[meand_idx];
         }
         
             __global__ void smart_normalize(float *array, float *array_norm, float *mean, float *mean_ratio, int iw_size)
@@ -304,9 +303,9 @@ class GPUCorrelation:
             int threadId = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int mean_id = threadId / iw_size;
+            int meand_idx = threadId / iw_size;
 
-            array_norm[threadId] = array[threadId] * mean_ratio[mean_id] - mean[mean_id];
+            array_norm[threadId] = array[threadId] * mean_ratio[meand_idx] - mean[meand_idx];
         }
         """)
 
@@ -397,9 +396,6 @@ class GPUCorrelation:
         zero_pad = mod_zp.get_function('zero_pad')
         zero_pad(d_win_a_zp, d_win_a_norm, self.fft_size, self.extended_size, s0_a, s1_a, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
         zero_pad(d_win_b_zp, d_win_b_norm, self.fft_size, self.extended_size, s0_b, s1_b, block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-
-        np.save('win_a_zp', d_win_a_zp.get())  # debug
-        np.save('win_b_zp', d_win_b_zp.get())
 
         # Free GPU memory
         d_win_a_norm.gpudata.free()
@@ -867,7 +863,7 @@ def gpu_piv(frame_a, frame_b,
     min_window_size : tuple or int
         Length of the sides of the square deformation. Only supports multiples of 8.
     overlap_ratio : float
-        The ratio of overlap between two windows (between 0 and 1).
+        Ratio of overlap between two windows (between 0 and 1).
     dt : float
         Time delay separating the two frames.
     mask : ndarray
@@ -901,7 +897,7 @@ def gpu_piv(frame_a, frame_b,
     smoothing_par : float
         Smoothing parameter to pass to Smoothn to apply to the intermediate velocity fields.
     extend_ratio : float
-        The ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
+        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}
         Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     return_sig2noise : bool
@@ -983,7 +979,7 @@ class PIVGPU:
     smoothing_par : float
         Smoothing parameter to pass to Smoothn to apply to the intermediate velocity fields. Default is 0.5.
     extend_ratio : float
-        The ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
+        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}
         Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     sig2noise_method : {'peak2peak', 'peak2mean'}
@@ -1230,8 +1226,8 @@ class PIVGPU:
             self.j_peak[:n_row[K], :n_col[K]] = np.reshape(sp_j, (n_row[K], n_col[K]))
 
             # Get signal to noise ratio
-            if self.val_tols[3] is not None:
-                self.sig2noise = self.c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
+            if self.val_tols[0] is not None:
+                self.sig2noise[:n_row[K], :n_col[K]] = self.c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
 
             # update the field with new values
             gpu_update(d_f, self.i_peak[:n_row[K], :n_col[K]], self.j_peak[:n_row[K], :n_col[K]], n_row[K], n_col[K], K)
@@ -1251,7 +1247,7 @@ class PIVGPU:
                 print('Validation iteration {}:'.format(i))
 
                 # get list of places that need to be validated
-                self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f, K, sig2noise[:n_row[K], :n_col[K]], n_row[K], n_col[K], ws[K], *val_tols)
+                self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], ws[K], self.sig2noise[:n_row[K], :n_col[K]], *val_tols)
 
                 # do the validation
                 # n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
@@ -1355,7 +1351,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
     assert d_v_mean.shape == (nb_iter_max, n_row[-1], n_col[-1]), "Must pass the entire d_v_mean array, not just the section for the iteration you are validating."
 
     # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
-    validation_location = np.invert(validation_list.astype(bool))
+    validation_location = validation_list.astype(bool)
 
     # first iteration, just replace with mean velocity
     if k == 0:

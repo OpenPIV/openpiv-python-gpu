@@ -23,7 +23,8 @@
   - [x] reduce operations outside of CUDA kernels in iw_arrange()
   - [x] move methods out of init()
   - [ ] define fewer GPU arrays
-  - [ ] Use CUDA kernel in subpixel location - this can gain ~10% performance
+  - [ ] Use CUDA kernel in subpixel location
+  - [ ] Return a GPU array for the validation list
 
 - [x] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 - [ ] reduce the number of temporary gpu arrays created
