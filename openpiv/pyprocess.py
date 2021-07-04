@@ -1,3 +1,10 @@
+import numpy.lib.stride_tricks
+import numpy as np
+from scipy.fft import rfft2, irfft2, fftshift
+from numpy import ma
+from scipy.signal import convolve2d
+from numpy import log
+
 """This module contains a pure python implementation of the basic
 cross-correlation algorithm for PIV image processing."""
 
@@ -19,18 +26,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 
-import numpy.lib.stride_tricks
-import numpy as np
-from numpy.fft import rfft2, irfft2
-from numpy import ma
-from scipy.signal import convolve2d
-from numpy import log
-import matplotlib.pyplot as plt
-
-
-
-def get_coordinates(image_size, window_size, overlap):
+def get_coordinates(image_size, search_area_size, overlap):
     """Compute the x, y coordinates of the centers of the interrogation windows.
+    the origin (0,0) is like in the image, top left corner
+    positive x is an increasing column index from left to right
+    positive y is increasing row index, from top to bottom
+
 
     Parameters
     ----------
@@ -39,10 +40,11 @@ def get_coordinates(image_size, window_size, overlap):
         first element is number of rows, second element is
         the number of columns.
 
-    window_size: int
-        the size of the interrogation windows.
+    search_area_size: int
+        the size of the search area windows, sometimes it's equal to
+        the interrogation window size in both frames A and B
 
-    overlap: int
+    overlap: int = 0 (default is no overlap)
         the number of pixel by which two adjacent interrogation
         windows overlap.
 
@@ -57,21 +59,52 @@ def get_coordinates(image_size, window_size, overlap):
         a two dimensional array containing the y coordinates of the
         interrogation window centers, in pixels.
 
+        Coordinate system 0,0 is at the top left corner, positive
+        x to the right, positive y from top downwards, i.e.
+        image coordinate system
+
     """
 
     # get shape of the resulting flow field
-    field_shape = get_field_shape(image_size, window_size, overlap)
+    field_shape = get_field_shape(image_size,
+                                  search_area_size,
+                                  overlap)
 
-    # compute grid coordinates of the interrogation window centers
-    x = np.arange(field_shape[1]) * (window_size -
-                                     overlap) + (window_size - 1) / 2.0
-    y = np.arange(field_shape[0]) * (window_size -
-                                     overlap) + (window_size - 1) / 2.0
+    # compute grid coordinates of the search area window centers
+    # note the field_shape[1] (columns) for x
+    x = (
+        np.arange(field_shape[1]) * (search_area_size - overlap)
+        + (search_area_size) / 2.0
+    )
+    # note the rows in field_shape[0]
+    y = (
+        np.arange(field_shape[0]) * (search_area_size - overlap)
+        + (search_area_size) / 2.0
+    )
 
-    return np.meshgrid(x, y[::-1])
+    # moving coordinates further to the center, so that the points at the
+    # extreme left/right or top/bottom
+    # have the same distance to the window edges. For simplicity only integer
+    # movements are allowed.
+    x += (
+        image_size[1]
+        - 1
+        - ((field_shape[1] - 1) * (search_area_size - overlap) +
+            (search_area_size - 1))
+    ) // 2
+    y += (
+        image_size[0] - 1
+        - ((field_shape[0] - 1) * (search_area_size - overlap) +
+           (search_area_size - 1))
+    ) // 2
+
+    # the origin 0,0 is at top left
+    # the units are pixels
+
+    return np.meshgrid(x, y)
 
 
-def get_field_shape(image_size, window_size, overlap):
+def get_field_shape(image_size, search_area_size, overlap):
     """Compute the shape of the resulting flow field.
 
     Given the image size, the interrogation window size and
@@ -83,24 +116,26 @@ def get_field_shape(image_size, window_size, overlap):
     image_size: two elements tuple
         a two dimensional tuple for the pixel size of the image
         first element is number of rows, second element is
-        the number of columns.
+        the number of columns, easy to obtain using .shape
 
-    window_size: int
-        the size of the interrogation window.
+    search_area_size: tuple
+        the size of the interrogation windows (if equal in frames A,B)
+        or the search area (in frame B), the largest  of the two
 
-    overlap: int
+    overlap: tuple
         the number of pixel by which two adjacent interrogation
         windows overlap.
 
 
     Returns
     -------
-    field_shape : two elements tuple
+    field_shape : three elements tuple
         the shape of the resulting flow field
     """
-
-    return ((image_size[0] - window_size) // (window_size - overlap) + 1,
-            (image_size[1] - window_size) // (window_size - overlap) + 1)
+    field_shape = (np.array(image_size) - np.array(search_area_size)) // (
+        np.array(search_area_size) - np.array(overlap)
+    ) + 1
+    return field_shape
 
 
 def moving_window_array(array, window_size, overlap):
@@ -111,20 +146,30 @@ def moving_window_array(array, window_size, overlap):
     Basically, we have a 2d array and we want to perform cross-correlation
     over the interrogation windows. An approach could be to loop over the array
     but loops are expensive in python. So we create from the array a new array
-    with three dimension, of size (n_windows, window_size, window_size), in which
-    each slice, (along the first axis) is an interrogation window.
+    with three dimension, of size (n_windows, window_size, window_size), in
+    which each slice, (along the first axis) is an interrogation window.
 
     """
     sz = array.itemsize
     shape = array.shape
     array = np.ascontiguousarray(array)
 
-    strides = (sz * shape[1] * (window_size - overlap),
-               sz * (window_size - overlap), sz * shape[1], sz)
-    shape = (int((shape[0] - window_size) / (window_size - overlap)) + 1, int(
-        (shape[1] - window_size) / (window_size - overlap)) + 1, window_size, window_size)
+    strides = (
+        sz * shape[1] * (window_size - overlap),
+        sz * (window_size - overlap),
+        sz * shape[1],
+        sz,
+    )
+    shape = (
+        int((shape[0] - window_size) / (window_size - overlap)) + 1,
+        int((shape[1] - window_size) / (window_size - overlap)) + 1,
+        window_size,
+        window_size,
+    )
 
-    return numpy.lib.stride_tricks.as_strided(array, strides=strides, shape=shape).reshape(-1, window_size, window_size)
+    return numpy.lib.stride_tricks.as_strided(
+        array, strides=strides, shape=shape
+    ).reshape(-1, window_size, window_size)
 
 
 def find_first_peak(corr):
@@ -134,27 +179,16 @@ def find_first_peak(corr):
     Parameters
     ----------
     corr : np.ndarray
-        the correlation map
+        the correlation map fof the strided images (N,K,M) where
+        N is the number of windows, KxM is the interrogation window size
 
     Returns
     -------
-    i : int
-        the row index of the correlation peak
-
-    j : int
-        the column index of the correlation peak
-
-    corr_max1 : int
-        the value of the correlation peak
-
+        (i,j) : integers, index of the peak position
+        peak  : amplitude of the peak
     """
-    ind = corr.argmax()
-    s = corr.shape[1]
 
-    i = ind // s
-    j = ind % s
-
-    return i, j, corr.max()
+    return np.unravel_index(np.argmax(corr), corr.shape), corr.max()
 
 
 def find_second_peak(corr, i=None, j=None, width=2):
@@ -191,12 +225,13 @@ def find_second_peak(corr, i=None, j=None, width=2):
     """
 
     if i is None or j is None:
-        i, j, tmp = find_first_peak(corr)
+        (i, j), tmp = find_first_peak(corr)
 
     # create a masked view of the corr
     tmp = corr.view(ma.MaskedArray)
 
-    # set width x width square submatrix around the first correlation peak as masked.
+    # set width x width square submatrix around the first correlation peak as
+    # masked.
     # Before check if we are not too close to the boundaries, otherwise we
     # have negative indices
     iini = max(0, i - width)
@@ -204,12 +239,12 @@ def find_second_peak(corr, i=None, j=None, width=2):
     jini = max(0, j - width)
     jfin = min(j + width + 1, corr.shape[1])
     tmp[iini:ifin, jini:jfin] = ma.masked
-    i, j, corr_max2 = find_first_peak(tmp)
+    (i, j), corr_max2 = find_first_peak(tmp)
 
-    return i, j, corr_max2
+    return (i, j), corr_max2
 
 
-def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
+def find_subpixel_peak_position(corr, subpixel_method="gaussian"):
     """
     Find subpixel approximation of the correlation peak.
 
@@ -224,7 +259,8 @@ def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
         the correlation map.
 
     subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
+         one of the following methods to estimate subpixel location of the
+         peak:
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
@@ -234,64 +270,90 @@ def find_subpixel_peak_position(corr, subpixel_method='gaussian'):
     subp_peak_position : two elements tuple
         the fractional row and column indices for the sub-pixel
         approximation of the correlation peak.
+        If the first peak is on the border of the correlation map
+        or any other problem, the returned result is a tuple of NaNs.
     """
 
     # initialization
-    # default_peak_position = (np.floor(corr.shape[0] / 2.), np.floor(corr.shape[1] / 2.))
-    default_peak_position = (0,0)
+    # default_peak_position = (np.floor(corr.shape[0] / 2.),
+    # np.floor(corr.shape[1] / 2.))
+    # default_peak_position = np.array([0,0])
+    eps = 1e-7
+    # subp_peak_position = tuple(np.floor(np.array(corr.shape)/2))
+    subp_peak_position = (np.nan, np.nan)  # any wrong position will mark nan
 
-    
+    # check inputs
+    if subpixel_method not in ("gaussian", "centroid", "parabolic"):
+        raise ValueError(f"Method not implemented {subpixel_method}")
+
     # the peak locations
-    peak1_i, peak1_j, dummy = find_first_peak(corr)
-    
+    (peak1_i, peak1_j), _ = find_first_peak(corr)
 
-    try:
-        # the peak and its neighbours: left, right, down, up
-        c = corr[peak1_i,   peak1_j]
+    # import pdb; pdb.set_trace()
+
+    # the peak and its neighbours: left, right, down, up
+    # but we have to make sure that peak is not at the border
+    # @ErichZimmer noticed this bug for the small windows
+
+    if ((peak1_i == 0) | (peak1_i == corr.shape[0]-1) |
+       (peak1_j == 0) | (peak1_j == corr.shape[1]-1)):
+        return subp_peak_position
+    else:
+        corr += eps  # prevents log(0) = nan if "gaussian" is used (notebook)
+        c = corr[peak1_i, peak1_j]
         cl = corr[peak1_i - 1, peak1_j]
         cr = corr[peak1_i + 1, peak1_j]
-        cd = corr[peak1_i,   peak1_j - 1]
-        cu = corr[peak1_i,   peak1_j + 1]
+        cd = corr[peak1_i, peak1_j - 1]
+        cu = corr[peak1_i, peak1_j + 1]
 
         # gaussian fit
-        if np.any(np.array([c, cl, cr, cd, cu]) < 0) and subpixel_method == 'gaussian':
-            subpixel_method = 'centroid'
+        if np.logical_and(np.any(np.array([c, cl, cr, cd, cu]) < 0),
+                          subpixel_method == "gaussian"):
+            subpixel_method = "parabolic"
 
-        try:
-            if subpixel_method == 'centroid':
-                subp_peak_position = (((peak1_i - 1) * cl + peak1_i * c + (peak1_i + 1) * cr) / (cl + c + cr),
-                                      ((peak1_j - 1) * cd + peak1_j * c + (peak1_j + 1) * cu) / (cd + c + cu))
+        # try:
+        if subpixel_method == "centroid":
+            subp_peak_position = (
+                ((peak1_i - 1) * cl + peak1_i * c + (peak1_i + 1) * cr) /
+                (cl + c + cr),
+                ((peak1_j - 1) * cd + peak1_j * c + (peak1_j + 1) * cu) /
+                (cd + c + cu),
+            )
 
-            elif subpixel_method == 'gaussian':
-                subp_peak_position = (peak1_i + ((log(cl) - log(cr)) / (2 * log(cl) - 4 * log(c) + 2 * log(cr))),
-                                      peak1_j + ((log(cd) - log(cu)) / (2 * log(cd) - 4 * log(c) + 2 * log(cu))))
+        elif subpixel_method == "gaussian":
+            nom1 = log(cl) - log(cr)
+            den1 = 2 * log(cl) - 4 * log(c) + 2 * log(cr)
+            nom2 = log(cd) - log(cu)
+            den2 = 2 * log(cd) - 4 * log(c) + 2 * log(cu)
 
-            elif subpixel_method == 'parabolic':
-                subp_peak_position = (peak1_i + (cl - cr) / (2 * cl - 4 * c + 2 * cr),
-                                      peak1_j + (cd - cu) / (2 * cd - 4 * c + 2 * cu))
+            subp_peak_position = (
+                peak1_i + np.divide(nom1, den1, out=np.zeros(1),
+                                    where=(den1 != 0.0))[0],
+                peak1_j + np.divide(nom2, den2, out=np.zeros(1),
+                                    where=(den2 != 0.0))[0],
+            )
 
-        except:
-            subp_peak_position = default_peak_position
+        elif subpixel_method == "parabolic":
+            subp_peak_position = (
+                peak1_i + (cl - cr) / (2 * cl - 4 * c + 2 * cr),
+                peak1_j + (cd - cu) / (2 * cd - 4 * c + 2 * cu),
+            )
 
-    except IndexError:
-        subp_peak_position = default_peak_position
-        
-
-    return subp_peak_position[0] - default_peak_position[0], subp_peak_position[1] - default_peak_position[1]
+        return subp_peak_position
 
 
-def sig2noise_ratio(corr, sig2noise_method='peak2peak', width=2):
+def sig2noise_ratio(correlation, sig2noise_method="peak2peak", width=2):
     """
     Computes the signal to noise ratio from the correlation map.
 
     The signal to noise ratio is computed from the correlation map with
     one of two available method. It is a measure of the quality of the
-    matching between to interogation windows.
+    matching between to interrogation windows.
 
     Parameters
     ----------
-    corr : 2d np.ndarray
-        the correlation map.
+    corr : 3d np.ndarray
+        the correlation maps of the image pair, concatenated along 0th axis
 
     sig2noise_method: string
         the method for evaluating the signal to noise ratio value from
@@ -305,108 +367,143 @@ def sig2noise_ratio(corr, sig2noise_method='peak2peak', width=2):
 
     Returns
     -------
-    sig2noise : float
-        the signal to noise ratio from the correlation map.
+    sig2noise : np.array
+        the signal to noise ratios from the correlation maps.
 
     """
+    sig2noise = np.zeros(correlation.shape[0])
+    corr_max1 = np.zeros(correlation.shape[0])
+    corr_max2 = np.zeros(correlation.shape[0])
+    if sig2noise_method == "peak2peak":
+        for i, corr in enumerate(correlation):
+            # compute first peak position
+            (peak1_i, peak1_j), corr_max1[i] = find_first_peak(corr)
 
-    # compute first peak position
-    peak1_i, peak1_j, corr_max1 = find_first_peak(corr)
+            condition = (
+                corr_max1[i] < 1e-3
+                or peak1_i == 0
+                or peak1_j == corr.shape[0]
+                or peak1_j == 0
+                or peak1_j == corr.shape[1]
+            )
 
-    # now compute signal to noise ratio
-    if sig2noise_method == 'peak2peak':
-        # find second peak height
-        peak2_i, peak2_j, corr_max2 = find_second_peak(
-            corr, peak1_i, peak1_j, width=width)
+            if condition:
+                # return zero, since we have no signal.
+                # no point to get the second peak, save time
+                sig2noise[i] = 0.0
+            else:
+                # find second peak height
+                (peak2_i, peak2_j), corr_max2 = find_second_peak(
+                    corr, peak1_i, peak1_j, width=width
+                )
 
-        # if it's an empty interrogation window
-        # if the image is lacking particles, totally black it will correlate to very low value, but not zero
-        # if the first peak is on the borders, the correlation map is also
-        # wrong
-        if corr_max1 < 1e-3 or (peak1_i == 0 or peak1_j == corr.shape[0] or peak1_j == 0 or peak1_j == corr.shape[1] or
-                                peak2_i == 0 or peak2_j == corr.shape[0] or peak2_j == 0 or peak2_j == corr.shape[1]):
-            # return zero, since we have no signal.
-            return 0.0
+                condition = (
+                    corr_max2 == 0
+                    or peak2_i == 0
+                    or peak2_j == corr.shape[0]
+                    or peak2_j == 0
+                    or peak2_j == corr.shape[1]
+                )
+                if condition:  # mark failed peak2
+                    corr_max2 = np.nan
 
-    elif sig2noise_method == 'peak2mean':
-        # find mean of the correlation map
-        corr_max2 = corr.mean()
+                sig2noise[i] = corr_max1[i] / corr_max2
+
+    elif sig2noise_method == "peak2mean":  # only one loop
+        for i, corr in enumerate(correlation):
+            # compute first peak position
+            (peak1_i, peak1_j), corr_max1[i] = find_first_peak(corr)
+
+            condition = (
+                corr_max1[i] < 1e-3
+                or peak1_i == 0
+                or peak1_j == corr.shape[0]
+                or peak1_j == 0
+                or peak1_j == corr.shape[1]
+            )
+
+            if condition:
+                # return zero, since we have no signal.
+                # no point to get the second peak, save time
+                sig2noise[i] = 0.0
+
+        # find means of all the correlation maps
+        corr_max2 = np.abs(correlation.mean(axis=(-2, -1)))
+        corr_max2[corr_max2 == 0] = np.nan  # mark failed ones
+
+        sig2noise = corr_max1 / corr_max2
 
     else:
-        raise ValueError('wrong sig2noise_method')
+        raise ValueError("wrong sig2noise_method")
 
-    # avoid dividing by zero
-    try:
-        sig2noise = corr_max1 / corr_max2
-    except ValueError:
-        sig2noise = np.inf
+    # sig2noise is zero for all failed ones
+    sig2noise[np.isnan(sig2noise)] = 0.0
 
     return sig2noise
 
 
-def correlate_windows(window_a, window_b, corr_method='fft', nfftx=None, nffty=None):
-    """Compute correlation function between two interrogation windows.
-
-    The correlation function can be computed by using the correlation
-    theorem to speed up the computation.
-
+def fft_correlate_images(image_a, image_b,
+                         correlation_method="circular",
+                         normalized_correlation=True):
+    """ FFT based cross correlation
+    of two images with multiple views of np.stride_tricks()
+    The 2D FFT should be applied to the last two axes (-2,-1) and the
+    zero axis is the number of the interrogation window
+    This should also work out of the box for rectangular windows.
     Parameters
     ----------
-    window_a : 2d np.ndarray
-        a two dimensions array for the first interrogation window, 
+    image_a : 3d np.ndarray, first dimension is the number of windows,
+        and two last dimensions are interrogation windows of the first image
 
-    window_b : 2d np.ndarray
-        a two dimensions array for the second interrogation window.
+    image_b : similar
 
-    corr_method   : string
-        one of the two methods currently implemented: 'fft' or 'direct'.
-        Default is 'fft', which is much faster.
+    correlation_method : string
+        one of the three methods implemented: 'circular' or 'linear'
+        [default: 'circular].
 
-    nfftx   : int
-        the size of the 2D FFT in x-direction,
-        [default: 2 x windows_a.shape[0] is recommended].
-
-    nffty   : int
-        the size of the 2D FFT in y-direction,
-        [default: 2 x windows_a.shape[1] is recommended].
-
-
-    Returns
-    -------
-    corr : 2d np.ndarray
-        a two dimensions array for the correlation function.
-    
-    Note that due to the wish to use 2^N windows for faster FFT
-    we use a slightly different convention for the size of the 
-    correlation map. The theory says it is M+N-1, and the 
-    'direct' method gets this size out
-    the FFT-based method returns M+N size out, where M is the window_size
-    and N is the search_area_size
-    It leads to inconsistency of the output 
+    normalized_correlation : string
+        decides wetehr normalized correlation is done or not: True or False
+        [default: True].
     """
-    
-    if corr_method == 'fft':
-        window_b = np.conj(window_b[::-1, ::-1])
-        if nfftx is None:
-            nfftx = nextpower2(window_b.shape[0] + window_a.shape[0])  
-        if nffty is None:
-            nffty = nextpower2(window_b.shape[1] + window_a.shape[1]) 
-        
-        f2a = rfft2(normalize_intensity(window_a), s=(nfftx, nffty))
-        f2b = rfft2(normalize_intensity(window_b), s=(nfftx, nffty))
-        corr = irfft2(f2a * f2b).real
-        corr = corr[:window_a.shape[0] + window_b.shape[0], 
-                    :window_b.shape[1] + window_a.shape[1]]
-        return corr
-    elif corr_method == 'direct':
-        return convolve2d(normalize_intensity(window_a),
-        normalize_intensity(window_b[::-1, ::-1]), 'full')
+
+    if normalized_correlation:
+        # remove the effect of stronger laser or
+        # longer exposure for frame B
+        # image_a = match_histograms(image_a, image_b)
+
+        # remove mean background, normalize to 0..1 range
+        image_a = normalize_intensity(image_a)
+        image_b = normalize_intensity(image_b)
+
+    s1 = np.array(image_a.shape[-2:])
+    s2 = np.array(image_b.shape[-2:])
+
+    if correlation_method == "linear":
+        # have to be normalized, mainly because of zero padding
+        size = s1 + s2 - 1
+        fsize = 2 ** np.ceil(np.log2(size)).astype(int)
+        fslice = (slice(0, image_a.shape[0]),
+                  slice((fsize[0]-s1[0])//2, (fsize[0]+s1[0])//2),
+                  slice((fsize[1]-s1[1])//2, (fsize[1]+s1[1])//2))
+        f2a = rfft2(image_a, fsize, axes=(-2, -1)).conj()
+        f2b = rfft2(image_b, fsize, axes=(-2, -1))
+        corr = fftshift(irfft2(f2a * f2b).real, axes=(-2, -1))[fslice]
+    elif correlation_method == "circular":
+        corr = fftshift(irfft2(rfft2(image_a).conj() *
+                               rfft2(image_b)).real, axes=(-2, -1))
     else:
-        raise ValueError('method is not implemented')
+        print("method is not implemented!")
+
+    if normalized_correlation:
+        corr = corr/(s2[0]*s2[1])  # for extended search area
+        corr = np.clip(corr, 0, 1)
+    return corr
 
 
 def normalize_intensity(window):
-    """Normalize interrogation window by removing the mean value.
+    """Normalize interrogation window or strided image of many windows,
+       by removing the mean intensity value per window and clipping the
+       negative values to zero
 
     Parameters
     ----------
@@ -416,32 +513,139 @@ def normalize_intensity(window):
     Returns
     -------
     window :  2d np.ndarray
-        the interrogation window array, with mean value equal to zero.
-
+        the interrogation window array, with mean value equal to zero and
+        intensity normalized to -1 +1 and clipped if some pixels are
+        extra low/high
     """
-    return window - window.mean()
+    window = window.astype(np.float32)
+    window -= window.mean(axis=(-2, -1),
+                          keepdims=True, dtype=np.float32)
+    tmp = window.std(axis=(-2, -1), keepdims=True)
+    window = np.divide(window, tmp, out=np.zeros_like(window),
+                       where=(tmp != 0))
+    return np.clip(window, 0, window.max())
+
+
+def correlate_windows(window_a, window_b, correlation_method="fft"):
+    """Compute correlation function between two interrogation windows.
+    The correlation function can be computed by using the correlation
+    theorem to speed up the computation.
+    Parameters
+    ----------
+    window_a : 2d np.ndarray
+        a two dimensions array for the first interrogation window,
+    window_b : 2d np.ndarray
+        a two dimensions array for the second interrogation window.
+    correlation_method : string, methods currently implemented:
+            'circular' - FFT based without zero-padding
+            'linear' -  FFT based with zero-padding
+            'direct' -  linear convolution based
+            Default is 'fft', which is much faster.
+    Returns
+    -------
+    corr : 2d np.ndarray
+        a two dimensions array for the correlation function.
+    Note that due to the wish to use 2^N windows for faster FFT
+    we use a slightly different convention for the size of the
+    correlation map. The theory says it is M+N-1, and the
+    'direct' method gets this size out
+    the FFT-based method returns M+N size out, where M is the window_size
+    and N is the search_area_size
+    It leads to inconsistency of the output
+    """
+
+    # first we remove the mean to normalize contrast and intensity
+    # the background level which is take as a mean of the image
+    # is subtracted
+    # import pdb; pdb.set_trace()
+    window_a = normalize_intensity(window_a)
+    window_b = normalize_intensity(window_b)
+
+    # this is not really circular one, as we pad a bit to get fast 2D FFT,
+    # see fft_correlate for implementation
+    if correlation_method in ("circular", "fft"):
+        corr = fft_correlate_windows(window_a, window_b)
+    elif correlation_method == "linear":
+        # save the original size:
+        s1 = np.array(window_a.shape)
+        s2 = np.array(window_b.shape)
+        size = s1 + s2 - 1
+        fslice = tuple([slice(0, int(sz)) for sz in size])
+        # and slice only the relevant part
+        corr = fft_correlate_windows(window_a, window_b)[fslice]
+    elif correlation_method == "direct":
+        corr = convolve2d(window_a, window_b[::-1, ::-1], "full")
+    else:
+        raise ValueError("method is not implemented")
+
+    return corr
+
+
+def fft_correlate_windows(window_a, window_b):
+    """ FFT based cross correlation
+    it is a so-called linear convolution based,
+    since we increase the size of the FFT to
+    reduce the edge effects.
+    This should also work out of the box for rectangular windows.
+    Parameters
+    ----------
+    window_a : 2d np.ndarray
+        a two dimensions array for the first interrogation window,
+    window_b : 2d np.ndarray
+        a two dimensions array for the second interrogation window.
+    # from Stackoverflow:
+    from scipy import linalg
+    import numpy as np
+    # works for rectangular windows as well
+    x = [[1 , 0 , 0 , 0] , [0 , -1 , 0 , 0] , [0 , 0 , 3 , 0] ,
+        [0 , 0 , 0 , 1], [0 , 0 , 0 , 1]]
+    x = np.array(x,dtype=np.float)
+    y = [[4 , 5] , [3 , 4]]
+    y = np.array(y)
+    print ("conv:" ,  signal.convolve2d(x , y , 'full'))
+    s1 = np.array(x.shape)
+    s2 = np.array(y.shape)
+    size = s1 + s2 - 1
+    fsize = 2 ** np.ceil(np.log2(size)).astype(int)
+    fslice = tuple([slice(0, int(sz)) for sz in size])
+    new_x = np.fft.fft2(x , fsize)
+    new_y = np.fft.fft2(y , fsize)
+    result = np.fft.ifft2(new_x*new_y)[fslice].copy()
+    print("fft for my method:" , np.array(result.real, np.int32))
+    """
+    s1 = np.array(window_a.shape)
+    s2 = np.array(window_b.shape)
+    size = s1 + s2 - 1
+    fsize = 2 ** np.ceil(np.log2(size)).astype(int)
+    fslice = tuple([slice(0, int(sz)) for sz in size])
+    f2a = rfft2(window_a, fsize)
+    f2b = rfft2(window_b[::-1, ::-1], fsize)
+    corr = irfft2(f2a * f2b).real[fslice]
+    return corr
 
 
 def extended_search_area_piv(
-        frame_a, frame_b, 
-        window_size, 
-        overlap=0, 
-        dt=1.0,
-        search_area_size=None, 
-        corr_method='fft',
-        subpixel_method='gaussian', 
-        sig2noise_method=None,
-        width=2, 
-        nfftx=None, nffty=None):
-    """Standard PIV cross-correlation algorithm, with an option for 
+    frame_a,
+    frame_b,
+    window_size,
+    overlap=0,
+    dt=1.0,
+    search_area_size=None,
+    correlation_method="circular",
+    subpixel_method="gaussian",
+    sig2noise_method='peak2mean',
+    width=2,
+    normalized_correlation=False
+):
+    """Standard PIV cross-correlation algorithm, with an option for
     extended area search that increased dynamic range. The search region
-    in the second frame is larger than the interrogation window size in the 
-    first frame. For Cython implementation see 
+    in the second frame is larger than the interrogation window size in the
+    first frame. For Cython implementation see
     openpiv.process.extended_search_area_piv
 
     This is a pure python implementation of the standard PIV cross-correlation
-    algorithm. It is a zero order displacement predictor, and no iterative process
-    is performed.
+    algorithm. It is a zero order displacement predictor, and no iterative
+    process is performed.
 
     Parameters
     ----------
@@ -463,12 +667,14 @@ def extended_search_area_piv(
     dt : float
         the time delay separating the two frames [default: 1.0].
 
-    corr_method : string
-        one of the two methods implemented: 'fft' or 'direct',
-        [default: 'fft'].
+    correlation_method : string
+        one of the two methods implemented: 'circular' or 'linear',
+        default: 'circular', it's faster, without zero-padding
+        'linear' requires also normalized_correlation = True (see below)
 
     subpixel_method : string
-         one of the following methods to estimate subpixel location of the peak:
+         one of the following methods to estimate subpixel location of the
+         peak:
          'centroid' [replaces default if correlation map is negative],
          'gaussian' [default if correlation map is positive],
          'parabolic'.
@@ -489,11 +695,17 @@ def extended_search_area_piv(
         the half size of the region around the first
         correlation peak to ignore for finding the second
         peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
-    
-    search_area_size : int 
-       the size of the interrogation window in the second frame, 
-       default is the same interrogation window size and it is a 
+
+    search_area_size : int
+       the size of the interrogation window in the second frame,
+       default is the same interrogation window size and it is a
        fallback to the simplest FFT based PIV
+
+    normalized_correlation: bool
+        if True, then the image intensity will be modified by removing
+        the mean, dividing by the standard deviation and
+        the correlation map will be normalized. It's slower but could be
+        more robust
 
 
     Returns
@@ -506,105 +718,129 @@ def extended_search_area_piv(
         a two dimensional array containing the v velocity component,
         in pixels/seconds.
 
-    sig2noise : 2d np.ndarray, ( optional: only if sig2noise_method is not None )
+    sig2noise : 2d np.ndarray, ( optional: only if sig2noise_method != None )
         a two dimensional array the signal to noise ratio for each
         window pair.
 
+
+    The implementation of the one-step direct correlation with different
+    size of the interrogation window and the search area. The increased
+    size of the search areas cope with the problem of loss of pairs due
+    to in-plane motion, allowing for a smaller interrogation window size,
+    without increasing the number of outlier vectors.
+
+    See:
+
+    Particle-Imaging Techniques for Experimental Fluid Mechanics
+
+    Annual Review of Fluid Mechanics
+    Vol. 23: 261-304 (Volume publication date January 1991)
+    DOI: 10.1146/annurev.fl.23.010191.001401
+
+    originally implemented in process.pyx in Cython and converted to
+    a NumPy vectorized solution in pyprocess.py
+
     """
-    
+
     # check the inputs for validity
-    
     if search_area_size is None:
         search_area_size = window_size
-    
+
     if overlap >= window_size:
-        raise ValueError('Overlap has to be smaller than the window_size')
-    
+        raise ValueError("Overlap has to be smaller than the window_size")
+
     if search_area_size < window_size:
-        raise ValueError('Search size cannot be smaller than the window_size')
-    
-        
+        raise ValueError("Search size cannot be smaller than the window_size")
+
     if (window_size > frame_a.shape[0]) or (window_size > frame_a.shape[1]):
-        raise ValueError('window size cannot be larger than the image')
-        
+        raise ValueError("window size cannot be larger than the image")
+
     # get field shape
-    n_rows, n_cols = get_field_shape(frame_a.shape, search_area_size, overlap )
-            
-    u = np.zeros((n_rows, n_cols))
-    v = np.zeros((n_rows, n_cols))
-    sig2noise = np.zeros((n_rows, n_cols)) 
+    n_rows, n_cols = get_field_shape(frame_a.shape, search_area_size, overlap)
 
-    u, v = np.zeros((n_rows, n_cols)), np.zeros((n_rows, n_cols))
-    
-        # if we want sig2noise information, allocate memory
-    if sig2noise_method is not None:
-        sig2noise = np.zeros((n_rows, n_cols))
-    
-    # loop over the interrogation windows
-    # i, j are the row, column indices of the center of each interrogation
-    # window
-    for k in range(n_rows):
-        # range(range(search_area_size/2, frame_a.shape[0] - search_area_size/2, window_size - overlap ):
-        for m in range(n_cols):
-            # range(search_area_size/2, frame_a.shape[1] - search_area_size/2 , window_size - overlap ):
-            
-            
-            # Select first the largest window, work like usual from the top left corner
-            # the left edge goes as: 
-            # e.g. 0, (search_area_size - overlap), 2*(search_area_size - overlap),....
-            
-            il = k*(search_area_size - overlap)
-            ir = il + search_area_size
-            
-            # same for top-bottom
-            jt = m*(search_area_size - overlap)
-            jb = jt + search_area_size
-            
-            # pick up the window in the second image
-            window_b = frame_b[il:ir, jt:jb]            
-            
-            # now shift the left corner of the smaller window inside the larger one
-            il += (search_area_size - window_size)//2
-            # and it's right side is just a window_size apart
-            ir = il + window_size
-            # same same
-            jt += (search_area_size - window_size)//2
-            jb =  jt + window_size
+    # We implement the new vectorized code
+    aa = moving_window_array(frame_a, search_area_size, overlap)
+    bb = moving_window_array(frame_b, search_area_size, overlap)
 
-            window_a = frame_a[il:ir, jt:jb]
+    # for the case of extended seearch, the window size is smaller than
+    # the search_area_size. In order to keep it all vectorized the
+    # approach is to use the interrogation window in both
+    # frames of the same size of search_area_asize,
+    # but mask out the region around
+    # the interrogation window in the frame A
 
-            if np.any(window_a):
-                corr = correlate_windows(window_a, window_b,
-                                         corr_method=corr_method, 
-                                         nfftx=nfftx, nffty=nffty)
-#                 plt.figure()
-#                 plt.contourf(corr)
-#                 plt.show()
-                # get subpixel approximation for peak position row and column index
-                row, col = find_subpixel_peak_position(corr, 
-                                                        subpixel_method=subpixel_method)
-                                
-                row -=  (search_area_size + window_size - 1)//2
-                col -=  (search_area_size + window_size - 1)//2
-    
-                # get displacements, apply coordinate system definition
-                u[k,m],v[k,m] = -col, row
-                
-                # get signal to noise ratio
-                if sig2noise_method is not None:
-                    sig2noise[k,m] = sig2noise_ratio(
-                        corr, sig2noise_method=sig2noise_method, width=width)
-                
-    
+    if search_area_size > window_size:
+        # before masking with zeros we need to remove
+        # edges
+
+        aa = normalize_intensity(aa)
+        bb = normalize_intensity(bb)
+
+        mask = np.zeros((search_area_size, search_area_size)).astype(aa.dtype)
+        pad = int((search_area_size - window_size) / 2)
+        mask[slice(pad, search_area_size - pad),
+             slice(pad, search_area_size - pad)] = 1
+        mask = np.broadcast_to(mask, aa.shape)
+        aa *= mask
+
+    corr = fft_correlate_images(aa, bb,
+                                correlation_method=correlation_method,
+                                normalized_correlation=normalized_correlation)
+    u, v = correlation_to_displacement(corr, n_rows, n_cols,
+                                       subpixel_method=subpixel_method)
+
     # return output depending if user wanted sig2noise information
     if sig2noise_method is not None:
-        return u/dt, v/dt, sig2noise
+        sig2noise = sig2noise_ratio(
+            corr, sig2noise_method=sig2noise_method, width=width
+        )
     else:
-        return u/dt, v/dt
+        sig2noise = np.zeros_like(u)*np.nan
+
+    sig2noise = sig2noise.reshape(n_rows, n_cols)
+
+    return u/dt, v/dt, sig2noise
+
+
+def correlation_to_displacement(corr, n_rows, n_cols,
+                                subpixel_method="gaussian"):
+    """
+    Correlation maps are converted to displacement for each interrogation
+    window using the convention that the size of the correlation map
+    is 2N -1 where N is the size of the largest interrogation window
+    (in frame B) that is called search_area_size
+    Inputs:
+        corr : 3D nd.array
+            contains output of the fft_correlate_images
+        n_rows, n_cols : number of interrogation windows, output of the
+            get_field_shape
+    """
+    # iterate through interrogation widows and search areas
+    u = np.zeros((n_rows, n_cols))
+    v = np.zeros((n_rows, n_cols))
+
+    # center point of the correlation map
+    default_peak_position = np.floor(np.array(corr[0, :, :].shape)/2)
+    for k in range(n_rows):
+        for m in range(n_cols):
+            # look at studying_correlations.ipynb
+            # the find_subpixel_peak_position returns
+            peak = np.array(find_subpixel_peak_position(corr[k*n_cols+m, :, :],
+                            subpixel_method=subpixel_method)) -\
+                            default_peak_position
+
+        # the horizontal shift from left to right is the u
+        # the vertical displacement from top to bottom (increasing row) is v
+        # x the vertical shift from top to bottom is row-wise shift is now
+        # a negative vertical
+            u[k, m], v[k, m] = peak[1], peak[0]
+
+    return (u, v)
 
 
 def nextpower2(i):
     """ Find 2^n that is equal to or greater than. """
     n = 1
-    while n < i: n *= 2
+    while n < i:
+        n *= 2
     return n

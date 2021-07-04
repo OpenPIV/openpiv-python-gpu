@@ -1,0 +1,19 @@
+v0.11, June 18, 2014 -- Initial release.op	
+v0.12, June 26, 2014 -- Update with masking, completely black interrogation window is masked
+v0.13, June 30, 2014 -- Dynamic masking is included, image and velocity set to zero, sig2noise to infinity
+v0.17, July 1, 2014  -- Fixed the bug in lib.pyx of different casting of np.int32 on 64-bit machines
+v0.18  Aug. 8, 2014 -- small updates to the tutorial-part1, MANIFEST.IN, readme and install files
+...
+v0.22.3 Sep. 22, 2020 -- @erfan-mtr added two-phase extension, see phase_separation.ipynb for the demo
+v0.22.4 Nov, 2020 -- windef refactoring : no more process.pyx, everything in pyprocess.py, numpy vectorized correlation version from windef moved to pyprocess, get_field_shape has less arguments (it's a backward compatability problem, it breaks stuff), new tests, new documentation settings with Jupyter notebook and markdown inserts, tools.save requires also sig2noise column, as in windef, frame_interpolation is now deform_windows with optionaly kx,ky, 
+v0.23.0 - refactored windef.py, with the main functions moved to pyprocess.py
+v0.23.1 - fixed bugs in 0.23.0, new normalized_correlation, normalize_intensity, find_subpixel_position, new tests, new jupyter notebooks, see also 
+            test_robustness
+v0.23.2 - added mask_coordinats to preprocess, allows to use dynamic_masking to create
+    image mask as well as a polygon that propagates into multi-process and validation
+    created new Jupyter notebook to test von Karman vortex street case and compare with PIVLab
+    breakes backward compatibility of windef with removing validation and filtering steps, to be compatible
+    with the first_pass. Both first_pass and multi_pass now apply filtering externally
+    
+v0.23.6 - removed widim.pyx, no Cython modules anymore
+

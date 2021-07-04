@@ -1,0 +1,10 @@
+numpy
+scikit-image
+matplotlib
+imageio
+scipy
+Pillow
+pycuda
+setuptools
+Cython
+# cupy
