@@ -1056,7 +1056,7 @@ class PIVGPU:
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
+        # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None  # debug
         self.im_mask = mask
         self.c = None  # correlation
 
@@ -1185,13 +1185,13 @@ class PIVGPU:
         cdef DTYPEf_t[:, :] sig2noise = self.sig2noise
         cdef DTYPEi_t[:, :] val_list = self.val_list
 
-        t1 = process_time_ns()
+        # t1 = process_time_ns()  # debug
         # mask the images and send to gpu
         if self.im_mask is not None:
             d_frame_a_f = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
             d_frame_b_f = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
 
-            # im_mask = gpuarray.to_gpu(self.im_mask.astype(DTYPE_i))
+            # im_mask = gpuarray.to_gpu(self.im_mask.astype(DTYPE_i))  # debug
             # d_frame_a_f0 = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
             # d_frame_b_f0 = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
             # d_frame_a_f = d_frame_a_f0 * im_mask
@@ -1201,7 +1201,7 @@ class PIVGPU:
             d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
             d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
-        print('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
+        # print('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
 
         # create the correlation object
         self.c = GPUCorrelation(d_frame_a_f, d_frame_b_f, self.nfftx)
@@ -1361,7 +1361,7 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
     assert d_v_mean.shape == (nb_iter_max, n_row[-1], n_col[-1]), "Must pass the entire d_v_mean array, not just the section for the iteration you are validating."
 
     # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
-    validation_location = validation_list.astype(bool)
+    validation_location = np.invert(validation_list.astype(bool))
 
     # first iteration, just replace with mean velocity
     if k == 0:
