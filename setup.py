@@ -41,7 +41,7 @@ with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name="OpenPIV",
-    version='0.23.6',
+    version='0.23.8',
     cmdclass={'build_ext': build_ext},
     ext_modules=extensions,
     packages=find_packages(),
@@ -63,6 +63,7 @@ setup(
         'natsort',
         'GitPython',
         'pytest',
+        'watermark',
         'tqdm'
     ],
     classifiers=[

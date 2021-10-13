@@ -4,7 +4,14 @@ WARNING: File read/close is UNSAFE in multiprocessing applications because multi
 writing to the same file. Please remember to use a queue if doing file I/O concurrently.
 
 """
-from multiprocessing import Process, Manager, Pool, cpu_count, set_start_method, current_process
+from multiprocessing import (
+    Process,
+    Manager,
+    Pool,
+    cpu_count,
+    set_start_method,
+    current_process,
+)
 from math import ceil
 from time import time
 import os
@@ -42,7 +49,7 @@ class MPGPU(Process):
         self.parameters = parameters
 
         if gpu_id is not None:
-            os.environ['CUDA_DEVICE'] = str(gpu_id)
+            os.environ["CUDA_DEVICE"] = str(gpu_id)
 
     def run(self):
         # process_time = time()
@@ -69,7 +76,9 @@ class MPGPU(Process):
             index += 1
 
 
-def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **parameters):
+def parallelize(
+    func, *items, num_processes=None, num_gpus=None, index=None, **parameters
+):
     """Parallelizes OpenPIV algorithms
 
     This helper function spawns instances of the class MGPU to multiprocess up to two sets of corresponding items. It
@@ -98,8 +107,11 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
 
     # check that each of the lists of input items provided are the same dimension
     if items is not None:
-        assert all([len(item_a) == len(item_b) for item_a in items for item_b in items]), \
-            'Input item lists are different lengths. len(items) = {}'.format([len(item) for item in items])
+        assert all(
+            [len(item_a) == len(item_b) for item_a in items for item_b in items]
+        ), "Input item lists are different lengths. len(items) = {}".format(
+            [len(item) for item in items]
+        )
 
     # default to a number of cores equal to 37.5% or fewer of the available CPU cores (75% of physical cores)
     if num_processes is None:
@@ -113,11 +125,16 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
 
     # print information about the multiprocessing
     print(
-        'Multiprocessing: Number of processes requested = {}. Number of CPU cores available = {}'.format(num_processes,
-                                                                                                         cpu_count()))
-    print('Multiprocessing: Number of physical GPUs to use = {}. Number of GPUs available = {}'.format(num_gpus,
-                                                                                                       'unknown'))
-    print('Multiprocessing: Size of each partition =', partition_size)
+        "Multiprocessing: Number of processes requested = {}. Number of CPU cores available = {}".format(
+            num_processes, cpu_count()
+        )
+    )
+    print(
+        "Multiprocessing: Number of physical GPUs to use = {}. Number of GPUs available = {}".format(
+            num_gpus, "unknown"
+        )
+    )
+    print("Multiprocessing: Size of each partition =", partition_size)
 
     # loop through each partition to spawn processes
     i = 0  # number of processes spawned
@@ -132,13 +149,15 @@ def parallelize(func, *items, num_processes=None, num_gpus=None, index=None, **p
             # create a list of partitions for each of the input items
             sublist = [[]] * num_args
             for j in range(num_args):
-                sublist[j] = items[j][start_index:start_index + partition_size]
+                sublist[j] = items[j][start_index : start_index + partition_size]
         else:
             sublist = None
 
         # spawn the process
         if index is not None:
-            process = MPGPU(func, sublist, gpu_id, index=start_index, parameters=parameters)
+            process = MPGPU(
+                func, sublist, gpu_id, index=start_index, parameters=parameters
+            )
         else:
             process = MPGPU(func, sublist, gpu_id, parameters=parameters)
         process.start()
@@ -174,15 +193,15 @@ def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
     """
     # set the CUDA device
     cpu_name = current_process().name
-    k = (int(cpu_name[cpu_name.find('-') + 1:]) - 1) % num_gpus
-    os.environ['CUDA_DEVICE'] = str(k)
+    k = (int(cpu_name[cpu_name.find("-") + 1 :]) - 1) % num_gpus
+    os.environ["CUDA_DEVICE"] = str(k)
     time1 = time.time()
 
     # GPU process
     with redirect_stdout(None):
         x, y, u, v, maks, s2n = gpu_func(frame_a, frame_b, kwargs)
 
-    print('processed image pair. GPU = {}. dt = {:.3f}.'.format(k, time.time() - time1))
+    print("processed image pair. GPU = {}. dt = {:.3f}.".format(k, time.time() - time1))
 
     return x, y, u, v, maks, s2n
 

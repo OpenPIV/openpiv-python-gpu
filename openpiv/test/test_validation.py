@@ -3,7 +3,7 @@ from openpiv.tools import imread
 import pathlib
 
 import numpy as np
-from test_process import create_pair, shift_u, shift_v, threshold
+from .test_process import create_pair, shift_u, shift_v, threshold
 from openpiv import validation
 
 from scipy.ndimage import generic_filter, median_filter
@@ -12,8 +12,8 @@ from scipy.signal import convolve2d
 import matplotlib.pyplot as plt
 
 
-file_a = pathlib.Path(__file__).parent / '../examples/test1/exp1_001_a.bmp'
-file_b = pathlib.Path(__file__).parent / '../examples/test1/exp1_001_b.bmp'
+file_a = pathlib.Path(__file__).parent / '../data/test1/exp1_001_a.bmp'
+file_b = pathlib.Path(__file__).parent / '../data/test1/exp1_001_b.bmp'
 
 frame_a = imread(file_a)
 frame_b = imread(file_b)
