@@ -752,22 +752,15 @@ def gpu_extended_search_area(frame_a, frame_b,
         The size of the (square) interrogation window for the first frame.
     search_area_size : int
         The size of the (square) interrogation window for the second frame.
-    overlap_ratio : int
+    overlap_ratio : float
         The ratio of overlap between two windows (between 0 and 1)
     dt : float
         Time delay separating the two frames.
 
     Returns
     -------
-    u : ndarray
-        2D, the u velocity component, in pixels/seconds.
-    v : ndarray
-        2D, the v velocity component, in pixels/seconds.
-    mask : ndarray
-        2D, the boolean values (True for vectors interpolated from previous iteration).
-    s2n : ndarray
-        2D, the signal to noise ratio of the final velocity field.
-
+    u, v : ndarray
+        2D, the u and v velocity components, in pixels/seconds.
 
     Other Parameters
     ----------------
@@ -778,34 +771,30 @@ def gpu_extended_search_area(frame_a, frame_b,
     nfftx : int
         The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
-    Examples
+    Example
     --------
-
-    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap=8, search_area_size=32, dt=0.1)
+    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1)
 
     """
     # Extract the parameters
     return_sig2noise = kwargs['sig2noise'] if 'sig2noise' in kwargs else True
     sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
     nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
-    overlap = overlap_ratio * window_size
+    overlap = int(overlap_ratio * window_size)
 
     # cast images as floats and sent to gpu
     d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
     d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
     # Get correlation function
-    c = GPUCorrelation(d_frame_a_f, d_frame_b_f, overlap, nfftx)
+    c = GPUCorrelation(d_frame_a_f, d_frame_b_f, nfftx)
 
     # Get window displacement to subpixel accuracy
     sp_i, sp_j = c(window_size, overlap, search_area_size)
 
-    # vector field shape
-    n_row, n_col = c.shape
-
     # reshape the peaks
-    i_peak = np.reshape(sp_i, (n_row, n_col))
-    j_peak = np.reshape(sp_j, (n_row, n_col))
+    i_peak = np.reshape(sp_i, (c.n_rows, c.n_cols))
+    j_peak = np.reshape(sp_j, (c.n_rows, c.n_cols))
 
     # calculate velocity fields
     u =  j_peak / dt
@@ -815,7 +804,7 @@ def gpu_extended_search_area(frame_a, frame_b,
     d_frame_a_f.gpudata.free()
     d_frame_b_f.gpudata.free()
 
-    return u, v
+    return u, -v
 
 
 def gpu_piv(frame_a, frame_b,
