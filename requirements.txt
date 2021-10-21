@@ -30,9 +30,11 @@ pycuda
 Pygments
 pyparsing
 pytest
+pytest-benchmark
 python-dateutil
 PyWavelets
 scikit-image
+scikit-cuda
 scipy
 setuptools
 six
