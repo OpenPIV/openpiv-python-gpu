@@ -8,9 +8,9 @@ and debugging much easier.
 
 """
 
+import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
-import pycuda.autoinit
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 import skcuda.fft as cu_fft
@@ -34,6 +34,9 @@ DTYPE_f = np.float32
 ctypedef np.float32_t DTYPEf_t
 
 
+# initialize the skcuda library
+cu_misc.init()
+
 class GPUCorrelation:
     def __init__(self, d_frame_a, d_frame_b, nfft_x=None):
         """A class representing a cross correlation function.
@@ -41,19 +44,16 @@ class GPUCorrelation:
         Parameters
         ----------
         d_frame_a, d_frame_b : GPUArray
-            2D float, image pair
-        nfft_x : int
+            2D int, image pair
+        nfft_x : int or None
             window size for fft
-
-        Attributes
-        ----------
-        sig2noise_ratio(width=2)
-            returns the signal-to-noise ratio of the correlation peaks
 
         Methods
         -------
         __call__(window_size, extended_size=None, d_shift=None, d_strain=None)
             returns the peaks of the correlation windows
+        sig2noise_ratio(method='peak2peak', width=2)
+            returns the signal-to-noise ratio of the correlation peaks
 
         """
         self.p_row = None
@@ -68,8 +68,8 @@ class GPUCorrelation:
             self.nfft = nfft_x
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
 
-        # initialize the skcuda library
-        cu_misc.init()
+        # # initialize the skcuda library
+        # cu_misc.init()
 
     def __call__(self, window_size, overlap, extended_size=None, d_shift=None, d_strain=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -101,7 +101,6 @@ class GPUCorrelation:
         # set parameters
         self.window_size = DTYPE_i(window_size)
         self.overlap = DTYPE_i(overlap)
-        # self.extended_size = self.window_size  # debug
         self.extended_size = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
         self.fft_size = DTYPE_i(self.extended_size * self.nfft)
         self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.shape, self.window_size, self.overlap))
@@ -135,7 +134,7 @@ class GPUCorrelation:
         Parameters
         -----------
         d_frame_a, d_frame_b : GPUArray
-            2D float, PIV image pair
+            2D int, image pair
         d_shift : GPUArray
             3D float, shift of the second window
         d_strain : GPUArray
@@ -320,10 +319,6 @@ class GPUCorrelation:
         d_mean_a = cu_misc.mean(d_win_a.reshape(self.n_windows, iw_size), axis=1)
         d_mean_b = cu_misc.mean(d_win_b.reshape(self.n_windows, iw_size), axis=1)
 
-        # # get ratio of means
-        # d_mean_ratio_a = gpuarray.ones_like(d_mean_a, dtype=DTYPE_f)
-        # d_mean_ratio_b = cu_misc.divide(d_mean_a, d_mean_b)
-
         # gpu kernel block-size parameters
         block_size = 8
         grid_size = int(d_win_a.size / block_size ** 2)
@@ -338,8 +333,6 @@ class GPUCorrelation:
         d_mean_b.gpudata.free()
         d_win_a.gpudata.free()
         d_win_b.gpudata.free()
-        # d_mean_ratio_a.gpudata.free()
-        # d_mean_ratio_b.gpudata.free()
 
         return d_win_a_norm, d_win_b_norm
 
@@ -442,6 +435,7 @@ class GPUCorrelation:
         cu_fft.ifft(d_tmp, d_win_i_fft, plan_inverse, True)
 
         # transfer back to cpu to do FFTshift
+        # possible to do this on GPU?
         corr = fftshift(d_win_i_fft.get().real, axes=(1, 2))
 
         # free gpu memory
@@ -454,12 +448,12 @@ class GPUCorrelation:
 
         return corr
 
-    def _find_peak(self, array):
+    def _find_peak(self, corr):
         """Find row and column of highest peak in correlation function
 
         Parameters
         ----------
-        array : ndarray
+        corr : ndarray
             array that is image of the correlation function
 
         Returns
@@ -476,7 +470,7 @@ class GPUCorrelation:
         cdef Py_ssize_t size = self.n_windows
 
         # Reshape matrix
-        array_reshape = array.reshape(self.n_windows, self.fft_size ** 2)
+        array_reshape = corr.reshape(self.n_windows, self.fft_size ** 2)
 
         # Get index and value of peak
         max_ind = np.argmax(array_reshape, axis=1)
@@ -808,11 +802,11 @@ def gpu_extended_search_area(frame_a, frame_b,
 
 
 def gpu_piv(frame_a, frame_b,
+                mask=None,
                 window_size_iters=(1, 2),
                 min_window_size=16,
                 overlap_ratio=0.5,
                 dt=1,
-                mask=None,
                 deform=True,
                 smooth=True,
                 nb_validation_iter=1,
@@ -847,6 +841,8 @@ def gpu_piv(frame_a, frame_b,
     ----------
     frame_a, frame_b : ndarray
         2D int, integers containing grey levels of the first and second frames.
+    mask : ndarray or None
+        2D, int, array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     window_size_iters : tuple or int
         Number of iterations performed at each window size
     min_window_size : tuple or int
@@ -855,8 +851,6 @@ def gpu_piv(frame_a, frame_b,
         Ratio of overlap between two windows (between 0 and 1).
     dt : float
         Time delay separating the two frames.
-    mask : ndarray
-        2D, int. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
     deform : bool
         Whether to deform the windows by the velocity gradient at each iteration.
     smooth : bool
@@ -900,16 +894,16 @@ def gpu_piv(frame_a, frame_b,
 
     Example
     -------
-    >>> x, y, u, v, mask = gpu_piv(frame_a, frame_b, mask, min_window_size=16,window_size_iters=(2, 2), overlap_ratio=0.5, coarse_factor=2, dt=1, deform=True, smoothing=True, validation_method='median_velocity', validation_iter=2, trust_1st_iter=True, median_tol=2)
+    >>> x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None, window_size_iters=(1, 2), min_window_size=16, overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2, validation_method='median_velocity', trust_1st_iter=True, media_tol=2)
 
     """
     piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smooth, nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
 
     return_sig2noise = kwargs['return_sig2noise'] if 'return_sig2noise' in kwargs else False
     x, y = piv_gpu.coords
+    u, v = piv_gpu(frame_a, frame_b)
     mask = piv_gpu.mask
     s2n = piv_gpu.s2n if return_sig2noise else None
-    u, v = piv_gpu(frame_a, frame_b)
     return x, y, u, v, mask, s2n
 
 
@@ -980,10 +974,8 @@ class PIVGPU:
 
     Attributes
     ----------
-    x, y : ndarray
+    coords : ndarray
         2D, Coordinates where the PIV-velocity fields have been computed.
-    u, v : ndarray
-        2D, Velocity fields in pixel/time units.
     mask : ndarray
         2D, the boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
@@ -991,8 +983,8 @@ class PIVGPU:
 
     Methods
     -------
-    __call__ :
-        main method to process image pairs
+    __call__(frame_a, frame_b)
+        Main method to process image pairs.
 
     """
     def __init__(self,
