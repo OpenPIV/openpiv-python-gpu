@@ -798,7 +798,7 @@ def gpu_extended_search_area(frame_a, frame_b,
     d_frame_a_f.gpudata.free()
     d_frame_b_f.gpudata.free()
 
-    return u, -v
+    return u, v
 
 
 def gpu_piv(frame_a, frame_b,
@@ -1243,6 +1243,7 @@ class PIVGPU:
                 print('Validation iteration {}:'.format(i))
 
                 # get list of places that need to be validated
+
                 self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K], :n_col[K]] = gpu_validation(d_f[K, :n_row[K], :n_col[K], 2].copy(), d_f[K, :n_row[K], :n_col[K], 3].copy(), n_row[K], n_col[K], ws[K], self.sig2noise[:n_row[K], :n_col[K]], *val_tols)
 
                 # do the validation
