@@ -3,6 +3,7 @@
 import os
 import sys
 import numpy as np
+import pytest
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
 from pycuda.compiler import SourceModule
@@ -13,6 +14,7 @@ from imageio import imread
 from math import sqrt
 
 import pyximport
+
 pyximport.install(setup_args={"include_dirs": np.get_include()}, language_level=3)
 
 import openpiv.gpu_process as gpu_process
@@ -21,14 +23,15 @@ import openpiv.gpu_validation as gpu_validation
 fixture_dir = "./fixtures/"
 
 # synthetic image parameters
-_image_size_square = (1024, 1024)
-_image_size_rectangle = (1024, 2048)
+_image_size_rectangle = (1024, 1024)
+_image_size_square = (1024, 2048)
 _u_shift = 8
 _v_shift = -4
 _threshold = 0.1
 _trim_slice = slice(2, -2, 1)
 
 
+# SCRIPTS
 def create_pair_shift(image_size, u_shift, v_shift):
     """Creates a pair of images with a roll/shift """
     frame_a = np.zeros(image_size, dtype=np.int32)
@@ -49,9 +52,11 @@ def create_pair_shift(image_size, u_shift, v_shift):
 #     return frame_a.astype(np.int32), frame_b.astype(np.int32)
 
 
-def test_gpu_extended_search_area_fast():
+# TESTS
+@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
+def test_gpu_extended_search_area_fast(image_size):
     """Quick test of the extanded search area function."""
-    frame_a_rectangle, frame_b_rectangle = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    frame_a_rectangle, frame_b_rectangle = create_pair_shift(image_size, _u_shift, _v_shift)
     u, v = gpu_process.gpu_extended_search_area(
         frame_a_rectangle, frame_b_rectangle, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1
     )
@@ -59,68 +64,89 @@ def test_gpu_extended_search_area_fast():
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _threshold * 2
 
 
-def test_gpu_piv_fast_rectangle():
+@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
+def test_gpu_piv_fast(image_size):
     """Quick test of the main piv function."""
-    frame_a_rectangle, frame_b_rectangle = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(
-        frame_a_rectangle,
-        frame_b_rectangle,
-        mask=None,
-        window_size_iters=(1, 2),
-        min_window_size=16,
-        overlap_ratio=0.5,
-        dt=1,
-        deform=True,
-        smooth=True,
-        nb_validation_iter=1,
-        validation_method="median_velocity",
-        trust_1st_iter=True,
-    )
+    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2),
+            'min_window_size': 16,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 1,
+            'validation_method': "median_velocity",
+            'trust_1st_iter': True,
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
     assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _threshold
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _threshold
 
 
-def test_gpu_piv_fast_square():
-    """Quick test of the main piv function."""
-    _frame_a_square, _frame_b_square = create_pair_shift(_image_size_square, _u_shift, _v_shift)
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(
-        _frame_a_square,
-        _frame_b_square,
-        mask=None,
-        window_size_iters=(1, 2),
-        min_window_size=16,
-        overlap_ratio=0.5,
-        dt=1,
-        deform=True,
-        smooth=True,
-        nb_validation_iter=1,
-        validation_method="median_velocity",
-        trust_1st_iter=True,
-    )
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _threshold
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _threshold
+@pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
+@pytest.mark.parametrize('window_size_iters,min_window_size', [((1, 2), 16), ((1, 2, 2), 8)])
+def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
+    """Benchmarks the PIV """
+    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': window_size_iters,
+            'min_window_size': min_window_size,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': "median_velocity",
+            'trust_1st_iter': True,
+            }
+
+    benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
+
+
+def test_gpu_piv_benchmark_oop(benchmark):
+    """Benchmarks the PIV """
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': "median_velocity",
+            'trust_1st_iter': True,
+            }
+
+    piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
+
+    @benchmark
+    def repeat_10():
+        for i in range(10):
+            piv_gpu(frame_a, frame_b)
 
 
 def test_gpu_piv_py():
     # the images are loaded using imageio.
     frame_a = imread('../data/test1/exp1_001_a.bmp')
     frame_b = imread('../data/test1/exp1_001_b.bmp')
+    args = {'mask': None,
+            'window_size_iters': (1, 1, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': "median_velocity",
+            'trust_1st_iter': True,
+            }
 
     """Ensures the results of the GPU algorithm remains unchanged."""
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(
-        frame_a,
-        frame_b,
-        mask=None,
-        window_size_iters=(1, 1, 2),
-        min_window_size=8,
-        overlap_ratio=0.5,
-        dt=1,
-        deform=True,
-        smooth=True,
-        nb_validation_iter=2,
-        validation_method="median_velocity",
-        trust_1st_iter=True,
-    )
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
     # # save the results to a numpy file file.
     # if not os.path.exists('./fixtures'):
@@ -135,7 +161,6 @@ def test_gpu_piv_py():
     # compare with the previous results
     assert np.allclose(u, u0, atol=_threshold)
     assert np.allclose(v, v0, atol=_threshold)
-
 
 # def test_correlation_function():
 #     pass
