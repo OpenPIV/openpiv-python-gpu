@@ -131,8 +131,8 @@ def test_gpu_piv_benchmark_oop(benchmark):
 
 def test_gpu_piv_py():
     # the images are loaded using imageio.
-    frame_a = imread('../data/test1/exp1_001_a.bmp')
-    frame_b = imread('../data/test1/exp1_001_b.bmp')
+    frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
+    frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
     args = {'mask': None,
             'window_size_iters': (1, 1, 2),
             'min_window_size': 8,
@@ -154,7 +154,7 @@ def test_gpu_piv_py():
     # np.savez('./fixtures/test_data', u=u, v=v)
 
     # load the results for comparison
-    with np.load('./fixtures/test_data.npz') as data:
+    with np.load('./openpiv/test/fixtures/test_data.npz') as data:
         u0 = data['u']
         v0 = data['v']
 
