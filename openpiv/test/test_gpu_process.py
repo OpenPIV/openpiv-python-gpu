@@ -20,14 +20,14 @@ pyximport.install(setup_args={"include_dirs": np.get_include()}, language_level=
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_validation as gpu_validation
 
-fixture_dir = "./fixtures/"
+_fixture_dir = "./openpiv/test/fixtures/"
 
 # synthetic image parameters
 _image_size_rectangle = (1024, 1024)
 _image_size_square = (1024, 2048)
 _u_shift = 8
 _v_shift = -4
-_threshold = 0.1
+_tolerance = 0.1
 _trim_slice = slice(2, -2, 1)
 
 
@@ -60,8 +60,8 @@ def test_gpu_extended_search_area_fast(image_size):
     u, v = gpu_process.gpu_extended_search_area(
         frame_a_rectangle, frame_b_rectangle, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1
     )
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _threshold * 2
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _threshold * 2
+    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _tolerance * 2
+    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _tolerance * 2
 
 
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
@@ -82,8 +82,8 @@ def test_gpu_piv_fast(image_size):
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _threshold
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _threshold
+    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _tolerance
+    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _tolerance
 
 
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
@@ -148,19 +148,20 @@ def test_gpu_piv_py():
     """Ensures the results of the GPU algorithm remains unchanged."""
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    # # save the results to a numpy file file.
-    # if not os.path.exists('./fixtures'):
-    #     os.mkdir('./fixtures')
-    # np.savez('./fixtures/test_data', u=u, v=v)
+    # save the results to a numpy file file.
+    if not os.path.isfile(_fixture_dir + './test_data'):
+        if not os.path.isdir(_fixture_dir):
+            os.mkdir(_fixture_dir)
+        np.savez(_fixture_dir + './test_data', u=u, v=v)
 
     # load the results for comparison
-    with np.load('./openpiv/test/fixtures/test_data.npz') as data:
+    with np.load(_fixture_dir + 'test_data.npz') as data:
         u0 = data['u']
         v0 = data['v']
 
     # compare with the previous results
-    assert np.allclose(u, u0, atol=_threshold)
-    assert np.allclose(v, v0, atol=_threshold)
+    assert np.allclose(u, u0, atol=_tolerance)
+    assert np.allclose(v, v0, atol=_tolerance)
 
 # def test_correlation_function():
 #     pass
