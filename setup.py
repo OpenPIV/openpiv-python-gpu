@@ -5,32 +5,8 @@ from Cython.Build import cythonize
 from Cython.Distutils import build_ext
 import numpy
 
-# Check for GPU support
-GPU_SUPPORT = False
-try:
-    import pycuda
-    import skcuda
-
-    print("GPU support found. Will build GPU extensions.")
-    GPU_SUPPORT = True
-except ImportError:
-    print("No GPU support found. Continuing install.")
-    pass
-
+# gather extensions
 extensions = []
-
-if GPU_SUPPORT:
-    gpu_module = Extension(name="openpiv.gpu_process",
-                           sources=["openpiv/gpu_process.pyx"],
-                           include_dirs=[numpy.get_include()],
-                           )
-    extensions.append(gpu_module)
-    gpu_validation_module = Extension(name="openpiv.gpu_validation",
-                                      sources=["openpiv/gpu_validation.pyx"],
-                                      include_dirs=[numpy.get_include()],
-                                      )
-    extensions.append(gpu_validation_module)
-
 extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_directives={'language_level': "3"})
 
 # read the contents of your README file

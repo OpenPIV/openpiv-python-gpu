@@ -3,17 +3,11 @@
 import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
-from time import process_time_ns
-
-cimport numpy as np
 
 # Define 32-bit types
 DTYPE_i = np.int32
-ctypedef np.int32_t DTYPEi_t
 DTYPE_b = np.uint8
-ctypedef np.uint8_t DTYPEb_t
 DTYPE_f = np.float32
-ctypedef np.float32_t DTYPEf_t
 
 
 def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None, rms_tol=None):

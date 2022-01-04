@@ -86,6 +86,28 @@ def test_gpu_piv_fast(image_size):
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _tolerance
 
 
+@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
+def test_gpu_piv_zero(image_size):
+    """Tests that zero-displacement is returned when the images are empty."""
+    frame_a = frame_b = np.zeros(image_size, dtype=np.int32)
+    args = {'mask': None,
+            'window_size_iters': (1, 2),
+            'min_window_size': 16,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': False,  # this is False so that smoothn doesn't error
+            'nb_validation_iter': 1,
+            'validation_method': "median_velocity",
+            'trust_1st_iter': True,
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+    assert np.allclose(u, 0, _tolerance)
+    assert np.allclose(v, 0, _tolerance)
+
+
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
 @pytest.mark.parametrize('window_size_iters,min_window_size', [((1, 2), 16), ((1, 2, 2), 8)])
 def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
@@ -148,11 +170,11 @@ def test_gpu_piv_py():
     """Ensures the results of the GPU algorithm remains unchanged."""
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    # save the results to a numpy file file.
-    if not os.path.isfile(_fixture_dir + './test_data'):
-        if not os.path.isdir(_fixture_dir):
-            os.mkdir(_fixture_dir)
-        np.savez(_fixture_dir + './test_data', u=u, v=v)
+    # # save the results to a numpy file file.
+    # if not os.path.isfile(_fixture_dir + './test_data'):
+    #     if not os.path.isdir(_fixture_dir):
+    #         os.mkdir(_fixture_dir)
+    #     np.savez(_fixture_dir + './test_data', u=u, v=v)
 
     # load the results for comparison
     with np.load(_fixture_dir + 'test_data.npz') as data:
