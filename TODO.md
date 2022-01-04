@@ -22,6 +22,7 @@
   - [x] don't calculate x, y for every iteration
   - [ ] use shared memory for GPU kernels
   - [ ] confirm if to_gpu() is faster than gpuarray.zeros()
+  - [ ] optimize masking the input frames
 
 - [ ] correlation class
   - [x] reduce operations outside of CUDA kernels in iw_arrange()

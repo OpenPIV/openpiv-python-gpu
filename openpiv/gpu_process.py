@@ -1,5 +1,3 @@
-# cython: profile=True
-
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support.
 
 Note that all data must 32-bit at most to be stored on GPUs. All identifiers starting with 'd_' exist on the GPU and not the CPU. The GPU is referred to as the device,
@@ -981,9 +979,6 @@ class PIVGPU:
                  validation_method='median_velocity',
                  trust_1st_iter=True,
                  **kwargs):
-        # type declarations
-        # cdef Py_ssize_t K, I, J, nb_iter_max
-        # cdef int spacing, ht, wd
 
         # input checks
         ht, wd = frame_shape
@@ -1022,12 +1017,6 @@ class PIVGPU:
         self.im_mask = mask
         self.c = None  # correlation
 
-        # # Cython buffer definitions
-        # cdef DTYPEi_t[:] n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        # cdef DTYPEi_t[:] n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        # cdef DTYPEi_t[:] w = np.asarray(ws, dtype=DTYPE_i)
-        # cdef DTYPEi_t[:] overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
-
         n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
         w = np.asarray(ws, dtype=DTYPE_i)
@@ -1043,11 +1032,6 @@ class PIVGPU:
             n_row[K] = (ht - spacing) // spacing
             n_col[K] = (wd - spacing) // spacing
 
-        # self.n_row = np.asarray(n_row)
-        # self.n_col = np.asarray(n_col)
-        # self.ws = np.asarray(w)
-        # self.overlap = np.asarray(overlap)
-
         self.n_row = n_row
         self.n_col = n_col
         self.ws = ws
@@ -1058,11 +1042,9 @@ class PIVGPU:
         self.j_peak = np.zeros([n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPE_f)
 
         # define arrays for signal to noise ratio
-        # cdef np.ndarray[DTYPEf_t, ndim=2] sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPEf)  # delete
         self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPE_f)
 
         # define arrays used for the validation process
-        # cdef DTYPEi_t[:, :] validation_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPEi)  # delete
         self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPE_i)  # 0 means that it does need to be validated.
 
         # GPU ARRAYS
@@ -1084,9 +1066,6 @@ class PIVGPU:
                 f[K, I, :, 1] = f[K, I - 1, 0, 1] + spacing
         self.x = f[-1, :, :, 0]
         self.y = f[-1, ::-1, :, 1]
-
-        # cdef DTYPEi_t[:, :] x_idx
-        # cdef DTYPEi_t[:, :] y_idx
 
         # TODO define mask on its own array
         if mask is not None:
@@ -1126,10 +1105,6 @@ class PIVGPU:
             2D, the v velocity component, in pixels/seconds.
 
         """
-        # type declarations
-        # cdef Py_ssize_t K, i
-        # cdef int n_val, nb_validation_iter
-        # cdef float residual
 
         # recover class variables
         dt = self.dt
