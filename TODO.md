@@ -3,9 +3,9 @@
 ## Bugs
 - [x] very high overlap ratios throw an error
 - [x] bias error in non-translating window
-- [x] square window shapes sometimes error
-- [x] extended search area doesn't work for 2048 x 4096 image sizes
-- [x] completely blank causes smoothn to error
+- [ ] square window shapes sometimes error
+- [ ] extended search area doesn't work for 2048 x 4096 image sizes
+- [ ] completely blank causes smoothn to error
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
@@ -43,7 +43,7 @@
 - [ ] add ROI feature
 - [x] Implement the extended search area in the second frame
 - [ ] Make the validation functions usable by other algorithms, maybe by wrapping them in a function the does I/O with the GPU
-- [ ] Use CuPy or scikit-cuda to implement the cosine transform used in Smoothn
+- [ ] Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
 - [ ] validate next to masked points
 - [ ] fix edge treatment to have fewer errors
   - [ ] validation of edges
@@ -57,8 +57,10 @@
 - [x] return x, y
 
 ## Testing
-- [ ] add rest of tests
+- [ ] cover all gpu functions by tests
 
-## Other
+## Miscellaneous
 - [ ] refactor names to be more readable
-- [ ] use logging rather than printing to console
+- [x] use logging rather than printing to console
+- [ ] add input checks to all public functions
+- [ ] add error handling exceptions to all gpu functions

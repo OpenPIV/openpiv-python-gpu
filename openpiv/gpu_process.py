@@ -17,6 +17,7 @@ import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
+import logging
 from scipy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
@@ -1172,15 +1173,15 @@ class PIVGPU:
             d_frame_a_f = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
             d_frame_b_f = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
-        # print('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
+        # logging.info('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
 
         # create the correlation object
         self.c = GPUCorrelation(d_frame_a_f, d_frame_b_f, self.nfftx)
 
         # MAIN LOOP
         for K in range(nb_iter_max):
-            print('//////////////////////////////////////////////////////////////////')
-            print('ITERATION {}'.format(K))
+            logging.info('//////////////////////////////////////////////////////////////////')
+            logging.info('ITERATION {}'.format(K))
 
             if K == 0:
                 # use extended search area for first iteration
@@ -1227,16 +1228,16 @@ class PIVGPU:
             try:
                 residual = np.sum(
                     np.power(self.i_peak[:n_row[K], :n_col[K]], 2) + np.power(self.j_peak[:n_row[K], :n_col[K]], 2))
-                print("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
+                logging.info("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
             except OverflowError:
-                print('[DONE]--Overflow in residuals.\n')
+                logging.info('[DONE]--Overflow in residuals.\n')
 
             # VALIDATION
             if K == 0 and trust_1st_iter:
-                print('No validation--trusting 1st iteration.')
+                logging.info('No validation--trusting 1st iteration.')
 
             for i in range(nb_validation_iter):
-                print('Validation iteration {}:'.format(i))
+                logging.info('Validation iteration {}:'.format(i))
 
                 # get list of places that need to be validated
                 self.val_list[:n_row[K], :n_col[K]], d_u_mean[K, :n_row[K], :n_col[K]], d_v_mean[K, :n_row[K],
@@ -1248,15 +1249,15 @@ class PIVGPU:
                 # n_val = n_row[K] * n_col[K] - np.sum(validation_list[:n_row[K], :n_col[K]])
                 n_val = n_row[K] * n_col[K] - np.sum(val_list[:n_row[K], :n_col[K]])
                 if n_val > 0:
-                    print('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K],
+                    logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K],
                                                                              n_val / (n_row[K] * n_col[K])))
                     # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws, overlap, dt)
                     gpu_replace_vectors(d_f, self.val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws,
                                         overlap, dt)
                 else:
-                    print('No invalid vectors!')
+                    logging.info('No invalid vectors!')
 
-            print('[DONE]\n')
+            logging.info('[DONE]\n')
 
             # NEXT ITERATION
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
@@ -1285,9 +1286,9 @@ class PIVGPU:
                         d_f[K + 1, :, :, 4] = d_f[K + 1, :, :, 2].copy()
                         d_f[K + 1, :, :, 5] = d_f[K + 1, :, :, 3].copy()
 
-                print('[DONE] -----> going to iteration {}.\n'.format(K + 1))
+                logging.info('[DONE] -----> going to iteration {}.\n'.format(K + 1))
 
-        print('//////////////////////////////////////////////////////////////////')
+        logging.info('//////////////////////////////////////////////////////////////////')
         # RETURN RESULTS
         f = d_f.get()
 
@@ -1296,7 +1297,7 @@ class PIVGPU:
         u = f[k_f, :, :, 2] / dt
         v = -f[k_f, :, :, 3] / dt
 
-        print('[DONE]\n')
+        logging.info('[DONE]\n')
 
         # # delete images from gpu memory
         d_frame_a_f.gpudata.free()
