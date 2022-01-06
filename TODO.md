@@ -71,3 +71,4 @@
 - [ ] add error handling exceptions to all gpu functions
 - [ ] cleanly separate validation functions from processing functions in gpu_accelerated modules
 - [ ] eliminate output arguments in the gpu-accelerated functions
+- [ ] separate public functions from private functions in GPU-module

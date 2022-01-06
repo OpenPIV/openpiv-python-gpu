@@ -185,6 +185,11 @@ def test_gpu_piv_py():
     assert np.allclose(u, u0, atol=_tolerance)
     assert np.allclose(v, v0, atol=_tolerance)
 
+
+# def test_mask():
+#     pass
+#
+#
 # def test_correlation_function():
 #     pass
 #
