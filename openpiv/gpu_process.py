@@ -1048,7 +1048,6 @@ class PIVGPU:
         self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPE_i)  # 0 means that it does need to be validated.
 
         # GPU ARRAYS
-        # TODO dismantle this array
         # define the main array f that contains all the data
         f = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1], 7], dtype=DTYPE_f)
 
@@ -1127,6 +1126,7 @@ class PIVGPU:
         n_col = self.n_col
         ws = self.ws
         overlap = self.overlap
+        # TODO delete these unused lines
         i_peak = self.i_peak
         j_peak = self.j_peak
         sig2noise = self.sig2noise
@@ -1155,7 +1155,7 @@ class PIVGPU:
 
         # MAIN LOOP
         for K in range(nb_iter_max):
-            logging.info('//////////////////////////////////////////////////////////////////')
+            # logging.info('//////////////////////////////////////////////////////////////////')
             logging.info('ITERATION {}'.format(K))
 
             if K == 0:
@@ -1167,6 +1167,7 @@ class PIVGPU:
                 extended_size = None
 
                 # TODO make these blocks less copy-intensive
+                # can pass the shift info directly?
                 # Calculate second frame displacement (shift)
                 d_shift[0, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 4]  # xb = xa + dpx
                 d_shift[1, :n_row[K], :n_col[K]] = d_f[K, :n_row[K], :n_col[K], 5]  # yb = ya + dpy
@@ -1205,7 +1206,7 @@ class PIVGPU:
                     np.power(self.i_peak[:n_row[K], :n_col[K]], 2) + np.power(self.j_peak[:n_row[K], :n_col[K]], 2))
                 logging.info("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
             except OverflowError:
-                logging.info('[DONE]--Overflow in residuals.\n')
+                logging.warning('[DONE]--Overflow in residuals.\n')
 
             # VALIDATION
             if K == 0 and trust_1st_iter:
@@ -1226,9 +1227,8 @@ class PIVGPU:
                 if n_val > 0:
                     logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K],
                                                                              n_val / (n_row[K] * n_col[K])))
-                    # gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws, overlap, dt)
                     gpu_replace_vectors(d_f, self.val_list, d_u_mean, d_v_mean, nb_iter_max, K, n_row, n_col, ws,
-                                        overlap, dt)
+                                        overlap)
                 else:
                     logging.info('No invalid vectors!')
 
@@ -1263,7 +1263,7 @@ class PIVGPU:
 
                 logging.info('[DONE] -----> going to iteration {}.\n'.format(K + 1))
 
-        logging.info('//////////////////////////////////////////////////////////////////')
+        # logging.info('//////////////////////////////////////////////////////////////////')
         # RETURN RESULTS
         f = d_f.get()
 
@@ -1293,8 +1293,8 @@ class PIVGPU:
         return s2n
 
 
-def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap, dt):
-    """Initiate the full GPU version of the validation and interpolation.
+def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k, n_row, n_col, w, overlap):
+    """Replace spurious vectors by the mean or median of the surrounding points.
 
     Parameters
     ----------
@@ -1314,8 +1314,6 @@ def gpu_replace_vectors(d_f, validation_list, d_u_mean, d_v_mean, nb_iter_max, k
         int, pixels between interrogation windows
     overlap : ndarray
         int, ratio of overlap between interrogation windows
-    dt : float
-        time between image frames
 
     """
     # check the inputs
@@ -1664,9 +1662,6 @@ def gpu_update(d_f, i_peak, j_peak, n_row, n_col, k):
     d_f_tmp.gpudata.free()
     d_i_peak.gpudata.free()
     d_j_peak.gpudata.free()
-
-
-# gpu validation algorithms were removed from here
 
 
 def f_dichotomy_gpu(d_range, k, side, d_pos_index, w, overlap, n_row, n_col):

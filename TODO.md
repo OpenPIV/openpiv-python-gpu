@@ -5,13 +5,14 @@
 - [x] bias error in non-translating window
 - [ ] square window shapes sometimes error
 - [ ] extended search area doesn't work for 2048 x 4096 image sizes
-- [ ] completely blank causes smoothn to error
+- [ ] completely blank frames cause smoothn to error
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
    - [x] basic
    - [x] advanced
 - [ ] update the readme to reflect improved functionality
+- [ ] reorganize the tutorials
 
 ## Optimizations
 - [ ] memory optimizations
@@ -51,6 +52,9 @@
   - [ ] validation of points next to mask
   - [ ] interpolation onto edges
 - [x] replace vectors with median rather than median of surrounding points to not be affected by outliers
+  - [ ] make this an option
+- [ ] pass either a frame or a frame size as the first argument to the GPUPIV init method
+  - [ ] remove this requirement in lieu of dynamic allocation of array sizes
 
 ## Object-oriented features
 - [x] return the mask
@@ -60,8 +64,10 @@
 ## Testing
 - [ ] cover all gpu functions by tests
 
-## Miscellaneous
+## Clean code
 - [ ] refactor names to be more readable
 - [x] use logging rather than printing to console
 - [ ] add input checks to all public functions
 - [ ] add error handling exceptions to all gpu functions
+- [ ] cleanly separate validation functions from processing functions in gpu_accelerated modules
+- [ ] eliminate output arguments in the gpu-accelerated functions
