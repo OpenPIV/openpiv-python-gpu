@@ -1076,7 +1076,6 @@ class PIVGPU:
         self.mask_d = gpuarray.to_gpu(mask_array)
 
         # define arrays to store the displacement vector
-        self.shift_d = gpuarray.zeros((2, int(n_row[-1]), int(n_col[-1])), dtype=DTYPE_f)
         self.strain_d = gpuarray.zeros((4, int(n_row[-1]), int(n_col[-1])), dtype=DTYPE_f)
 
         # define arrays to store all the mean velocity at each point in each iteration
@@ -1120,12 +1119,11 @@ class PIVGPU:
         dx_d = self.dx_d
         dy_d = self.dy_d
         mask_d = self.mask_d
-        shift_d = self.shift_d
         strain_d = self.strain_d
         u_mean_d = self.u_mean_d
         v_mean_d = self.v_mean_d
 
-        # shift_d = None
+        shift_d = None
         # strain_d = None
 
         # t1 = process_time_ns()  # debug
@@ -1159,16 +1157,14 @@ class PIVGPU:
             if K == 0:
                 # use extended search area for first iteration
                 extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
-                d_shift_arg = None
                 strain_arg_d = None
             else:
                 extended_size = None
 
-                # can pass the shift info directly?
                 # Calculate second frame displacement (shift)
-                shift_d[0, :n_row[K], :n_col[K]] = dx_d[K, :n_row[K], :n_col[K]]  # xb = xa + dpx
-                shift_d[1, :n_row[K], :n_col[K]] = dy_d[K, :n_row[K], :n_col[K]]  # yb = ya + dpy
-                d_shift_arg = shift_d[:, :n_row[K], :n_col[K]].copy()
+                shift_d = gpuarray.zeros((2, *field_shape_k), dtype=DTYPE_f)
+                shift_d[0, :, :] = dx_d[K, :n_row[K], :n_col[K]]
+                shift_d[1, :, :] = dy_d[K, :n_row[K], :n_col[K]]
 
                 # calculate the strain rate tensor
                 if deform:
@@ -1180,7 +1176,7 @@ class PIVGPU:
 
             # Get window displacement to subpixel accuracy
             # TODO check reference before assignment
-            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=d_shift_arg,
+            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d,
                                 d_strain=strain_arg_d)
 
             # reshape the peaks
@@ -1192,7 +1188,6 @@ class PIVGPU:
                 self.sig2noise[:n_row[K], :n_col[K]] = self.c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
 
             # update the field with new values
-            # TODO this should be private class method
             _gpu_update(u_d, v_d, dx_d, dy_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
