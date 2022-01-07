@@ -37,7 +37,8 @@
 - [x] make consistent the strain and shift array arguments in the correlation function
 
 ## Features
-- [ ] dismantle the F-structure so that others can more easily contribute
+- [x] dismantle the F-structure so that others can more easily contribute
+  - [ ] remove the preallocation of GPU memory the main variables since it adds no performance.
 - [x] re-enable other validation methods
   - [x] mean validation
   - [x] s2n
