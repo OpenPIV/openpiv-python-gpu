@@ -38,7 +38,7 @@
 
 ## Features
 - [x] dismantle the F-structure so that others can more easily contribute
-  - [ ] remove the preallocation of GPU memory the main variables since it adds no performance.
+  - [ ] remove the pre-allocation of GPU memory the main variables since it adds no performance.
 - [x] re-enable other validation methods
   - [x] mean validation
   - [x] s2n
@@ -56,6 +56,8 @@
   - [ ] make this an option
 - [ ] pass either a frame or a frame size as the first argument to the GPUPIV init method
   - [ ] remove this requirement in lieu of dynamic allocation of array sizes
+- [ ] add more sophisticated object-oriented features to set algorithm parameters in gpu_piv()
+- [ ] accept either floats or ints as frame inputs
 
 ## Object-oriented features
 - [x] return the mask
@@ -73,3 +75,4 @@
 - [ ] cleanly separate validation functions from processing functions in gpu_accelerated modules
 - [ ] eliminate output arguments in the gpu-accelerated functions
 - [ ] separate public functions from private functions in GPU-module
+- [ ] don't pass/return None
