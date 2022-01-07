@@ -1075,9 +1075,6 @@ class PIVGPU:
         self.dy_d = gpuarray.to_gpu(dy)
         self.mask_d = gpuarray.to_gpu(mask_array)
 
-        # define arrays to store the displacement vector
-        self.strain_d = gpuarray.zeros((4, int(n_row[-1]), int(n_col[-1])), dtype=DTYPE_f)
-
         # define arrays to store all the mean velocity at each point in each iteration
         self.u_mean_d = gpuarray.zeros((nb_iter_max, int(n_row[-1]), int(n_col[-1])), dtype=DTYPE_f)
         self.v_mean_d = gpuarray.zeros((nb_iter_max, int(n_row[-1]), int(n_col[-1])), dtype=DTYPE_f)
@@ -1119,12 +1116,11 @@ class PIVGPU:
         dx_d = self.dx_d
         dy_d = self.dy_d
         mask_d = self.mask_d
-        strain_d = self.strain_d
         u_mean_d = self.u_mean_d
         v_mean_d = self.v_mean_d
 
         shift_d = None
-        # strain_d = None
+        strain_d = None
 
         # t1 = process_time_ns()  # debug
         # mask the images and send to gpu
@@ -1155,29 +1151,27 @@ class PIVGPU:
             logging.info('ITERATION {}'.format(K))
 
             if K == 0:
-                # use extended search area for first iteration
+                # check if extended search area is used for first iteration
                 extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
-                strain_arg_d = None
             else:
                 extended_size = None
 
-                # Calculate second frame displacement (shift)
+                # calculate second frame displacement (shift)
                 shift_d = gpuarray.zeros((2, *field_shape_k), dtype=DTYPE_f)
                 shift_d[0, :, :] = dx_d[K, :n_row[K], :n_col[K]]
                 shift_d[1, :, :] = dy_d[K, :n_row[K], :n_col[K]]
 
                 # calculate the strain rate tensor
                 if deform:
-                    strain_arg_d = strain_d[:, :n_row[K], :n_col[K]].copy()
                     if ws[K] != ws[K - 1]:
-                        gpu_gradient(strain_arg_d, u_d[K, :n_row[K], :n_col[K]].copy(), v_d[K, :n_row[K], :n_col[K]].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
+                        strain_d = gpu_gradient(u_d[K, :n_row[K], :n_col[K]].copy(), v_d[K, :n_row[K], :n_col[K]].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
                     else:
-                        gpu_gradient(strain_arg_d, u_d[K - 1, :n_row[K - 1], :n_col[K - 1]].copy(), v_d[K - 1, :n_row[K - 1], :n_col[K - 1]].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
+                        # TODO this logic can be confusing
+                        strain_d = gpu_gradient(u_d[K - 1, :n_row[K - 1], :n_col[K - 1]].copy(), v_d[K - 1, :n_row[K - 1], :n_col[K - 1]].copy(), n_row[K], n_col[K], ws[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
             # TODO check reference before assignment
-            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d,
-                                d_strain=strain_arg_d)
+            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # reshape the peaks
             i_peak = np.reshape(sp_i, (n_row[K], n_col[K]))
@@ -1191,6 +1185,7 @@ class PIVGPU:
             _gpu_update(u_d, v_d, dx_d, dy_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
+            # TODO this should be its own function
             try:
                 residual = np.sum(
                     np.power(i_peak, 2) + np.power(j_peak, 2))
@@ -1199,6 +1194,7 @@ class PIVGPU:
                 logging.warning('[DONE]--Overflow in residuals.\n')
 
             # VALIDATION
+            # TODO needs to be a function
             if K == 0 and trust_1st_iter:
                 logging.info('No validation--trusting 1st iteration.')
 
@@ -2002,19 +1998,22 @@ def gpu_index_update(dst_d, values_d, indices_d, retain_indices=False):
     return dst_d
 
 
-def gpu_gradient(strain_d, u_d, v_d, n_row, n_col, spacing):
+def gpu_gradient(u_d, v_d, n_row, n_col, spacing):
     """Computes the strain rate gradients.
 
     Parameters
     ----------
-    strain_d : GPUArray
-        2D strain tensor
     u_d, v_d : GPUArray
-        velocity
+        2D flaot, velocities
     n_row, n_col : int
         number of rows, columns
     spacing : int
         spacing between nodes
+
+    Returns
+    -------
+    strain_d : GPUArray
+        3D float, full strain tensor of the velocity field
 
     """
     mod = SourceModule("""
@@ -2056,6 +2055,8 @@ def gpu_gradient(strain_d, u_d, v_d, n_row, n_col, spacing):
         strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;}  // v_y
     }
     """)
+    # TODO zeros vs empty?
+    strain_d = gpuarray.zeros((4, int(n_row), int(n_col)), dtype=DTYPE_f)
 
     # CUDA kernel implementation
     block_size = 32
@@ -2063,6 +2064,8 @@ def gpu_gradient(strain_d, u_d, v_d, n_row, n_col, spacing):
 
     gradient = mod.get_function('gradient')
     gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(n_row), DTYPE_i(n_col), block=(block_size, 1, 1), grid=(n_blocks, 1))
+
+    return strain_d
 
 
 def gpu_floor(src_d, retain_input=False):
@@ -2112,6 +2115,7 @@ def gpu_floor(src_d, retain_input=False):
     floor_gpu = mod_floor.get_function("floor_gpu")
     floor_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
+    # TODO move this out of scope
     # free some gpu memory
     if not retain_input:
         src_d.gpudata.free()
@@ -2166,6 +2170,7 @@ def gpu_round(src_d, retain_input=False):
     round_gpu = mod_round.get_function("round_gpu")
     round_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
+    # TODO move this out of scope
     # free gpu memory
     if not retain_input:
         src_d.gpudata.free()
@@ -2194,6 +2199,7 @@ def gpu_smooth(src_d, s=0.5, retain_input=False):
     array = src_d.get()
     dest_d = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(DTYPE_f, order='C'))
 
+    # TODO move this out of scope
     # free gpu memory
     if not retain_input:
         src_d.gpudata.free()
