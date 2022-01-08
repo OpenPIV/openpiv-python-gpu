@@ -1279,6 +1279,7 @@ class PIVGPU:
         return s2n
 
 
+# TODO this shouldn't depend on k, or there should be a public version which doesn't
 def gpu_replace_vectors(x_d, y_d, u_d, v_d, validation_list, u_mean_d, v_mean_d, nb_iter_max, k, n_row, n_col, w, overlap):
     """Replace spurious vectors by the mean or median of the surrounding points.
 
@@ -1289,11 +1290,9 @@ def gpu_replace_vectors(x_d, y_d, u_d, v_d, validation_list, u_mean_d, v_mean_d,
     u_d, v_d : GPUArray
         3D float, velocities
     validation_list : ndarray
-        2D int, indicates which values must be validate. 1 indicates no validation needed, 0 indicated validation is needed
+        2D int, indicates which values must be validate. 1 indicates no validation needed, 0 indicates validation is needed
     u_mean_d, v_mean_d : GPUArray
         3D float, mean velocity surrounding each point
-    nb_iter_max : int
-        total number of iterations
     k : int
         main loop iteration count
     n_row, n_col : ndarray
@@ -1304,14 +1303,7 @@ def gpu_replace_vectors(x_d, y_d, u_d, v_d, validation_list, u_mean_d, v_mean_d,
         int, ratio of overlap between interrogation windows
 
     """
-    # check the inputs
-    assert validation_list.shape == (n_row[-1], n_col[
-        -1]), "Must pass the full validation list, not just the section for the iteration you are validating."
-    assert u_mean_d.shape == (nb_iter_max, n_row[-1], n_col[
-        -1]), "Must pass the entire d_u_mean array, not just the section for the iteration you are validating."
-    assert v_mean_d.shape == (nb_iter_max, n_row[-1], n_col[
-        -1]), "Must pass the entire d_v_mean array, not just the section for the iteration you are validating."
-
+    # TODO refactor validation_location to be more clear
     # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
     validation_location = np.invert(validation_list.astype(bool))
 
@@ -1351,6 +1343,7 @@ def gpu_replace_vectors(x_d, y_d, u_d, v_d, validation_list, u_mean_d, v_mean_d,
         v_d[k, :, :] = gpu_index_update(v_d[k, :, :].copy(), v_tmp_d, indices_d)
 
 
+# TODO this shouldn't depend on k
 def gpu_interpolate_surroundings(x_d, y_d, f_d, v_list, n_row, n_col, w, overlap, k):
     """Interpolate a point based on the surroundings.
 
@@ -1374,6 +1367,14 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, v_list, n_row, n_col, w, overlap
     Mark's note: Separate validation list into multiple lists for each region
 
     """
+    interior_ind_x_d = None
+    interior_ind_y_d = None
+    interior_ind_d = None
+    top_ind_d = None
+    bottom_ind_d = None
+    left_ind_d = None
+    right_ind_d = None
+
     # set all sides to false for interior points
     interior_list = np.copy(v_list[:n_row[k + 1], :n_col[k + 1]]).astype('bool')
     interior_list[0, :] = 0
@@ -1622,6 +1623,9 @@ def _gpu_update(u_d, v_d, dx_d, dy_d, mask_d, i_peak, j_peak, n_row, n_col, k):
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
 
+    # u_d = gpuarray.zeros((int(n_row), int(n_col)), dtype=DTYPE_f)
+    # v_d = gpuarray.zeros((int(n_row), int(n_col)), dtype=DTYPE_f)
+
     # move data to gpu
     i_peak_d = gpuarray.to_gpu(i_peak)
     j_peak_d = gpuarray.to_gpu(j_peak)
@@ -1646,8 +1650,11 @@ def _gpu_update(u_d, v_d, dx_d, dy_d, mask_d, i_peak, j_peak, n_row, n_col, k):
     f4_tmp_d.gpudata.free()
     f5_tmp_d.gpudata.free()
     f6_tmp_d.gpudata.free()
+    # TODO this should be done outside this scope
     i_peak_d.gpudata.free()
     j_peak_d.gpudata.free()
+
+    # return u_d, v_d
 
 
 def _f_dichotomy_gpu(range_d, k, side, pos_index_d, w, overlap, n_row, n_col):
@@ -1874,21 +1881,22 @@ def linear_interp_gpu(x1_d, x2_d, x_d, f1_d, f2_d):
     return f_d
 
 
-def _gpu_array_index(array_d, return_list_d, data_type, retain_input=False, retain_list=False):
+# TODO shouldn't need to pass dtype
+def _gpu_array_index(array_d, indices, data_type, retain_input=False, retain_list=False):
     """Allows for arbitrary index selecting with numpy arrays
 
     Parameters
     ----------
     array_d : GPUArray - nD float or int
-        Array to be selected from
-    return_list_d : GPUArray - 1D int
-        list of indexes. That you want to index. If you are indexing more than 1 dimension, then make sure that this array is flattened.
+        array to be selected from
+    indices : GPUArray - 1D int
+        list of indexes that you want to index. If you are indexing more than 1 dimension, then make sure that this array is flattened.
     data_type : dtype
         either int32 or float 32. determines the datatype of the returned array
     retain_input : bool
-        If true, the input array is kept in memory, otherwise it is deleted.
+        if true, the input array is kept in memory, otherwise it is deleted.
     retain_list : bool
-        If true, d_return_list is kept in memory, otherwise it is deleted.
+        if true, d_return_list is kept in memory, otherwise it is deleted.
 
     Returns
     -------
@@ -1900,51 +1908,51 @@ def _gpu_array_index(array_d, return_list_d, data_type, retain_input=False, reta
     __global__ void array_index_float(float *array, float *return_values, int *return_list, int r_size )
     {
         // 1D grid of 1D blocks
-        int tid = blockIdx.x * blockDim.x + threadIdx.x;
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-        if(tid >= r_size){return;}
+        if(t_idx >= r_size){return;}
 
-        return_values[tid] = array[return_list[tid]];
+        return_values[t_idx] = array[return_list[t_idx]];
     }
 
     __global__ void array_index_int(float *array, int *return_values, int *return_list, int r_size )
     {
         // 1D grid of 1D blocks
-        int tid = blockIdx.x*blockDim.x + threadIdx.x;
+        int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
 
-        if(tid >= r_size){return;}
+        if(t_idx >= r_size){return;}
 
-        return_values[tid] = (int)array[return_list[tid]];
+        return_values[t_idx] = (int)array[return_list[t_idx]];
     }
     """)
 
     # GPU will automatically flatten the input array. The indexing must reference the flattened GPU array.
-    assert return_list_d.ndim == 1, "Number of dimensions of r_list is wrong. Should be equal to 1"
+    assert indices.ndim == 1, "Number of dimensions of indices is wrong. Should be equal to 1"
 
     # define gpu parameters
     block_size = 32
-    r_size = DTYPE_i(return_list_d.size)
+    r_size = DTYPE_i(indices.size)
     x_blocks = int(r_size // block_size + 1)
 
     # send data to the gpu
-    return_values_d = gpuarray.zeros(return_list_d.size, dtype=data_type)
+    return_values_d = gpuarray.zeros(indices.size, dtype=data_type)
 
+    # get and launch appropriate kernel
     if data_type == DTYPE_f:
-        # get and launch kernel
         array_index = mod_array_index.get_function("array_index_float")
-        array_index(array_d, return_values_d, return_list_d, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        array_index(array_d, return_values_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
     elif data_type == DTYPE_i:
-        # get and launch kernel
         array_index = mod_array_index.get_function("array_index_int")
-        array_index(array_d, return_values_d, return_list_d, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        array_index(array_d, return_values_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
     else:
         raise ValueError("Unrecognized data type for this function. Use float32 or int32.")
 
+    # TODO do this outside this scope
     # free GPU data unless specified
     if not retain_input:
         array_d.gpudata.free()
     if not retain_list:
-        return_list_d.gpudata.free()
+        indices.gpudata.free()
 
     return return_values_d
 
@@ -1992,6 +2000,7 @@ def gpu_index_update(dst_d, values_d, indices_d, retain_indices=False):
     # free gpu data
     values_d.gpudata.free()
 
+    # TODO do this outside this scope
     if not retain_indices:
         indices_d.gpudata.free()
 
@@ -2055,12 +2064,13 @@ def gpu_gradient(u_d, v_d, n_row, n_col, spacing):
         strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;}  // v_y
     }
     """)
-    # TODO zeros vs empty?
-    strain_d = gpuarray.zeros((4, int(n_row), int(n_col)), dtype=DTYPE_f)
 
     # CUDA kernel implementation
     block_size = 32
     n_blocks = int((n_row * n_col) // 32 + 1)
+
+    # TODO zeros vs empty?
+    strain_d = gpuarray.zeros((4, int(n_row), int(n_col)), dtype=DTYPE_f)
 
     gradient = mod.get_function('gradient')
     gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(n_row), DTYPE_i(n_col), block=(block_size, 1, 1), grid=(n_blocks, 1))
