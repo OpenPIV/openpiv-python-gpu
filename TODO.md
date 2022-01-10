@@ -6,6 +6,7 @@
 - [ ] square window shapes sometimes error
 - [ ] extended search area doesn't work for 2048 x 4096 image sizes
 - [ ] completely blank frames cause smoothn to error
+- [ ] smoothing parameter doesn't default to 0.5
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
