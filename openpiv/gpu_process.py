@@ -9,7 +9,7 @@ to this standard as it makes developing and debugging much easier.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
-import pycuda.cumath as cumath
+# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
@@ -973,8 +973,7 @@ class PIVGPU:
         self.trust_1st_iter = trust_1st_iter
 
         # windows sizes
-        # TODO check this array generation
-        ws = [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for j in range(ws_iters[i])]
+        self.ws = np.asarray([np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for _ in range(ws_iters[i])], dtype=DTYPE_i)
 
         # validation method
         self.val_tols = [None, None, None, None]
@@ -1002,22 +1001,20 @@ class PIVGPU:
         # TODO these arrays cause problems
         n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        w = np.asarray(ws, dtype=DTYPE_i)
         overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
 
         # overlap init
         for K in range(nb_iter_max):
-            overlap[K] = int(overlap_ratio * w[K])
+            overlap[K] = int(overlap_ratio * self.ws[K])
 
         # n_col and n_row init
         for K in range(nb_iter_max):
-            spacing = w[K] - overlap[K]
+            spacing = self.ws[K] - overlap[K]
             n_row[K] = (ht - spacing) // spacing
             n_col[K] = (wd - spacing) // spacing
 
         self.n_row = n_row
         self.n_col = n_col
-        self.ws = ws
         self.overlap = overlap
         self.sig2noise = None
 
@@ -1029,9 +1026,9 @@ class PIVGPU:
         mask_array = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPE_f)
 
         # initialize x and y values
-        # TODO make a pythonic object to store x and y
+        # TODO make a pythonic object to store x, y and mask
         for K in range(nb_iter_max):
-            spacing = w[K] - overlap[K]
+            spacing = self.ws[K] - overlap[K]
             x[K, :, 0] = spacing  # init x on first column
             y[K, 0, :] = spacing  # init y on first row
 
@@ -1153,7 +1150,6 @@ class PIVGPU:
                         strain_d = gpu_gradient(u_previous_d.copy(), v_previous_d.copy(), n_row[K], n_col[K], ws[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
-            # TODO check reference before assignment
             sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # reshape the peaks
@@ -1162,8 +1158,8 @@ class PIVGPU:
 
             # Get signal to noise ratio
             if self.val_tols[0] is not None:
-                self.sig2noise = self.c.sig2noise_ratio(method=sig2noise_method,
-                                                                              width=self.s2n_width)
+                self.sig2noise = self.c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
+
             # update the field with new values
             # TODO is this even necessary?
             u_d, v_d = _gpu_update(dpx_d, dpy_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
@@ -1208,6 +1204,7 @@ class PIVGPU:
             logging.info('[DONE]\n')
 
             # NEXT ITERATION
+            # get_next_iteration()  # TODO write test
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
             if K < nb_iter_max - 1:
                 # save last iteration data
@@ -1274,8 +1271,7 @@ class PIVGPU:
         return s2n
 
 
-# TODO this shouldn't depend on k, or there should be a public version which doesn't
-# def gpu_replace_vectors(x_d, y_d, u_d_old, v_d_old, validation_list, u_mean_d, v_mean_d, k, n_row, n_col, w, overlap):
+# TODO this shouldn't depend on k, or else there should be a public version which doesn't
 def gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, validation_list, u_mean_d, v_mean_d, k, n_row, n_col, w, overlap):
     """Replace spurious vectors by the mean or median of the surrounding points.
 
@@ -1607,7 +1603,6 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, v_list, n_row, n_col, w
     return f_new_d
 
 
-#  CUDA GPU FUNCTIONS
 def _gpu_update(dx_d, dy_d, mask_d, i_peak, j_peak, n_row, n_col, k):
     """Function to update the velocity values after an iteration in the WiDIM algorithm
 
@@ -2075,31 +2070,6 @@ def gpu_gradient(u_d, v_d, n_row, n_col, spacing):
         }
     }
     """)
-
-    # mod1 = SourceModule("""
-    # __global__ void gradient_x(float *strain, float *u, float h, int m, int n)
-    # {
-    #     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    #
-    #     int size = m * n;
-    #
-    #     if (i >= size) {return;}
-    #
-    #     int row = i / n;
-    #     int col = i % n;
-    #
-    #     // x-axis
-    #     // first column
-    #     if (col == 0) {return;}
-    #
-    #     // last column
-    #     else if (col == n - 1) {return;}
-    #
-    #     // main body
-    #     else {strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
-    #     }
-    # }
-    # """)
 
     # CUDA kernel implementation
     block_size = 32
