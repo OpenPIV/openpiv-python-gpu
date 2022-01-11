@@ -1019,9 +1019,7 @@ class PIVGPU:
         self.n_col = n_col
         self.ws = ws
         self.overlap = overlap
-
-        # define arrays for signal to noise ratio
-        self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPE_f)
+        self.sig2noise = None
 
         # GPU ARRAYS
         # define the main array f that contains all the data
@@ -1164,7 +1162,7 @@ class PIVGPU:
 
             # Get signal to noise ratio
             if self.val_tols[0] is not None:
-                self.sig2noise[:n_row[K], :n_col[K]] = self.c.sig2noise_ratio(method=sig2noise_method,
+                self.sig2noise = self.c.sig2noise_ratio(method=sig2noise_method,
                                                                               width=self.s2n_width)
             # update the field with new values
             # TODO is this even necessary?
@@ -1193,7 +1191,7 @@ class PIVGPU:
                 # TODO validation should be done on one field at a time
                 # TODO why is .copy() necessary? why does gpu_validation modify it?
                 val_list, u_mean_d, v_mean_d = gpu_validation(
-                    u_d.copy(), v_d.copy(), n_row[K], n_col[K], ws[K], self.sig2noise[:n_row[K], :n_col[K]], *val_tols)
+                    u_d.copy(), v_d.copy(), n_row[K], n_col[K], ws[K], self.sig2noise, *val_tols)
 
                 # do the validation
                 n_val = n_row[K] * n_col[K] - np.sum(val_list)
