@@ -996,51 +996,43 @@ class PIVGPU:
         # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None  # debug
         self.im_mask = mask
         self.c = None  # correlation
+        self.sig2noise = None
 
         # TODO these arrays cause problems
-        n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
+        self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
+        self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
+        self.overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
 
         # overlap init
         for K in range(nb_iter_max):
-            overlap[K] = int(overlap_ratio * self.ws[K])
+            self.overlap[K] = int(overlap_ratio * self.ws[K])
 
         # n_col and n_row init
         for K in range(nb_iter_max):
-            spacing = self.ws[K] - overlap[K]
-            n_row[K] = (ht - spacing) // spacing
-            n_col[K] = (wd - spacing) // spacing
+            spacing = self.ws[K] - self.overlap[K]
+            self.n_row[K] = (ht - spacing) // spacing
+            self.n_col[K] = (wd - spacing) // spacing
 
-        self.n_row = n_row
-        self.n_col = n_col
-        self.overlap = overlap
-        self.sig2noise = None
-
-        # GPU ARRAYS
-        # define the main array f that contains all the data
-        # TODO refactor f-arrays
-        x = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPE_f)
-        y = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPE_f)
-        mask_array = np.zeros([nb_iter_max, n_row[nb_iter_max - 1], n_col[nb_iter_max - 1]], dtype=DTYPE_f)
-
-        # initialize x and y values
+        # initialize x, y  and maskvalues
         # TODO make a pythonic object to store x, y and mask
+        x = np.zeros([nb_iter_max, self.n_row[nb_iter_max - 1], self.n_col[nb_iter_max - 1]], dtype=DTYPE_f)
+        y = np.zeros([nb_iter_max, self.n_row[nb_iter_max - 1], self.n_col[nb_iter_max - 1]], dtype=DTYPE_f)
+        mask_array = np.zeros([nb_iter_max, self.n_row[nb_iter_max - 1], self.n_col[nb_iter_max - 1]], dtype=DTYPE_f)
+
         for K in range(nb_iter_max):
-            spacing = self.ws[K] - overlap[K]
+            spacing = self.ws[K] - self.overlap[K]
             x[K, :, 0] = spacing  # init x on first column
             y[K, 0, :] = spacing  # init y on first row
 
             # init x on subsequent columns
-            for J in range(1, n_col[K]):
+            for J in range(1, self.n_col[K]):
                 x[K, :, J] = x[K, 0, J - 1] + spacing
             # init y on subsequent rows
-            for I in range(1, n_row[K]):
+            for I in range(1, self.n_row[K]):
                 y[K, I, :] = y[K, I - 1, 0] + spacing
         self.x = x[-1, :, :]
         self.y = y[-1, ::-1, :]
 
-        # TODO define mask on its own array
         if mask is not None:
             assert mask.shape == (ht, wd), 'Mask is not same shape as image!'
             for K in range(nb_iter_max):
@@ -1051,7 +1043,7 @@ class PIVGPU:
             mask_array[:, :, :] = 1
         self.mask = mask_array[-1, :, :]
 
-        # Move f to the GPU for the whole calculation
+        # Move arrays to gpu
         self.x_d = gpuarray.to_gpu(x)
         self.y_d = gpuarray.to_gpu(y)
         self.mask_d = gpuarray.to_gpu(mask_array)
