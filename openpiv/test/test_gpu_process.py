@@ -41,14 +41,14 @@ def create_pair_shift(image_size, u_shift, v_shift):
     return frame_a.astype(np.int32), frame_b.astype(np.int32)
 
 
-# def create_pair_roll(image_size, u_roll, v_roll):
-#     """Creates a pair of images with a roll/shift """
-#     frame_a = np.zeros(image_size, dtype=np.int32)
-#     frame_a = random_noise(frame_a)
-#     frame_a = img_as_ubyte(frame_a)
-#     frame_b = np.roll(frame_a)
-#
-#     return frame_a.astype(np.int32), frame_b.astype(np.int32)
+def create_pair_roll(image_size, roll_shift):
+    """Creates a pair of images with a roll/shift """
+    frame_a = np.zeros(image_size, dtype=np.int32)
+    frame_a = random_noise(frame_a)
+    frame_a = img_as_ubyte(frame_a)
+    frame_b = np.roll(frame_a, roll_shift)
+
+    return frame_a.astype(np.int32), frame_b.astype(np.int32)
 
 
 # TESTS

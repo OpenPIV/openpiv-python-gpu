@@ -1023,10 +1023,6 @@ class PIVGPU:
         # define arrays for signal to noise ratio
         self.sig2noise = np.zeros([n_row[-1], n_col[-1]], dtype=DTYPE_f)
 
-        # define arrays used for the validation process
-        # TODO remove this pre-allocation
-        self.val_list = np.ones([n_row[-1], n_col[-1]], dtype=DTYPE_i)  # 0 means that it does need to be validated.
-
         # GPU ARRAYS
         # define the main array f that contains all the data
         # TODO refactor f-arrays
@@ -1095,7 +1091,6 @@ class PIVGPU:
         n_col = self.n_col
         ws = self.ws
         overlap = self.overlap
-        val_list = self.val_list
         x_d = self.x_d
         y_d = self.y_d
         mask_d = self.mask_d
@@ -1197,17 +1192,17 @@ class PIVGPU:
                 # get list of places that need to be validated
                 # TODO validation should be done on one field at a time
                 # TODO why is .copy() necessary? why does gpu_validation modify it?
-                self.val_list[:n_row[K], :n_col[K]], u_mean_d, v_mean_d = gpu_validation(
+                val_list, u_mean_d, v_mean_d = gpu_validation(
                     u_d.copy(), v_d.copy(), n_row[K], n_col[K], ws[K], self.sig2noise[:n_row[K], :n_col[K]], *val_tols)
 
                 # do the validation
-                n_val = n_row[K] * n_col[K] - np.sum(val_list[:n_row[K], :n_col[K]])
+                n_val = n_row[K] * n_col[K] - np.sum(val_list)
                 if n_val > 0:
                     logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K],
                                                                                     n_val / (n_row[K] * n_col[K])))
 
                     # TODO this should be private class method
-                    u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, self.val_list[:n_row[K], :n_col[K]], u_mean_d, v_mean_d, K, n_row, n_col, ws, overlap)
+                    u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d, v_mean_d, K, n_row, n_col, ws, overlap)
 
                 else:
                     logging.info('No invalid vectors!')
@@ -1232,7 +1227,6 @@ class PIVGPU:
                     # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
                     # TODO this should be private class method.
                     # TODO this should be refactored to return a consistent sized array
-
                     u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, n_row, n_col, ws, overlap, K)
                     v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, n_row, n_col, ws, overlap, K)
 
