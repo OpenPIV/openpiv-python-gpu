@@ -988,8 +988,7 @@ class PIVGPU:
             self.val_tols[3] = kwargs['rms_tol'] if 'rms_tol' in kwargs else 2  # default tolerance
 
         # other parameters
-        # TODO default smoothing par to 0.5
-        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else None
+        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
