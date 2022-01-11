@@ -6,13 +6,13 @@
 - [ ] square window shapes sometimes error
 - [ ] extended search area doesn't work for 2048 x 4096 image sizes
 - [ ] completely blank frames cause smoothn to error
-- [ ] smoothing parameter doesn't default to 0.5
+- [x] smoothing parameter doesn't default to 0.5
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
    - [x] basic
    - [x] advanced
-- [ ] update the readme to reflect improved functionality
+- [ ] update the README to reflect improved functionality
 - [ ] reorganize the tutorials
 
 ## Optimizations
@@ -69,11 +69,11 @@
 - [ ] cover all gpu functions by tests
 
 ## Clean code
-- [ ] refactor names to be more readable
+- [x] refactor names to be more readable
 - [x] use logging rather than printing to console
+- - [ ] separate public functions from private functions in GPU-module
 - [ ] add input checks to all public functions
 - [ ] add error handling exceptions to all gpu functions
 - [ ] cleanly separate validation functions from processing functions in gpu_accelerated modules
 - [ ] eliminate output arguments in the gpu-accelerated functions
-- [ ] separate public functions from private functions in GPU-module
 - [ ] don't pass/return None
