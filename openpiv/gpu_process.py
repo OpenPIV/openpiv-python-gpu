@@ -634,67 +634,6 @@ class GPUCorrelation:
         return sig2noise.reshape(self.n_rows, self.n_cols)
 
 
-def get_field_shape(image_size, window_size, overlap):
-    """Compute the shape of the resulting flow field.
-
-    Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
-    rows and columns of the resulting flow field.
-
-    Parameters
-    ----------
-    image_size : tuple
-        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
-    window_size : int
-        Size of the interrogation windows.
-    overlap : int
-        Number of pixels by which two adjacent interrogation windows overlap.
-
-    Returns
-    -------
-    field_shape : two elements tuple
-        the shape of the resulting flow field
-
-    """
-    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
-    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
-
-    spacing = window_size - overlap
-    n_row = DTYPE_i((image_size[0] - spacing) // spacing)
-    n_col = DTYPE_i((image_size[1] - spacing) // spacing)
-    return n_row, n_col
-
-
-def get_field_coords(window_size, overlap, n_row, n_col):
-    """Returns the coordinates
-
-    Parameters
-    ----------
-    window_size : two elements tuple
-        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
-    window_size : int
-        Size of the interrogation windows.
-    overlap : int
-        Number of pixels by which two adjacent interrogation windows overlap.
-    n_row, n_col : int
-        Number of rows and columns in the final vector field.
-
-    Returns
-    -------
-    x, y : two elements tuple
-        the shape of the resulting flow field
-
-    """
-    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
-    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
-
-    spacing = window_size - overlap
-    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_col - 1), n_col, dtype=DTYPE_f), (n_row, 1))
-    y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_row - 1), n_row, dtype=DTYPE_f),
-                (n_col, 1)).T
-
-    return x, y
-
-
 def gpu_extended_search_area(frame_a, frame_b,
                              window_size,
                              overlap_ratio,
@@ -1135,12 +1074,10 @@ class PIVGPU:
                 if deform:
                     if ws[K] != ws[K - 1]:
                         # TODO field_shape should be an argument
-                        strain_d = gpu_gradient(u_d.copy(), v_d.copy(), n_row[K], n_col[K], ws[K] - overlap[K])
+                        strain_d = gpu_gradient(u_d.copy(), v_d.copy(), ws[K] - overlap[K])
                     else:
-
                         # TODO this logic can be confusing. why is there copy()?
-                        strain_d = gpu_gradient(u_previous_d.copy(), v_previous_d.copy(), n_row[K], n_col[K],
-                                                ws[K] - overlap[K])
+                        strain_d = gpu_gradient(u_previous_d.copy(), v_previous_d.copy(), ws[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
@@ -1264,6 +1201,277 @@ class PIVGPU:
         else:
             s2n = self.c.sig2noise_ratio(method=self.sig2noise_method)
         return s2n
+
+
+# TODO should share arguments with piv_gpu()
+def get_field_shape(image_size, window_size, overlap):
+    """Compute the shape of the resulting flow field.
+
+    Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
+    rows and columns of the resulting flow field.
+
+    Parameters
+    ----------
+    image_size : tuple
+        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
+    window_size : int
+        Size of the interrogation windows.
+    overlap : int
+        Number of pixels by which two adjacent interrogation windows overlap.
+
+    Returns
+    -------
+    field_shape : two elements tuple
+        the shape of the resulting flow field
+
+    """
+    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
+    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+
+    spacing = window_size - overlap
+    n_row = DTYPE_i((image_size[0] - spacing) // spacing)
+    n_col = DTYPE_i((image_size[1] - spacing) // spacing)
+    return n_row, n_col
+
+
+def get_field_coords(window_size, overlap, n_row, n_col):
+    """Returns the coordinates
+
+    Parameters
+    ----------
+    window_size : two elements tuple
+        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
+    window_size : int
+        Size of the interrogation windows.
+    overlap : int
+        Number of pixels by which two adjacent interrogation windows overlap.
+    n_row, n_col : int
+        Number of rows and columns in the final vector field.
+
+    Returns
+    -------
+    x, y : two elements tuple
+        the shape of the resulting flow field
+
+    """
+    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
+    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+
+    spacing = window_size - overlap
+    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_col - 1), n_col, dtype=DTYPE_f), (n_row, 1))
+    y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_row - 1), n_row, dtype=DTYPE_f),
+                (n_col, 1)).T
+
+    return x, y
+
+
+def gpu_gradient(u_d, v_d, spacing):
+    """Computes the strain rate gradients.
+
+    Parameters
+    ----------
+    u_d, v_d : GPUArray
+        2D float, velocities
+    spacing : int
+        spacing between nodes
+
+    Returns
+    -------
+    strain_d : GPUArray
+        3D float, full strain tensor of the velocity field
+
+    """
+    m, n = u_d.shape
+    strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
+
+    # CUDA kernel implementation
+    mod = SourceModule("""
+    __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
+    {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+        int size = m * n;
+
+        if (i >= size) {return;}
+
+        int row = i / n;
+        int col = i % n;
+
+        // x-axis
+        // first column
+        if (col == 0) {strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
+        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
+
+        // last column
+        } else if (col == n - 1) {strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
+        strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
+
+        // main body
+        } else {strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
+        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
+        }
+
+        // y-axis
+        // first row
+        if (row == 0) {strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
+        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
+
+        // last row
+        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
+        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
+
+        // main body
+        } else {strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
+        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
+        }
+    }
+    """)
+    block_size = 32
+    n_blocks = int((m * n) // block_size + 1)
+    gradient = mod.get_function('gradient')
+    gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), block=(block_size, 1, 1), grid=(n_blocks, 1))
+
+    return strain_d
+
+
+def gpu_floor(src_d, retain_input=False):
+    """Takes the floor of each element in the gpu array.
+
+    Parameters
+    ----------
+    src_d : GPUArray
+        array to take the floor of
+    retain_input : bool
+        whether to return the input array
+
+    Returns
+    -------
+    d_dest : GPUArray
+        Same size as d_src. Contains the floored values of d_src.
+
+    """
+    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
+
+    mod_floor = SourceModule("""
+    __global__ void floor_gpu(float *dest, float *src, int n)
+    {
+        // dest : array to store values
+        // src : array of values to be floored
+
+        int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+        // Avoid the boundary
+        if(t_idx >= n){return;}
+
+        dest[t_idx] = floorf(src[t_idx]);
+    }
+    """)
+
+    # create array to store data
+    # TODO why copy()?
+    dest_d = gpuarray.empty_like(src_d.copy())
+
+    # get array size for gpu
+    n = DTYPE_i(src_d.size)
+
+    # define gpu parameters
+    block_size = 32
+    x_blocks = int(n // block_size + 1)
+
+    # get and execute kernel
+    floor_gpu = mod_floor.get_function("floor_gpu")
+    floor_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    # TODO move this out of scope
+    # free some gpu memory
+    if not retain_input:
+        src_d.gpudata.free()
+
+    return dest_d
+
+
+def gpu_round(src_d, retain_input=False):
+    """Rounds of each element in the gpu array.
+
+    Parameters
+    ----------
+    src_d : GPUArray
+        array to round
+    retain_input : bool
+        whether to return the input array
+
+    Returns
+    -------
+    d_dest : GPUArray
+        Same size as d_src. Contains the floored values of d_src.
+
+    """
+    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
+
+    mod_round = SourceModule("""
+    __global__ void round_gpu(float *dest, float *src, int n)
+    {
+        // dest : array to store values
+        // src : array of values to be floored
+
+        int t_id = blockIdx.x * blockDim.x + threadIdx.x;
+
+        // Avoid the boundary
+        if(t_id >= n){return;}
+
+        dest[t_id] = roundf(src[t_id]);
+    }
+    """)
+
+    # create array to store data
+    dest_d = gpuarray.empty_like(src_d)
+
+    # get array size for gpu
+    n = DTYPE_i(src_d.size)
+
+    # define gpu parameters
+    block_size = 32
+    x_blocks = int(n // block_size + 1)
+
+    # get and execute kernel
+    round_gpu = mod_round.get_function("round_gpu")
+    round_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    # TODO move this out of scope
+    # free gpu memory
+    if not retain_input:
+        src_d.gpudata.free()
+
+    return dest_d
+
+
+def gpu_smooth(src_d, s=0.5, retain_input=False):
+    """Smoothes a scalar field stored as a GPUArray.
+
+    Parameters
+    ----------
+    src_d : GPUArray
+        field to be smoothed
+    s : int
+        smoothing parameter
+    retain_input : bool
+        whether to keep th input in memory
+
+    Returns
+    -------
+    dest_d : GPUArray
+        smoothed field
+
+    """
+    array = src_d.get()
+    dest_d = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(DTYPE_f, order='C'))
+
+    # TODO move this out of scope
+    # free gpu memory
+    if not retain_input:
+        src_d.gpudata.free()
+
+    return dest_d
 
 
 # TODO this shouldn't depend on k, or else there should be a public version which doesn't
@@ -1992,216 +2200,3 @@ def _gpu_index_update(dst_d, values_d, indices_d, retain_indices=False):
         indices_d.gpudata.free()
 
     return dst_d
-
-
-def gpu_gradient(u_d, v_d, n_row, n_col, spacing):
-    """Computes the strain rate gradients.
-
-    Parameters
-    ----------
-    u_d, v_d : GPUArray
-        2D flaot, velocities
-    n_row, n_col : int
-        number of rows, columns
-    spacing : int
-        spacing between nodes
-
-    Returns
-    -------
-    strain_d : GPUArray
-        3D float, full strain tensor of the velocity field
-
-    """
-    mod = SourceModule("""
-    __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
-    {
-        const int i = blockIdx.x * blockDim.x + threadIdx.x;
-        
-        int size = m * n;
-        
-        if (i >= size) {return;}
-        
-        int row = i / n;
-        int col = i % n;
-        
-        // x-axis
-        // first column
-        if (col == 0) {strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
-        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
-        
-        // last column
-        } else if (col == n - 1) {strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
-        strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
-        
-        // main body
-        } else {strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
-        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
-        }
-        
-        // y-axis
-        // first row
-        if (row == 0) {strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
-        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
-
-        // last row
-        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
-        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
-
-        // main body
-        } else {strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
-        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
-        }
-    }
-    """)
-
-    # CUDA kernel implementation
-    block_size = 32
-    n_blocks = int((n_row * n_col) // block_size + 1)
-
-    strain_d = gpuarray.empty((4, int(n_row), int(n_col)), dtype=DTYPE_f)
-
-    gradient = mod.get_function('gradient')
-    gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(n_row), DTYPE_i(n_col), block=(block_size, 1, 1),
-             grid=(n_blocks, 1))
-
-    return strain_d
-
-
-def gpu_floor(src_d, retain_input=False):
-    """Takes the floor of each element in the gpu array.
-
-    Parameters
-    ----------
-    src_d : GPUArray
-        array to take the floor of
-    retain_input : bool
-        whether to return the input array
-
-    Returns
-    -------
-    d_dest : GPUArray
-        Same size as d_src. Contains the floored values of d_src.
-
-    """
-    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
-
-    mod_floor = SourceModule("""
-    __global__ void floor_gpu(float *dest, float *src, int n)
-    {
-        // dest : array to store values
-        // src : array of values to be floored
-
-        int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        // Avoid the boundary
-        if(t_idx >= n){return;}
-
-        dest[t_idx] = floorf(src[t_idx]);
-    }
-    """)
-
-    # create array to store data
-    # TODO why copy()?
-    dest_d = gpuarray.empty_like(src_d.copy())
-
-    # get array size for gpu
-    n = DTYPE_i(src_d.size)
-
-    # define gpu parameters
-    block_size = 32
-    x_blocks = int(n // block_size + 1)
-
-    # get and execute kernel
-    floor_gpu = mod_floor.get_function("floor_gpu")
-    floor_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    # TODO move this out of scope
-    # free some gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
-
-    return dest_d
-
-
-def gpu_round(src_d, retain_input=False):
-    """Rounds of each element in the gpu array.
-
-    Parameters
-    ----------
-    src_d : GPUArray
-        array to round
-    retain_input : bool
-        whether to return the input array
-
-    Returns
-    -------
-    d_dest : GPUArray
-        Same size as d_src. Contains the floored values of d_src.
-
-    """
-    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
-
-    mod_round = SourceModule("""
-    __global__ void round_gpu(float *dest, float *src, int n)
-    {
-        // dest : array to store values
-        // src : array of values to be floored
-
-        int t_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-        // Avoid the boundary
-        if(t_id >= n){return;}
-
-        dest[t_id] = roundf(src[t_id]);
-    }
-    """)
-
-    # create array to store data
-    dest_d = gpuarray.empty_like(src_d)
-
-    # get array size for gpu
-    n = DTYPE_i(src_d.size)
-
-    # define gpu parameters
-    block_size = 32
-    x_blocks = int(n // block_size + 1)
-
-    # get and execute kernel
-    round_gpu = mod_round.get_function("round_gpu")
-    round_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    # TODO move this out of scope
-    # free gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
-
-    return dest_d
-
-
-def gpu_smooth(src_d, s=0.5, retain_input=False):
-    """Smoothes a scalar field stored as a GPUArray.
-
-    Parameters
-    ----------
-    src_d : GPUArray
-        field to be smoothed
-    s : int
-        smoothing parameter
-    retain_input : bool
-        whether to keep th input in memory
-
-    Returns
-    -------
-    dest_d : GPUArray
-        smoothed field
-
-    """
-    array = src_d.get()
-    dest_d = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(DTYPE_f, order='C'))
-
-    # TODO move this out of scope
-    # free gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
-
-    return dest_d
