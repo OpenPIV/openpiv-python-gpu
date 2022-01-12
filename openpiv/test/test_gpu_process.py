@@ -6,20 +6,28 @@ import numpy as np
 import pytest
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
+import openpiv.gpu_process as gpu_process
+import openpiv.gpu_validation as gpu_validation
 from pycuda.compiler import SourceModule
 from skimage.util import random_noise
 from skimage import img_as_ubyte
 from scipy.ndimage import shift
 from imageio import imread
 from math import sqrt
-import openpiv.gpu_process as gpu_process
-import openpiv.gpu_validation as gpu_validation
+from openpiv.smoothn import smoothn
 
 import pyximport
 
 pyximport.install(setup_args={"include_dirs": np.get_include()}, language_level=3)
 import openpiv.gpu_process_old as gpu_process_old
 
+# GLOBAL VARIABLES
+# datatypes used in gpu_process
+DTYPE_i = np.int32
+DTYPE_b = np.uint8
+DTYPE_f = np.float32
+
+# dirs
 _fixture_dir = "./openpiv/test/fixtures/"
 
 # synthetic image parameters
@@ -29,6 +37,13 @@ _u_shift = 8
 _v_shift = -4
 _tolerance = 0.1
 _trim_slice = slice(2, -2, 1)
+
+# test parameters
+_test_size_tiny = (4, 4)
+_test_size_small = (16, 16)
+_test_size_medium = (64, 64)
+_test_size_large = (256, 256)
+_test_size_super = (1024, 1024)
 
 
 # SCRIPTS
@@ -52,26 +67,63 @@ def create_pair_roll(image_size, roll_shift):
     return frame_a.astype(np.int32), frame_b.astype(np.int32)
 
 
+def generate_cpu_gpu_pair(size, magnitude=1, dtype=DTYPE_f):
+    """Returns a pair of cpu and gpu arrays with random values."""
+    cpu_array = (np.random.random(size) * magnitude).astype(dtype)
+    gpu_array = gpuarray.to_gpu(cpu_array)
+
+    return cpu_array, gpu_array
+
+
 # UNIT TESTS
 def test_gpu_gradient():
+    u, u_d = generate_cpu_gpu_pair(_test_size_small)
+    v, v_d = generate_cpu_gpu_pair(_test_size_small)
 
-    pass
+    u_y, u_x = np.gradient(u)
+    v_y, v_x = np.gradient(v)
+    strain_gpu = (gpu_process.gpu_strain(u_d, v_d)).get()
+
+    assert np.array_equal(u_x, strain_gpu[0])
+    assert np.array_equal(u_y, strain_gpu[1])
+    assert np.array_equal(v_x, strain_gpu[2])
+    assert np.array_equal(v_y, strain_gpu[3])
 
 
 def test_gpu_smooth():
-    pass
+    f, f_d = generate_cpu_gpu_pair(_test_size_small)
+
+    f_smooth = smoothn(f, s=0.5)[0].astype(DTYPE_f)
+    f_smooth_gpu = (gpu_process.gpu_smooth(f_d)).get()
+
+    assert np.array_equal(f_smooth, f_smooth_gpu)
 
 
 def test_gpu_round():
-    pass
+    f, f_d = generate_cpu_gpu_pair(_test_size_small)
+
+    f_round = np.round(f)
+    f_round_gpu = (gpu_process.gpu_round(f_d)).get()
+
+    assert np.array_equal(f_round, f_round_gpu)
 
 
 def test_gpu_ceil():
-    pass
+    f, f_d = generate_cpu_gpu_pair(_test_size_small)
+
+    f_ceil = np.ceil(f)
+    f_ceil_gpu = (gpu_process.gpu_ceil(f_d)).get()
+
+    assert np.array_equal(f_ceil, f_ceil_gpu)
 
 
 def test_gpu_floor():
-    pass
+    f, f_d = generate_cpu_gpu_pair(_test_size_small)
+
+    f_floor = np.floor(f)
+    f_floor_gpu = (gpu_process.gpu_floor(f_d)).get()
+
+    assert np.array_equal(f_floor, f_floor_gpu)
 
 
 # INTEGRATION TESTS
@@ -244,7 +296,8 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
             }
 
     """Ensures the results of the GPU algorithm remains unchanged."""
-    file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size), str(nb_validation_iter))
+    file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
+                                                                  str(nb_validation_iter))
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
     # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
@@ -261,42 +314,6 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     # compare with the previous results
     assert np.allclose(u, u0, atol=_tolerance)
     assert np.allclose(v, v0, atol=_tolerance)
-
-
-# @pytest.mark.parametrize('window_size_iters', [(1, 1, 2), (1, 2, 2), (2, 2, 2)])
-# # @pytest.mark.parametrize('window_size_iters', [(1, 1, 2)])
-# def test_gpu_piv_py3(window_size_iters):
-#     # the images are loaded using imageio.
-#     frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
-#     frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
-#     args = {'mask': None,
-#             'window_size_iters': window_size_iters,
-#             'min_window_size': 8,
-#             'overlap_ratio': 0.5,
-#             'dt': 1,
-#             'deform': True,
-#             'smooth': True,
-#             'nb_validation_iter': 0,
-#             'validation_method': "median_velocity",
-#             'trust_1st_iter': True,
-#             'smoothing_par': 0.5
-#             }
-#
-#     """Ensures the results of the GPU algorithm remains unchanged."""
-#     x, y, u0, v0, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
-#
-#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-#
-#     try:
-#         assert np.allclose(u, u0, atol=_tolerance)
-#         assert np.allclose(v, v0, atol=_tolerance)
-#     except:
-#         print('here')
-#
-#     # compare with the previous results
-#     assert np.allclose(u, u0, atol=_tolerance)
-#     assert np.allclose(v, v0, atol=_tolerance)
-
 
 # def test_mask():
 #     pass
@@ -341,36 +358,3 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
 #     # test rectangular field
 #
 #     pass
-#
-#
-# def test_pycuda():
-#     # define gpu array
-#     a = np.random.randn(4, 4)
-#     a = a.astype(np.float32)
-#     a_gpu = drv.mem_alloc(a.nbytes)
-#     drv.memcpy_htod(a_gpu, a)
-#
-#     # define the doubling function
-#     mod = SourceModule(
-#         """
-#       __global__ void doublify(float *a)
-#       {
-#         int idx = threadIdx.x + threadIdx.y*4;
-#         a[idx] *= 2;
-#       }
-#       """
-#     )
-#     func = mod.get_function("doublify")
-#     func(a_gpu, block=(4, 4, 1))
-#
-#     # double the gpu array
-#     a_doubled = np.empty_like(a)
-#     drv.memcpy_dtoh(a_doubled, a_gpu)
-#
-#
-# def test_gpu_array():
-#     """If this test fails, then the CUDA version is likely not working with PyCUDA."""
-#     a = gpuarray.zeros((2, 2, 2), dtype=np.float32)
-#     b = gpuarray.zeros((2, 2, 2), dtype=np.int32)
-#     c = gpuarray.empty((2, 2, 2), dtype=np.float32)
-#     d = gpuarray.empty((2, 2, 2), dtype=np.int32)

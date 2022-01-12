@@ -9,13 +9,13 @@ to this standard as it makes developing and debugging much easier.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.driver as drv
-# import pycuda.cumath as cumath
-from pycuda.compiler import SourceModule
+import pycuda.cumath as cumath
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
 import logging
+from pycuda.compiler import SourceModule
 from scipy.fft import fftshift
 from math import sqrt
 from openpiv.gpu_validation import gpu_validation
@@ -1028,6 +1028,7 @@ class PIVGPU:
         shift_d = None
         strain_d = None
 
+        # TODO figure out this masking dilemma
         # t1 = process_time_ns()  # debug
         # mask the images and send to gpu
         if self.im_mask is not None:
@@ -1074,10 +1075,10 @@ class PIVGPU:
                 if deform:
                     if ws[K] != ws[K - 1]:
                         # TODO field_shape should be an argument
-                        strain_d = gpu_gradient(u_d.copy(), v_d.copy(), ws[K] - overlap[K])
+                        strain_d = gpu_strain(u_d.copy(), v_d.copy(), ws[K] - overlap[K])
                     else:
                         # TODO this logic can be confusing. why is there copy()?
-                        strain_d = gpu_gradient(u_previous_d.copy(), v_previous_d.copy(), ws[K] - overlap[K])
+                        strain_d = gpu_strain(u_previous_d.copy(), v_previous_d.copy(), ws[K] - overlap[K])
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
@@ -1158,8 +1159,8 @@ class PIVGPU:
                     v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, n_row, n_col, ws, overlap, K)
 
                     if smoothing:
-                        dpx_d = gpu_smooth(u_d, s=smoothing_par, retain_input=True)
-                        dpy_d = gpu_smooth(v_d, s=smoothing_par, retain_input=True)
+                        dpx_d = gpu_smooth(u_d, s=smoothing_par)
+                        dpy_d = gpu_smooth(v_d, s=smoothing_par)
 
                     else:
                         dpx_d = u_d.copy()
@@ -1167,8 +1168,8 @@ class PIVGPU:
 
                 else:
                     if smoothing:
-                        dpx_d = gpu_smooth(u_d, s=smoothing_par, retain_input=True)
-                        dpy_d = gpu_smooth(v_d, s=smoothing_par, retain_input=True)
+                        dpx_d = gpu_smooth(u_d, s=smoothing_par)
+                        dpy_d = gpu_smooth(v_d, s=smoothing_par)
                     else:
                         dpx_d = u_d.copy()
                         dpy_d = v_d.copy()
@@ -1250,8 +1251,8 @@ def get_field_coords(window_size, overlap, n_row, n_col):
 
     Returns
     -------
-    x, y : two elements tuple
-        the shape of the resulting flow field
+    x, y : ndarray
+        2D flaot, the shape of the resulting flow field
 
     """
     assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
@@ -1265,33 +1266,38 @@ def get_field_coords(window_size, overlap, n_row, n_col):
     return x, y
 
 
-def gpu_gradient(u_d, v_d, spacing):
-    """Computes the strain rate gradients.
+# TODO consider operating on u and v separately. THis way non-uniform meshes can be accomodated.
+def gpu_strain(u_d, v_d, spacing=1):
+    """Computes the full strain rate tensor.
 
     Parameters
     ----------
     u_d, v_d : GPUArray
-        2D float, velocities
-    spacing : int
-        spacing between nodes
+        2D float, velocity fields.
+    spacing : float
+        Spacing between nodes.
 
     Returns
     -------
-    strain_d : GPUArray
-        3D float, full strain tensor of the velocity field
+    GPUArray
+        3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
+    assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'u_d and v_d must be GPUArrays.'
+    assert u_d.dtype == u_d.dtype == DTYPE_f, 'Input arrays must float type.'
+    assert u_d.shape == v_d.shape, 'u_d and v_d must have same shape.'
+    assert spacing > 0, 'Spacing must be greater than 0.'
+
     m, n = u_d.shape
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
-    # CUDA kernel implementation
     mod = SourceModule("""
     __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
     {
+        // strain : array to return
+    
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
-
         int size = m * n;
-
         if (i >= size) {return;}
 
         int row = i / n;
@@ -1334,144 +1340,147 @@ def gpu_gradient(u_d, v_d, spacing):
     return strain_d
 
 
-def gpu_floor(src_d, retain_input=False):
+def gpu_ceil(f_d):
+    """Takes the ceiling of each element in the gpu array.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        Array to be ceiling-ed.
+
+    Returns
+    -------
+    GPUArray
+        Float, same size as f_d. Ceiling values of f_d.
+
+    """
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+
+    f_size = DTYPE_i(f_d.size)
+    f_ceil_d = gpuarray.empty_like(f_d)
+
+    mod_floor = SourceModule("""
+    __global__ void ceil_gpu(float *dest, float *src, int n)
+    {
+        // dest : array to return
+
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if(t_idx >= n){return;}
+
+        dest[t_idx] = ceilf(src[t_idx]);
+    }
+    """)
+    block_size = 32
+    x_blocks = int(f_size // block_size + 1)
+    floor_gpu = mod_floor.get_function("ceil_gpu")
+    floor_gpu(f_ceil_d, f_d, f_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return f_ceil_d
+
+
+def gpu_floor(f_d):
     """Takes the floor of each element in the gpu array.
 
     Parameters
     ----------
-    src_d : GPUArray
-        array to take the floor of
-    retain_input : bool
-        whether to return the input array
+    f_d : GPUArray
+        Array to be floored.
 
     Returns
     -------
-    d_dest : GPUArray
-        Same size as d_src. Contains the floored values of d_src.
+    GPUArray
+        Float, same size as f_d. Floored values of f_d.
 
     """
-    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+
+    f_size = DTYPE_i(f_d.size)
+    f_ceil_d = gpuarray.empty_like(f_d)
 
     mod_floor = SourceModule("""
     __global__ void floor_gpu(float *dest, float *src, int n)
     {
-        // dest : array to store values
-        // src : array of values to be floored
+        // dest : array to return
 
-        int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        // Avoid the boundary
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_idx >= n){return;}
 
         dest[t_idx] = floorf(src[t_idx]);
     }
     """)
-
-    # create array to store data
-    # TODO why copy()?
-    dest_d = gpuarray.empty_like(src_d.copy())
-
-    # get array size for gpu
-    n = DTYPE_i(src_d.size)
-
-    # define gpu parameters
     block_size = 32
-    x_blocks = int(n // block_size + 1)
-
-    # get and execute kernel
+    x_blocks = int(f_size // block_size + 1)
     floor_gpu = mod_floor.get_function("floor_gpu")
-    floor_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    floor_gpu(f_ceil_d, f_d, f_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    # TODO move this out of scope
-    # free some gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
-
-    return dest_d
+    return f_ceil_d
 
 
-def gpu_round(src_d, retain_input=False):
-    """Rounds of each element in the gpu array.
+def gpu_round(f_d):
+    """Rounds each element in the gpu array.
 
     Parameters
     ----------
-    src_d : GPUArray
-        array to round
-    retain_input : bool
-        whether to return the input array
+    f_d : GPUArray
+        Array to be rounded.
 
     Returns
     -------
-    d_dest : GPUArray
-        Same size as d_src. Contains the floored values of d_src.
+    GPUArray
+        Float, same size as f_d. Floored values of f_d.
 
     """
-    assert type(retain_input) == bool, "ReturnInput is {}. Must be of type boolean".format(type(retain_input))
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+
+    n = DTYPE_i(f_d.size)
+    f_round_d = gpuarray.empty_like(f_d)
 
     mod_round = SourceModule("""
     __global__ void round_gpu(float *dest, float *src, int n)
     {
-        // dest : array to store values
-        // src : array of values to be floored
+        // dest : array to return
 
         int t_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-        // Avoid the boundary
         if(t_id >= n){return;}
 
         dest[t_id] = roundf(src[t_id]);
     }
     """)
-
-    # create array to store data
-    dest_d = gpuarray.empty_like(src_d)
-
-    # get array size for gpu
-    n = DTYPE_i(src_d.size)
-
-    # define gpu parameters
     block_size = 32
     x_blocks = int(n // block_size + 1)
-
-    # get and execute kernel
     round_gpu = mod_round.get_function("round_gpu")
-    round_gpu(dest_d, src_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    round_gpu(f_round_d, f_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    # TODO move this out of scope
-    # free gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
-
-    return dest_d
+    return f_round_d
 
 
-def gpu_smooth(src_d, s=0.5, retain_input=False):
-    """Smoothes a scalar field stored as a GPUArray.
+def gpu_smooth(f_d, s=0.5):
+    """Smooths a scalar field stored as a GPUArray.
 
     Parameters
     ----------
-    src_d : GPUArray
-        field to be smoothed
+    f_d : GPUArray
+        Field to be smoothed.
     s : int
-        smoothing parameter
-    retain_input : bool
-        whether to keep th input in memory
+        Smoothing parameter in smoothn.
 
     Returns
     -------
-    dest_d : GPUArray
-        smoothed field
+    GPUArray
+        Float, same size as f_d. Smoothed field.
 
     """
-    array = src_d.get()
-    dest_d = gpuarray.to_gpu(smoothn(array, s=s)[0].astype(DTYPE_f, order='C'))
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+    assert s > 0, 'Smoothing parameter must be greater than 0.'
 
-    # TODO move this out of scope
-    # free gpu memory
-    if not retain_input:
-        src_d.gpudata.free()
+    f = f_d.get()
+    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f))
 
-    return dest_d
+    return f_smooth_d
 
 
 # TODO this shouldn't depend on k, or else there should be a public version which doesn't
