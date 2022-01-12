@@ -1039,6 +1039,7 @@ class PIVGPU:
         # logging.info('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
 
         # create the correlation object
+        # TODO this can be done in __init__()?
         self.c = GPUCorrelation(frame_a_d, frame_b_d, self.nfftx)
 
         # MAIN LOOP
@@ -1051,26 +1052,8 @@ class PIVGPU:
                 # check if extended search area is used for first iteration
                 extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
             else:
-                # shfit_d, strain_d = self.prepare_corr_arguments():
                 extended_size = None
-
-                # calculate second frame displacement (shift)
-                # shift_d = compute_shift()  # TODO write test
-                # TODO try empty
-                shift_d = gpuarray.zeros((2, *field_shape_k), dtype=DTYPE_f)
-                shift_d[0, :, :] = dpx_d
-                shift_d[1, :, :] = dpy_d
-
-                # calculate the strain rate tensor
-                # strain_d = compute_deform()  # TODO write test
-                # TODO why is copy() necessary?
-                if self.deform:
-                    if ws[K] != ws[K - 1]:
-                        # TODO field_shape should be an argument
-                        strain_d = gpu_strain(u_d.copy(), v_d.copy(), ws[K] - overlap[K])
-                    else:
-                        # TODO this logic can be confusing. why is there copy()?
-                        strain_d = gpu_strain(u_previous_d.copy(), v_previous_d.copy(), ws[K] - overlap[K])
+                shift_d, strain_d = self._prepare_corr_arguments(field_shape_k, dpx_d, dpy_d, u_d, v_d, u_previous_d, v_previous_d, K)
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
@@ -1079,6 +1062,7 @@ class PIVGPU:
             i_peak = np.reshape(sp_i, (n_row[K], n_col[K]))
             j_peak = np.reshape(sp_j, (n_row[K], n_col[K]))
 
+            # TODO move this to _validate_fields()
             # Get signal to noise ratio
             if self.val_tols[0] is not None:
                 self.sig2noise = self.c.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
@@ -1198,8 +1182,28 @@ class PIVGPU:
 
         return u_d, v_d
 
-    def _prepare_corr_arguments(self):
-        pass
+    def _prepare_corr_arguments(self, field_shape, dpx_d, dpy_d, u_d, v_d, u_previous_d, v_previous_d, k):
+        # calculate second frame displacement (shift)
+        # shift_d = compute_shift()  # TODO write test
+        # TODO try empty
+        shift_d = gpuarray.zeros((2, *field_shape), dtype=DTYPE_f)
+        shift_d[0, :, :] = dpx_d
+        shift_d[1, :, :] = dpy_d
+
+        # calculate the strain rate tensor
+        # strain_d = compute_deform()  # TODO write test
+        # TODO why is copy() necessary?
+        if self.deform:
+            if self.ws[k] != self.ws[k - 1]:
+                # TODO field_shape should be an argument
+                strain_d = gpu_strain(u_d.copy(), v_d.copy(), self.ws[k] - self.overlap[k])
+            else:
+                # TODO this logic can be confusing. why is there copy()?
+                strain_d = gpu_strain(u_previous_d.copy(), v_previous_d.copy(), self.ws[k] - self.overlap[k])
+        else:
+            strain_d = None
+
+        return shift_d, strain_d
 
     def _prepare_next_iteration(self):
         pass
