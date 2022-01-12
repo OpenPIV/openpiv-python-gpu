@@ -933,7 +933,6 @@ class PIVGPU:
         self.corr = None  # correlation
         self.sig2noise = None
 
-        # TODO these arrays cause problems
         self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
@@ -1016,7 +1015,6 @@ class PIVGPU:
         strain_d = None
 
         # TODO figure out this masking dilemma
-        # t1 = process_time_ns()  # debug
         # mask the images and send to gpu
         if self.im_mask is not None:
             frame_a_d = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
@@ -1032,51 +1030,47 @@ class PIVGPU:
             frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
             frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
-        # logging.info('mask time : {}'.format((t1 - process_time_ns()) * 1e-6))
-
         # create the correlation object
         # TODO this can be done in __init__()?
         self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfftx)
 
         # MAIN LOOP
-        # TODO make data transfer operations less copy-intensive
-        for K in range(self.nb_iter_max):
-            logging.info('ITERATION {}'.format(K))
+        for k in range(self.nb_iter_max):
+            logging.info('ITERATION {}'.format(k))
 
-            if K == 0:
+            if k == 0:
                 # check if extended search area is used for first iteration
-                extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
+                extended_size = ws[k] * self.extend_ratio if self.extend_ratio is not None else None
             else:
                 extended_size = None
-                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, K)
+                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, k)
 
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = self.corr(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            sp_i, sp_j = self.corr(ws[k], overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
             # TODO this shouldn't be a step
             # reshape the peaks
-            i_peak = np.reshape(sp_i, (n_row[K], n_col[K]))
-            j_peak = np.reshape(sp_j, (n_row[K], n_col[K]))
-            # TODO is this even necessary?
-            u_d, v_d = _gpu_update(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
+            i_peak = np.reshape(sp_i, (n_row[k], n_col[k]))
+            j_peak = np.reshape(sp_j, (n_row[k], n_col[k]))
+            u_d, v_d = self._gpu_update(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
 
             self._log_residual(i_peak, j_peak)
 
             # VALIDATION
-            if K == 0 and self.trust_1st_iter:
+            if k == 0 and self.trust_1st_iter:
                 logging.info('No validation--trusting 1st iteration.')
             else:
-                u_d, v_d = self._validate_fields(u_d, v_d, K, x_d, y_d, u_previous_d, v_previous_d)
+                u_d, v_d = self._validate_fields(u_d, v_d, x_d, y_d, u_previous_d, v_previous_d, k)
 
             # NEXT ITERATION
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
-            if K < self.nb_iter_max - 1:
+            if k < self.nb_iter_max - 1:
                 u_previous_d = u_d
                 v_previous_d = v_d
-                dp_x_d, dp_y_d, u_d, v_d = self._get_next_iteration_prediction(u_d, v_d, x_d, y_d, K)
+                dp_x_d, dp_y_d, u_d, v_d = self._get_next_iteration_prediction(u_d, v_d, x_d, y_d, k)
 
-                logging.info('[DONE] -----> going to iteration {}.\n'.format(K + 1))
+                logging.info('[DONE] -----> going to iteration {}.\n'.format(k + 1))
 
         u_last_d = u_d
         v_last_d = v_d
@@ -1085,9 +1079,15 @@ class PIVGPU:
 
         logging.info('[DONE]\n')
 
-        # delete images from gpu memory
+        # TODO take care of these in a better way
         frame_a_d.gpudata.free()
         frame_b_d.gpudata.free()
+        u_d.gpudata.free()
+        v_d.gpudata.free()
+        dp_x_d.gpudata.free()
+        dp_y_d.gpudata.free()
+        u_previous_d.gpudata.free()
+        v_previous_d.gpudata.free()
 
         return u, v
 
@@ -1104,7 +1104,7 @@ class PIVGPU:
         return s2n
 
     # TODO this should not depend on k
-    def _validate_fields(self, u_d, v_d, k, x_d, y_d, u_previous_d, v_previous_d):
+    def _validate_fields(self, u_d, v_d, x_d, y_d, u_previous_d, v_previous_d, k):
         assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
         assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
@@ -1147,7 +1147,7 @@ class PIVGPU:
         spacing = self.ws[k] - self.overlap[k]
 
         # compute the shift
-        shift_d = gpuarray.zeros((2, m, n), dtype=DTYPE_f)
+        shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
         shift_d[0, :, :] = dp_x_d
         shift_d[1, :, :] = dp_y_d
 
@@ -1202,15 +1202,57 @@ class PIVGPU:
 
         return dp_x_d, dp_y_d, u_d, v_d
 
-    @ staticmethod
+    def _gpu_update(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
+        """Function to update the velocity values after each iteration."""
+        assert type(dx_d) == type(dy_d) == gpuarray.GPUArray, '[0, 1]-arguments must be GPUArray.'
+        assert type(i_peak) == type(i_peak) == np.ndarray, '[2, 3]-arguments must be ndarray.'
+        assert dx_d.shape == dy_d.shape == i_peak.shape == j_peak.shape, 'Inputs must be same shape'
+        assert len(dx_d.shape) == len(dy_d.shape) == len(i_peak.shape) == len(j_peak.shape), 'Inputs must be 2D.'
+
+        size = DTYPE_i(dx_d.size)
+        u_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
+        v_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
+        i_peak_d = gpuarray.to_gpu(i_peak)
+        j_peak_d = gpuarray.to_gpu(j_peak)
+        # TODO this should be on device already
+        f6_tmp_d = mask_d[k, :self.n_row[k], 0:self.n_col[k]].copy()
+
+        mod_update = SourceModule("""
+            __global__ void update_values(float *u_new, float *u_old, float *peak, float *mask, int size)
+            {
+                // u_new : output argument
+    
+                int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+                if (w_idx >= size) {return;}
+    
+                u_new[w_idx] = (u_old[w_idx] + peak[w_idx]) * mask[w_idx];
+            }
+            """)
+        block_size = 32
+        x_blocks = int(self.n_col[k] * self.n_row[k] // block_size + 1)
+        update_values = mod_update.get_function("update_values")
+        # TODO investigate why the i- and j-peaks are flipped
+        update_values(u_d, dx_d, j_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(v_d, dy_d, i_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+        f6_tmp_d.gpudata.free()
+        i_peak_d.gpudata.free()
+        j_peak_d.gpudata.free()
+
+        return u_d, v_d
+
+    @staticmethod
     def _log_residual(i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
+        assert type(i_peak) == type(j_peak) == np.ndarray, 'Inputs must be ndarrays.'
+        assert i_peak.shape == j_peak.shape, 'Inputs must have same shape.'
+
         try:
-            normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size)
+            normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size) / 0.5
             logging.info("[DONE]--Normalized residual : {}.\n".format(normalized_residual))
         except OverflowError:
             logging.warning('[DONE]--Overflow in residuals.\n')
-            normalized_residual = np.NaN
+            normalized_residual = np.nan
 
         return normalized_residual
 
@@ -1305,7 +1347,7 @@ def gpu_strain(u_d, v_d, spacing=1):
     mod = SourceModule("""
     __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
     {
-        // strain : array to return
+        // strain : output argument
     
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         int size = m * n;
@@ -1374,7 +1416,7 @@ def gpu_ceil(f_d):
     mod_floor = SourceModule("""
     __global__ void ceil_gpu(float *dest, float *src, int n)
     {
-        // dest : array to return
+        // dest : output argument
 
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_idx >= n){return;}
@@ -1413,7 +1455,7 @@ def gpu_floor(f_d):
     mod_floor = SourceModule("""
     __global__ void floor_gpu(float *dest, float *src, int n)
     {
-        // dest : array to return
+        // dest : output argument
 
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_idx >= n){return;}
@@ -1452,7 +1494,7 @@ def gpu_round(f_d):
     mod_round = SourceModule("""
     __global__ void round_gpu(float *dest, float *src, int n)
     {
-        // dest : array to return
+        // dest : output argument
 
         int t_id = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_id >= n){return;}
@@ -1812,65 +1854,6 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, v_list, n_row, n_col, w
         f_new_d[-1, -1] = f_d[-1, int(n_col[k] - 1)]
 
     return f_new_d
-
-
-def _gpu_update(dx_d, dy_d, mask_d, i_peak, j_peak, n_row, n_col, k):
-    """Function to update the velocity values after an iteration in the WiDIM algorithm
-
-    Parameters
-    ---------
-    dx_d, dy_d : GPUArray
-        3D float, pixel displacements
-    mask_d : GPUArray
-        3D float, mask
-    i_peak, j_peak : array - 2D float
-        correlation function peak at each iteration
-    n_row, n_col : int
-        number of rows and columns in the current iteration
-    k : int
-        main loop iteration
-
-    """
-    mod_update = SourceModule("""
-        __global__ void update_values(float *u_new, float *u_old, float *peak, float *mask, int n_row, int n_col)
-        {
-            int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-            
-            int size = n_row * n_col;
-            if (w_idx >= size) {return;}
-
-            // get new displacement prediction
-            u_new[w_idx] = (u_old[w_idx] + peak[w_idx]) * mask[w_idx];
-        }
-        """)
-
-    # GPU parameters
-    block_size = 32
-    x_blocks = int(n_col * n_row // block_size + 1)
-
-    # TODO try empty
-    u_d = gpuarray.empty((int(n_row), int(n_col)), dtype=DTYPE_f)
-    v_d = gpuarray.empty((int(n_row), int(n_col)), dtype=DTYPE_f)
-
-    # move data to gpu
-    i_peak_d = gpuarray.to_gpu(i_peak)
-    j_peak_d = gpuarray.to_gpu(j_peak)
-    # TODO this should be on device already
-    f6_tmp_d = mask_d[k, 0:n_row, 0:n_col].copy()
-
-    # update the values
-    update_values = mod_update.get_function("update_values")
-
-    # TODO investigate why the i- and j-peaks are flipped
-    update_values(u_d, dx_d, j_peak_d, f6_tmp_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    update_values(v_d, dy_d, i_peak_d, f6_tmp_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    # Free gpu memory
-    f6_tmp_d.gpudata.free()
-    i_peak_d.gpudata.free()
-    j_peak_d.gpudata.free()
-
-    return u_d, v_d
 
 
 def _f_dichotomy_gpu(range_d, k, side, pos_index_d, w, overlap, n_row, n_col):
