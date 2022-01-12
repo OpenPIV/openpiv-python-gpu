@@ -61,10 +61,6 @@ class GPUCorrelation:
             self.nfft = nfft_x
             assert (self.nfft & (self.nfft - 1)) == 0, 'nfft must be power of 2'
 
-        # TODO where to initialize the CUDA misc libary?
-        # # initialize the skcuda library
-        # cu_misc.init()
-
     def __call__(self, window_size, overlap, extended_size=None, d_shift=None, d_strain=None):
         """Returns the pixel peaks using the specified correlation method.
 
@@ -934,7 +930,7 @@ class PIVGPU:
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
         # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None  # debug
         self.im_mask = mask
-        self.c = None  # correlation
+        self.corr = None  # correlation
         self.sig2noise = None
 
         # TODO these arrays cause problems
@@ -1040,12 +1036,11 @@ class PIVGPU:
 
         # create the correlation object
         # TODO this can be done in __init__()?
-        self.c = GPUCorrelation(frame_a_d, frame_b_d, self.nfftx)
+        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfftx)
 
         # MAIN LOOP
         # TODO make data transfer operations less copy-intensive
         for K in range(self.nb_iter_max):
-            field_shape_k = (int(n_row[K]), int(n_col[K]))
             logging.info('ITERATION {}'.format(K))
 
             if K == 0:
@@ -1056,25 +1051,17 @@ class PIVGPU:
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, K)
 
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            sp_i, sp_j = self.corr(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
+            # update the field with new values
+            # TODO this shouldn't be a step
             # reshape the peaks
             i_peak = np.reshape(sp_i, (n_row[K], n_col[K]))
             j_peak = np.reshape(sp_j, (n_row[K], n_col[K]))
-
-            # update the field with new values
             # TODO is this even necessary?
             u_d, v_d = _gpu_update(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
 
-            # normalize the residual by the maximum quantization error of 0.5 pixel
-            # TODO this should be its own function
-            # log_residual()  # TODO write test
-            try:
-                residual = np.sum(
-                    np.power(i_peak, 2) + np.power(j_peak, 2))
-                logging.info("[DONE]--Normalized residual : {}.\n".format(sqrt(residual / (0.5 * n_row[K] * n_col[K]))))
-            except OverflowError:
-                logging.warning('[DONE]--Overflow in residuals.\n')
+            self._log_residual(i_peak, j_peak)
 
             # VALIDATION
             if K == 0 and self.trust_1st_iter:
@@ -1113,7 +1100,7 @@ class PIVGPU:
         if self.sig2noise is not None:
             s2n = self.sig2noise
         else:
-            s2n = self.c.sig2noise_ratio(method=self.sig2noise_method)
+            s2n = self.corr.sig2noise_ratio(method=self.sig2noise_method)
         return s2n
 
     # TODO this should not depend on k
@@ -1126,19 +1113,21 @@ class PIVGPU:
         m, n = u_d.shape
 
         if self.val_tols[0] is not None and self.nb_validation_iter > 0:
-            self.sig2noise = self.c.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
+            self.sig2noise = self.corr.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
 
         for i in range(self.nb_validation_iter):
             # get list of places that need to be validated
             # TODO validation should be done on one field at a time
-            val_list, u_mean_d, v_mean_d = gpu_validation(u_d.copy(), v_d.copy(), m, n, self.ws[k], self.sig2noise, *self.val_tols)
+            val_list, u_mean_d, v_mean_d = gpu_validation(u_d.copy(), v_d.copy(), m, n, self.ws[k], self.sig2noise,
+                                                          *self.val_tols)
 
             # do the validation
             n_val = m * n - np.sum(val_list)
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, m * n, n_val / (m * n)))
 
-                u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d, v_mean_d, k, self.n_row, self.n_col, self.ws, self.overlap)
+                u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
+                                               v_mean_d, k, self.n_row, self.n_col, self.ws, self.overlap)
 
                 logging.info('[DONE]\n')
             else:
@@ -1190,8 +1179,10 @@ class PIVGPU:
             # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
             # TODO this should be private class method.
             # TODO this should be refactored to return a consistent sized array
-            u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, self.n_row, self.n_col, self.ws, self.overlap, k)
-            v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, self.n_row, self.n_col, self.ws, self.overlap, k)
+            u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, self.n_row, self.n_col, self.ws,
+                                               self.overlap, k)
+            v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, self.n_row, self.n_col, self.ws,
+                                               self.overlap, k)
 
             if self.smooth:
                 dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
@@ -1210,6 +1201,18 @@ class PIVGPU:
                 dp_y_d = v_d.copy()
 
         return dp_x_d, dp_y_d, u_d, v_d
+
+    @ staticmethod
+    def _log_residual(i_peak, j_peak):
+        """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
+        try:
+            normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size)
+            logging.info("[DONE]--Normalized residual : {}.\n".format(normalized_residual))
+        except OverflowError:
+            logging.warning('[DONE]--Overflow in residuals.\n')
+            normalized_residual = np.NaN
+
+        return normalized_residual
 
 
 # TODO should share arguments with piv_gpu()
