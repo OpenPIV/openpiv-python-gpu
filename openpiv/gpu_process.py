@@ -1014,8 +1014,8 @@ class PIVGPU:
         v_d = None
         u_previous_d = None
         v_previous_d = None
-        dpx_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
-        dpy_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
+        dp_x_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
+        dp_y_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
         shift_d = None
         strain_d = None
 
@@ -1053,7 +1053,7 @@ class PIVGPU:
                 extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
             else:
                 extended_size = None
-                shift_d, strain_d = self._prepare_corr_arguments(field_shape_k, dpx_d, dpy_d, u_d, v_d, u_previous_d, v_previous_d, K)
+                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, K)
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = self.c(ws[K], overlap[K], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
@@ -1062,14 +1062,9 @@ class PIVGPU:
             i_peak = np.reshape(sp_i, (n_row[K], n_col[K]))
             j_peak = np.reshape(sp_j, (n_row[K], n_col[K]))
 
-            # TODO move this to _validate_fields()
-            # Get signal to noise ratio
-            if self.val_tols[0] is not None:
-                self.sig2noise = self.c.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
-
             # update the field with new values
             # TODO is this even necessary?
-            u_d, v_d = _gpu_update(dpx_d, dpy_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
+            u_d, v_d = _gpu_update(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, n_row[K], n_col[K], K)
 
             # normalize the residual by the maximum quantization error of 0.5 pixel
             # TODO this should be its own function
@@ -1090,41 +1085,9 @@ class PIVGPU:
             # NEXT ITERATION
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
             if K < self.nb_iter_max - 1:
-                # self.get_next_iteration()  # TODO write test
-                # save last iteration data
-                u_previous_d = u_d.copy()
-                v_previous_d = v_d.copy()
-
-                # interpolate if dimensions do not agree
-                if ws[K + 1] != ws[K]:
-                    # TODO can avoid mefining these variables?
-                    u_next_d = gpuarray.zeros((int(n_row[K + 1]), int(n_col[K + 1])), dtype=DTYPE_f)
-                    v_next_d = gpuarray.zeros((int(n_row[K + 1]), int(n_col[K + 1])), dtype=DTYPE_f)
-
-                    # TODO what is this?
-                    v_list = np.ones((n_row[-1], n_col[-1]), dtype=bool)
-
-                    # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
-                    # TODO this should be private class method.
-                    # TODO this should be refactored to return a consistent sized array
-                    u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, n_row, n_col, ws, overlap, K)
-                    v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, n_row, n_col, ws, overlap, K)
-
-                    if self.smooth:
-                        dpx_d = gpu_smooth(u_d, s=self.smoothing_par)
-                        dpy_d = gpu_smooth(v_d, s=self.smoothing_par)
-
-                    else:
-                        dpx_d = u_d.copy()
-                        dpy_d = v_d.copy()
-
-                else:
-                    if self.smooth:
-                        dpx_d = gpu_smooth(u_d, s=self.smoothing_par)
-                        dpy_d = gpu_smooth(v_d, s=self.smoothing_par)
-                    else:
-                        dpx_d = u_d.copy()
-                        dpy_d = v_d.copy()
+                u_previous_d = u_d
+                v_previous_d = v_d
+                dp_x_d, dp_y_d, u_d, v_d = self._get_next_iteration_prediction(u_d, v_d, x_d, y_d, K)
 
                 logging.info('[DONE] -----> going to iteration {}.\n'.format(K + 1))
 
@@ -1155,7 +1118,6 @@ class PIVGPU:
 
     # TODO this should not depend on k
     def _validate_fields(self, u_d, v_d, k, x_d, y_d, u_previous_d, v_previous_d):
-        """Validates the vector fields."""
         assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
         assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
@@ -1163,10 +1125,12 @@ class PIVGPU:
 
         m, n = u_d.shape
 
+        if self.val_tols[0] is not None and self.nb_validation_iter > 0:
+            self.sig2noise = self.c.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
+
         for i in range(self.nb_validation_iter):
             # get list of places that need to be validated
             # TODO validation should be done on one field at a time
-            # TODO why is .copy() necessary? why does gpu_validation modify it?
             val_list, u_mean_d, v_mean_d = gpu_validation(u_d.copy(), v_d.copy(), m, n, self.ws[k], self.sig2noise, *self.val_tols)
 
             # do the validation
@@ -1182,31 +1146,70 @@ class PIVGPU:
 
         return u_d, v_d
 
-    def _prepare_corr_arguments(self, field_shape, dpx_d, dpy_d, u_d, v_d, u_previous_d, v_previous_d, k):
-        # calculate second frame displacement (shift)
-        # shift_d = compute_shift()  # TODO write test
-        # TODO try empty
-        shift_d = gpuarray.zeros((2, *field_shape), dtype=DTYPE_f)
-        shift_d[0, :, :] = dpx_d
-        shift_d[1, :, :] = dpy_d
+    # TODO this method should have only dp_x_d and u_previous as arguments
+    def _get_corr_arguments(self, dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, k):
+        assert type(dp_x_d) == type(dp_y_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
+        assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be dtype.'
+        assert dp_x_d.shape == dp_y_d.shape, 'Inputs must have same shape.'
+        assert len(dp_x_d.shape) == len(dp_y_d.shape) == 2, 'Inputs must be 2D.'
 
-        # calculate the strain rate tensor
-        # strain_d = compute_deform()  # TODO write test
-        # TODO why is copy() necessary?
+        m, n = dp_x_d.shape
+        strain_d = None
+        spacing = self.ws[k] - self.overlap[k]
+
+        # compute the shift
+        shift_d = gpuarray.zeros((2, m, n), dtype=DTYPE_f)
+        shift_d[0, :, :] = dp_x_d
+        shift_d[1, :, :] = dp_y_d
+
+        # compute the strain rate
         if self.deform:
             if self.ws[k] != self.ws[k - 1]:
-                # TODO field_shape should be an argument
-                strain_d = gpu_strain(u_d.copy(), v_d.copy(), self.ws[k] - self.overlap[k])
+                strain_d = gpu_strain(u_d, v_d, spacing)
             else:
-                # TODO this logic can be confusing. why is there copy()?
-                strain_d = gpu_strain(u_previous_d.copy(), v_previous_d.copy(), self.ws[k] - self.overlap[k])
-        else:
-            strain_d = None
+                strain_d = gpu_strain(u_previous_d, v_previous_d, spacing)
 
         return shift_d, strain_d
 
-    def _prepare_next_iteration(self):
-        pass
+    # TODO this function should return only dp_x_d
+    def _get_next_iteration_prediction(self, u_d, v_d, x_d, y_d, k):
+        assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
+        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
+        assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
+        assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
+
+        # interpolate if dimensions do not agree
+        if self.ws[k + 1] != self.ws[k]:
+            # TODO can avoid defining these variables?
+            u_next_d = gpuarray.zeros((int(self.n_row[k + 1]), int(self.n_col[k + 1])), dtype=DTYPE_f)
+            v_next_d = gpuarray.zeros((int(self.n_row[k + 1]), int(self.n_col[k + 1])), dtype=DTYPE_f)
+
+            # TODO what is this?
+            v_list = np.ones((self.n_row[-1], self.n_col[-1]), dtype=bool)
+
+            # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
+            # TODO this should be private class method.
+            # TODO this should be refactored to return a consistent sized array
+            u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, self.n_row, self.n_col, self.ws, self.overlap, k)
+            v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, self.n_row, self.n_col, self.ws, self.overlap, k)
+
+            if self.smooth:
+                dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
+                dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
+
+            else:
+                dp_x_d = u_d.copy()
+                dp_y_d = v_d.copy()
+
+        else:
+            if self.smooth:
+                dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
+                dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
+            else:
+                dp_x_d = u_d.copy()
+                dp_y_d = v_d.copy()
+
+        return dp_x_d, dp_y_d, u_d, v_d
 
 
 # TODO should share arguments with piv_gpu()
