@@ -140,7 +140,7 @@ def test_gpu_piv_fast(image_size):
             'smooth': True,
             'nb_validation_iter': 1,
             'validation_method': "median_velocity",
-            'trust_1st_iter': True,
+            'trust_1st_iter': False,
             }
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
@@ -162,7 +162,7 @@ def test_gpu_piv_zero(image_size):
             'smooth': False,  # this is False so that smoothn doesn't error
             'nb_validation_iter': 1,
             'validation_method': "median_velocity",
-            'trust_1st_iter': True,
+            'trust_1st_iter': False,
             }
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
@@ -185,7 +185,7 @@ def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_
             'smooth': True,
             'nb_validation_iter': 2,
             'validation_method': "median_velocity",
-            'trust_1st_iter': True,
+            'trust_1st_iter': False,
             }
 
     benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
@@ -214,7 +214,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
             'smooth': True,
             'nb_validation_iter': 2,
             'validation_method': "median_velocity",
-            'trust_1st_iter': True,
+            'trust_1st_iter': False,
             }
 
     piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
@@ -238,7 +238,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
 #             'smooth': True,
 #             'nb_validation_iter': 2,
 #             'validation_method': "median_velocity",
-#             'trust_1st_iter': True,
+#             'trust_1st_iter': False,
 #             }
 #
 #     args1 = {'mask': None,
@@ -250,7 +250,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
 #              'smooth': True,
 #              'nb_validation_iter': 2,
 #              'validation_method': "median_velocity",
-#              'trust_1st_iter': True,
+#              'trust_1st_iter': False,
 #              'smoothing_par': 0.5
 #              }
 #
@@ -291,7 +291,7 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
             'smooth': True,
             'nb_validation_iter': nb_validation_iter,
             'validation_method': "median_velocity",
-            'trust_1st_iter': True,
+            'trust_1st_iter': False,
             'smoothing_par': 0.5
             }
 

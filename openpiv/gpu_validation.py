@@ -994,89 +994,90 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
     return d_u_rms, d_v_rms
 
 
-# def gpu_divergence(d_u, d_v, w, n_row, n_col):
-#     """Calculates the divergence at each point in a velocity field.
-#
-#     Parameters
-#     ----------
-#     d_u, d_v: array - 2D float
-#         velocity field
-#     w: int
-#         pixel separation between velocity vectors
-#     n_row, n_col : int
-#         number of rows and columns of the velocity field
-#
-#     Returns
-#     -------
-#     div : array - 2D float32
-#         divergence at each point
-#
-#     """
-#     mod_div = SourceModule("""
-#     __global__ void div_k(float *div, float *u, float *v, float w, int n_row, int n_col)
-#     {
-#         // u : u velocity
-#         // v : v velocity
-#         // w : window size
-#         // n_row, n_col : number of rows and columns
-#
-#         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-#         int max_idx = n_row * n_col;
-#
-#         // Avoid the boundary
-#         if(w_idx >= (n_row - 1) * n_col){return;}
-#         if(w_idx%n_col == n_col - 1){return;}
-#
-#         float u1 = u[w_idx + n_col];
-#         float v1 = v[w_idx + 1];
-#
-#         __syncthreads();
-#
-#         div[w_idx] = (u1 - u[w_idx]) / w - (v1 - v[w_idx]) / w;
-#     }
-#
-#     __global__ void div_boundary_k(float *div, float *u, float *v, float w, int n_row, int n_col)
-#     {
-#         // u : u velocity
-#         // v : v velocity
-#         // w : window size
-#         // n_row, n_col : number of rows and columns
-#
-#         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-#
-#         // only calculate on the boundary
-#         if(w_idx < (n_row - 1) * n_col && w_idx%n_col != n_col - 1){return;}
-#
-#         float u1 = u[w_idx - n_col];
-#         float v1 = v[w_idx - 1];
-#
-#         __syncthreads();
-#
-#         div[w_idx] = (u[w_idx] - u1) / w - (v[w_idx] - v1) / w;
-#     }
-#     """)
-#
-#     div = np.empty((n_row, n_col), dtype=DTYPE_f)
-#     n_row = DTYPE_i(n_row)
-#     n_col = DTYPE_i(n_col)
-#     w = DTYPE_f(w)
-#
-#     # define GPU data
-#     # block_size = 16
-#     block_size = 32
-#     x_blocks = int(n_row * n_col // block_size + 1)
-#
-#     # move data to gpu
-#     d_div = gpuarray.to_gpu(div)
-#
-#     # get and launch kernel
-#     div_k = mod_div.get_function("div_k")
-#     div_boundary_k = mod_div.get_function("div_boundary_k")
-#     div_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-#     div_boundary_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-#
-#     # get single case of bottom i = 0, j = n_col-1
-#     d_div[0, int(n_col - 1)] = (d_u[1, n_col - 1] - d_u[0, n_col - 1]) / w - (d_v[0, n_col - 1] - d_v[0, n_col - 2]) / w
-#     d_div[int(n_row - 1), 0] = (d_u[n_row - 1, 0] - d_u[n_row - 2, 0]) / w - (d_v[n_row - 1, 1] - d_v[n_row - 1, 0]) / w
-#
-#     return d_div, d_u, d_v
+def __gpu_divergence(d_u, d_v, w, n_row, n_col):
+    """[This function very likely does not work as intended.] Calculates the divergence at each point in a velocity
+    field.
+
+    Parameters
+    ----------
+    d_u, d_v: array - 2D float
+        velocity field
+    w: int
+        pixel separation between velocity vectors
+    n_row, n_col : int
+        number of rows and columns of the velocity field
+
+    Returns
+    -------
+    div : array - 2D float32
+        divergence at each point
+
+    """
+    mod_div = SourceModule("""
+    __global__ void div_k(float *div, float *u, float *v, float w, int n_row, int n_col)
+    {
+        // u : u velocity
+        // v : v velocity
+        // w : window size
+        // n_row, n_col : number of rows and columns
+
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int max_idx = n_row * n_col;
+
+        // Avoid the boundary
+        if(w_idx >= (n_row - 1) * n_col){return;}
+        if(w_idx%n_col == n_col - 1){return;}
+
+        float u1 = u[w_idx + n_col];
+        float v1 = v[w_idx + 1];
+
+        __syncthreads();
+
+        div[w_idx] = (u1 - u[w_idx]) / w - (v1 - v[w_idx]) / w;
+    }
+
+    __global__ void div_boundary_k(float *div, float *u, float *v, float w, int n_row, int n_col)
+    {
+        // u : u velocity
+        // v : v velocity
+        // w : window size
+        // n_row, n_col : number of rows and columns
+
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+        // only calculate on the boundary
+        if(w_idx < (n_row - 1) * n_col && w_idx%n_col != n_col - 1){return;}
+
+        float u1 = u[w_idx - n_col];
+        float v1 = v[w_idx - 1];
+
+        __syncthreads();
+
+        div[w_idx] = (u[w_idx] - u1) / w - (v[w_idx] - v1) / w;
+    }
+    """)
+
+    div = np.empty((n_row, n_col), dtype=DTYPE_f)
+    n_row = DTYPE_i(n_row)
+    n_col = DTYPE_i(n_col)
+    w = DTYPE_f(w)
+
+    # define GPU data
+    # block_size = 16
+    block_size = 32
+    x_blocks = int(n_row * n_col // block_size + 1)
+
+    # move data to gpu
+    d_div = gpuarray.to_gpu(div)
+
+    # get and launch kernel
+    div_k = mod_div.get_function("div_k")
+    div_boundary_k = mod_div.get_function("div_boundary_k")
+    div_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    div_boundary_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    # get single case of bottom i = 0, j = n_col-1
+    d_div[0, int(n_col - 1)] = (d_u[1, n_col - 1] - d_u[0, n_col - 1]) / w - (d_v[0, n_col - 1] - d_v[0, n_col - 2]) / w
+    d_div[int(n_row - 1), 0] = (d_u[n_row - 1, 0] - d_u[n_row - 2, 0]) / w - (d_v[n_row - 1, 1] - d_v[n_row - 1, 0]) / w
+
+    return d_div, d_u, d_v

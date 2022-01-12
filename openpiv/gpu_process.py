@@ -1003,15 +1003,6 @@ class PIVGPU:
             2D, the v velocity component, in pixels/seconds.
 
         """
-        dt = self.dt
-        deform = self.deform
-        smoothing = self.smooth
-        nb_iter_max = self.nb_iter_max
-        nb_validation_iter = self.nb_validation_iter
-        trust_1st_iter = self.trust_1st_iter
-        val_tols = self.val_tols
-        smoothing_par = self.smoothing_par
-        sig2noise_method = self.sig2noise_method
         n_row = self.n_row
         n_col = self.n_col
         ws = self.ws
@@ -1052,7 +1043,7 @@ class PIVGPU:
 
         # MAIN LOOP
         # TODO make data transfer operations less copy-intensive
-        for K in range(nb_iter_max):
+        for K in range(self.nb_iter_max):
             field_shape_k = (int(n_row[K]), int(n_col[K]))
             logging.info('ITERATION {}'.format(K))
 
@@ -1060,6 +1051,7 @@ class PIVGPU:
                 # check if extended search area is used for first iteration
                 extended_size = ws[K] * self.extend_ratio if self.extend_ratio is not None else None
             else:
+                # shfit_d, strain_d = self.prepare_corr_arguments():
                 extended_size = None
 
                 # calculate second frame displacement (shift)
@@ -1072,7 +1064,7 @@ class PIVGPU:
                 # calculate the strain rate tensor
                 # strain_d = compute_deform()  # TODO write test
                 # TODO why is copy() necessary?
-                if deform:
+                if self.deform:
                     if ws[K] != ws[K - 1]:
                         # TODO field_shape should be an argument
                         strain_d = gpu_strain(u_d.copy(), v_d.copy(), ws[K] - overlap[K])
@@ -1089,7 +1081,7 @@ class PIVGPU:
 
             # Get signal to noise ratio
             if self.val_tols[0] is not None:
-                self.sig2noise = self.c.sig2noise_ratio(method=sig2noise_method, width=self.s2n_width)
+                self.sig2noise = self.c.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
 
             # update the field with new values
             # TODO is this even necessary?
@@ -1106,39 +1098,15 @@ class PIVGPU:
                 logging.warning('[DONE]--Overflow in residuals.\n')
 
             # VALIDATION
-            # TODO needs to be a function
-            # validate()  # TODO write test
-            if K == 0 and trust_1st_iter:
+            if K == 0 and self.trust_1st_iter:
                 logging.info('No validation--trusting 1st iteration.')
-
-            for i in range(nb_validation_iter):
-                logging.info('Validation iteration {}:'.format(i))
-
-                # get list of places that need to be validated
-                # TODO validation should be done on one field at a time
-                # TODO why is .copy() necessary? why does gpu_validation modify it?
-                val_list, u_mean_d, v_mean_d = gpu_validation(
-                    u_d.copy(), v_d.copy(), n_row[K], n_col[K], ws[K], self.sig2noise, *val_tols)
-
-                # do the validation
-                n_val = n_row[K] * n_col[K] - np.sum(val_list)
-                if n_val > 0:
-                    logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, n_row[K] * n_col[K],
-                                                                                    n_val / (n_row[K] * n_col[K])))
-
-                    # TODO this should be private class method
-                    u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
-                                                   v_mean_d, K, n_row, n_col, ws, overlap)
-
-                else:
-                    logging.info('No invalid vectors!')
-
-            logging.info('[DONE]\n')
+            else:
+                u_d, v_d = self._validate_fields(u_d, v_d, K, x_d, y_d, u_previous_d, v_previous_d)
 
             # NEXT ITERATION
-            # get_next_iteration()  # TODO write test
             # go to next iteration: compute the predictors dpx and dpy from the current displacements
-            if K < nb_iter_max - 1:
+            if K < self.nb_iter_max - 1:
+                # self.get_next_iteration()  # TODO write test
                 # save last iteration data
                 u_previous_d = u_d.copy()
                 v_previous_d = v_d.copy()
@@ -1158,34 +1126,32 @@ class PIVGPU:
                     u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, n_row, n_col, ws, overlap, K)
                     v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, n_row, n_col, ws, overlap, K)
 
-                    if smoothing:
-                        dpx_d = gpu_smooth(u_d, s=smoothing_par)
-                        dpy_d = gpu_smooth(v_d, s=smoothing_par)
+                    if self.smooth:
+                        dpx_d = gpu_smooth(u_d, s=self.smoothing_par)
+                        dpy_d = gpu_smooth(v_d, s=self.smoothing_par)
 
                     else:
                         dpx_d = u_d.copy()
                         dpy_d = v_d.copy()
 
                 else:
-                    if smoothing:
-                        dpx_d = gpu_smooth(u_d, s=smoothing_par)
-                        dpy_d = gpu_smooth(v_d, s=smoothing_par)
+                    if self.smooth:
+                        dpx_d = gpu_smooth(u_d, s=self.smoothing_par)
+                        dpy_d = gpu_smooth(v_d, s=self.smoothing_par)
                     else:
                         dpx_d = u_d.copy()
                         dpy_d = v_d.copy()
 
                 logging.info('[DONE] -----> going to iteration {}.\n'.format(K + 1))
 
-        # RETURN RESULTS
         u_last_d = u_d
         v_last_d = v_d
-
-        u = u_last_d.get() / dt
-        v = -v_last_d.get() / dt
+        u = u_last_d.get() / self.dt
+        v = -v_last_d.get() / self.dt  # TODO clarify justification for this negation
 
         logging.info('[DONE]\n')
 
-        # # delete images from gpu memory
+        # delete images from gpu memory
         frame_a_d.gpudata.free()
         frame_b_d.gpudata.free()
 
@@ -1202,6 +1168,41 @@ class PIVGPU:
         else:
             s2n = self.c.sig2noise_ratio(method=self.sig2noise_method)
         return s2n
+
+    # TODO this should not depend on k
+    def _validate_fields(self, u_d, v_d, k, x_d, y_d, u_previous_d, v_previous_d):
+        """Validates the vector fields."""
+        assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
+        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
+        assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
+        assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
+
+        m, n = u_d.shape
+
+        for i in range(self.nb_validation_iter):
+            # get list of places that need to be validated
+            # TODO validation should be done on one field at a time
+            # TODO why is .copy() necessary? why does gpu_validation modify it?
+            val_list, u_mean_d, v_mean_d = gpu_validation(u_d.copy(), v_d.copy(), m, n, self.ws[k], self.sig2noise, *self.val_tols)
+
+            # do the validation
+            n_val = m * n - np.sum(val_list)
+            if n_val > 0:
+                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, m * n, n_val / (m * n)))
+
+                u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d, v_mean_d, k, self.n_row, self.n_col, self.ws, self.overlap)
+
+                logging.info('[DONE]\n')
+            else:
+                logging.info('No invalid vectors!')
+
+        return u_d, v_d
+
+    def _prepare_corr_arguments(self):
+        pass
+
+    def _prepare_next_iteration(self):
+        pass
 
 
 # TODO should share arguments with piv_gpu()
@@ -1475,6 +1476,7 @@ def gpu_smooth(f_d, s=0.5):
     """
     assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
     assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+    assert len(f_d.shape), 'Inputs must be 2D.'
     assert s > 0, 'Smoothing parameter must be greater than 0.'
 
     f = f_d.get()
