@@ -1075,20 +1075,13 @@ class PIVGPU:
 
         u_last_d = u_d
         v_last_d = v_d
-        u = u_last_d.get() / self.dt
-        v = -v_last_d.get() / self.dt  # TODO clarify justification for this negation
+        u = (u_last_d / self.dt).get()
+        v = (v_last_d / -self.dt).get()  # TODO clarify justification for this negation
 
         logging.info('[DONE]\n')
 
-        # TODO take care of these in a better way
         frame_a_d.gpudata.free()
         frame_b_d.gpudata.free()
-        u_d.gpudata.free()
-        v_d.gpudata.free()
-        dp_x_d.gpudata.free()
-        dp_y_d.gpudata.free()
-        u_previous_d.gpudata.free() if u_previous_d is not None else None
-        v_previous_d.gpudata.free() if v_previous_d is not None else None
 
         return u, v
 
@@ -1318,6 +1311,29 @@ def get_field_coords(window_size, overlap, n_row, n_col):
                 (n_col, 1)).T
 
     return x, y
+
+
+def gpu_mask_kernel(a_d, b_d):
+    """Multiply two arrays"""
+    size = np.float32(image.size)
+    m, n = _size_large
+
+    mod_update = SourceModule("""
+        __global__ void update_values(float *u_new, float *mask, int size)
+        {
+            int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (w_idx >= size) {return;}
+
+            u_new[w_idx] = u_new[w_idx]  * mask[w_idx];
+        }
+        """)
+    block_size = 32
+    x_blocks = int(n * m // block_size + 1)
+    update_values = mod_update.get_function("update_values")
+    update_values(image_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    update_values(image_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return image_d
 
 
 # TODO consider operating on u and v separately. THis way non-uniform meshes can be accomodated.
@@ -2127,3 +2143,19 @@ def _gpu_index_update(dst_d, values_d, indices_d, retain_indices=False):
         indices_d.gpudata.free()
 
     return dst_d
+
+
+def __get_gpu_memory():
+    import nvidia_smi
+    nvidia_smi.nvmlInit()
+
+    handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
+    # card id 0 hardcoded here, there is also a call to get all available card ids, so we could iterate
+
+    info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+
+    nvidia_smi.nvmlShutdown()
+
+    return info.free, info.used
+
+
