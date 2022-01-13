@@ -15,6 +15,7 @@ import skcuda.misc as cu_misc
 import numpy as np
 import numpy.ma as ma
 import logging
+import nvidia_smi
 from pycuda.compiler import SourceModule
 from scipy.fft import fftshift
 from math import sqrt
@@ -928,11 +929,9 @@ class PIVGPU:
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        # self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None  # debug
-        self.im_mask = mask
-        self.corr = None  # correlation
+        self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
+        self.corr = None
         self.sig2noise = None
-
         self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
@@ -1017,15 +1016,8 @@ class PIVGPU:
         # TODO figure out this masking dilemma
         # mask the images and send to gpu
         if self.im_mask is not None:
-            frame_a_d = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
-            frame_b_d = gpuarray.to_gpu((frame_a * self.im_mask).astype(DTYPE_i))
-
-            # im_mask = gpuarray.to_gpu(self.im_mask.astype(DTYPE_i))  # debug
-            # d_frame_a_f0 = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
-            # d_frame_b_f0 = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
-            # frame_a_d = d_frame_a_f0 * im_mask
-            # frame_b_d = d_frame_b_f0 * im_mask
-
+            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
+            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_i)), self.im_mask)
         else:
             frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
             frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
@@ -1054,7 +1046,7 @@ class PIVGPU:
             # reshape the peaks
             i_peak = np.reshape(sp_i, (n_row[k], n_col[k]))
             j_peak = np.reshape(sp_j, (n_row[k], n_col[k]))
-            u_d, v_d = self._gpu_update(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
+            u_d, v_d = self._update_values(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
 
             self._log_residual(i_peak, j_peak)
 
@@ -1103,6 +1095,7 @@ class PIVGPU:
         assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
         assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
+        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be float type.'
 
         m, n = u_d.shape
 
@@ -1135,6 +1128,7 @@ class PIVGPU:
         assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert dp_x_d.shape == dp_y_d.shape, 'Inputs must have same shape.'
         assert len(dp_x_d.shape) == len(dp_y_d.shape) == 2, 'Inputs must be 2D.'
+        assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be float type.'
 
         m, n = dp_x_d.shape
         strain_d = None
@@ -1160,6 +1154,7 @@ class PIVGPU:
         assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
         assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
+        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be float type.'
 
         # interpolate if dimensions do not agree
         if self.ws[k + 1] != self.ws[k]:
@@ -1196,12 +1191,13 @@ class PIVGPU:
 
         return dp_x_d, dp_y_d, u_d, v_d
 
-    def _gpu_update(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
+    def _update_values(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
         """Function to update the velocity values after each iteration."""
         assert type(dx_d) == type(dy_d) == gpuarray.GPUArray, '[0, 1]-arguments must be GPUArray.'
         assert type(i_peak) == type(i_peak) == np.ndarray, '[2, 3]-arguments must be ndarray.'
         assert dx_d.shape == dy_d.shape == i_peak.shape == j_peak.shape, 'Inputs must be same shape'
         assert len(dx_d.shape) == len(dy_d.shape) == len(i_peak.shape) == len(j_peak.shape), 'Inputs must be 2D.'
+        assert dx_d.dtype == dy_d.dtype == i_peak.dtype == j_peak.dtype == DTYPE_f, 'Inputs must be float type.'
 
         size = DTYPE_i(dx_d.size)
         u_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
@@ -1212,14 +1208,14 @@ class PIVGPU:
         f6_tmp_d = mask_d[k, :self.n_row[k], 0:self.n_col[k]].copy()
 
         mod_update = SourceModule("""
-            __global__ void update_values(float *u_new, float *u_old, float *peak, float *mask, int size)
+            __global__ void update_values(float *f_new, float *f_old, float *peak, float *mask, int size)
             {
                 // u_new : output argument
     
                 int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
                 if (w_idx >= size) {return;}
     
-                u_new[w_idx] = (u_old[w_idx] + peak[w_idx]) * mask[w_idx];
+                f_new[w_idx] = (f_old[w_idx] + peak[w_idx]) * mask[w_idx];
             }
             """)
         block_size = 32
@@ -1240,6 +1236,7 @@ class PIVGPU:
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
         assert type(i_peak) == type(j_peak) == np.ndarray, 'Inputs must be ndarrays.'
         assert i_peak.shape == j_peak.shape, 'Inputs must have same shape.'
+        assert i_peak.dtype == i_peak.dtype == DTYPE_f, 'Inputs must be float type.'
 
         try:
             normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size) / 0.5
@@ -1313,27 +1310,48 @@ def get_field_coords(window_size, overlap, n_row, n_col):
     return x, y
 
 
-def gpu_mask_kernel(a_d, b_d):
-    """Multiply two arrays"""
-    size = np.float32(image.size)
-    m, n = _size_large
+def gpu_mask(frame_d, mask_d):
+    """Multiply two integer-type arrays.
+
+    Parameters
+    ----------
+    frame_d : GPUArray
+        2D int, frame to be masked.
+    mask_d : GPUArray
+        2D int, mask to apply to frame.
+
+    Returns
+    -------
+    GPUArray
+        2D int, masked frame.
+
+    """
+    assert type(frame_d) == type(mask_d) == gpuarray.GPUArray, '[0, 1]-arguments must be GPUArray.'
+    assert frame_d.shape == mask_d.shape, 'Inputs must be same shape'
+    assert len(frame_d.shape) == len(mask_d.shape), 'Inputs must be 2D.'
+    assert frame_d.dtype == mask_d.dtype == DTYPE_i, 'Inputs must be int type.'
+
+    size = DTYPE_f(frame_d.size)
+    m, n = frame_d.shape
+    frame_masked_d = gpuarray.empty_like(frame_d, dtype=DTYPE_i)
 
     mod_update = SourceModule("""
-        __global__ void update_values(float *u_new, float *mask, int size)
+        __global__ void mask_frame(int *frame_masked, int *frame, int *mask, int size)
         {
+            // frame_masked : output argument
+        
             int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
             if (w_idx >= size) {return;}
 
-            u_new[w_idx] = u_new[w_idx]  * mask[w_idx];
+            frame_masked[w_idx] = frame[w_idx] * mask[w_idx];
         }
         """)
     block_size = 32
     x_blocks = int(n * m // block_size + 1)
-    update_values = mod_update.get_function("update_values")
-    update_values(image_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    update_values(image_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mask_frame = mod_update.get_function("mask_frame")
+    mask_frame(frame_masked_d, frame_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return image_d
+    return frame_masked_d
 
 
 # TODO consider operating on u and v separately. THis way non-uniform meshes can be accomodated.
@@ -2146,16 +2164,21 @@ def _gpu_index_update(dst_d, values_d, indices_d, retain_indices=False):
 
 
 def __get_gpu_memory():
-    import nvidia_smi
     nvidia_smi.nvmlInit()
-
     handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
     # card id 0 hardcoded here, there is also a call to get all available card ids, so we could iterate
-
     info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
-
     nvidia_smi.nvmlShutdown()
 
-    return info.free, info.used
+    return info.free, info.used, info.total
 
 
+def __check_inputs(*arrays, array_type, dtype=DTYPE_f, shape=2, dim):
+    # type
+    assert all([type(array) == array_type for array in arrays]), 'Inputs must have same dtype.'
+    # datatype
+    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have same dtype.'
+    # shape
+    assert all([array.shape == shape for array in arrays]), 'Inputs must have same dtype.'
+    # dimensions
+    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dtype.'

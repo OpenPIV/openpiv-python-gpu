@@ -76,6 +76,17 @@ def generate_cpu_gpu_pair(size, magnitude=1, dtype=DTYPE_f):
 
 
 # UNIT TESTS
+def test_gpu_mask():
+    frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
+    mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
+
+    frame_masked = frame * mask
+
+    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d).get()
+
+    assert np.array_equal(frame_masked, frame_masked_gpu)
+
+
 def test_gpu_gradient():
     u, u_d = generate_cpu_gpu_pair(_test_size_small)
     v, v_d = generate_cpu_gpu_pair(_test_size_small)
