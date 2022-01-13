@@ -108,24 +108,6 @@ def test_gpu_round():
     assert np.array_equal(f_round, f_round_gpu)
 
 
-def test_gpu_ceil():
-    f, f_d = generate_cpu_gpu_pair(_test_size_small)
-
-    f_ceil = np.ceil(f)
-    f_ceil_gpu = (gpu_process.gpu_ceil(f_d)).get()
-
-    assert np.array_equal(f_ceil, f_ceil_gpu)
-
-
-def test_gpu_floor():
-    f, f_d = generate_cpu_gpu_pair(_test_size_small)
-
-    f_floor = np.floor(f)
-    f_floor_gpu = (gpu_process.gpu_floor(f_d)).get()
-
-    assert np.array_equal(f_floor, f_floor_gpu)
-
-
 # INTEGRATION TESTS
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):

@@ -1042,6 +1042,7 @@ class PIVGPU:
                 # check if extended search area is used for first iteration
                 extended_size = ws[k] * self.extend_ratio if self.extend_ratio is not None else None
             else:
+                # TODO this should take care of more of the arguments
                 extended_size = None
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, k)
 
@@ -1086,8 +1087,8 @@ class PIVGPU:
         v_d.gpudata.free()
         dp_x_d.gpudata.free()
         dp_y_d.gpudata.free()
-        u_previous_d.gpudata.free()
-        v_previous_d.gpudata.free()
+        u_previous_d.gpudata.free() if u_previous_d is not None else None
+        v_previous_d.gpudata.free() if v_previous_d is not None else None
 
         return u, v
 
@@ -1391,84 +1392,6 @@ def gpu_strain(u_d, v_d, spacing=1):
     gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), block=(block_size, 1, 1), grid=(n_blocks, 1))
 
     return strain_d
-
-
-def gpu_ceil(f_d):
-    """Takes the ceiling of each element in the gpu array.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        Array to be ceiling-ed.
-
-    Returns
-    -------
-    GPUArray
-        Float, same size as f_d. Ceiling values of f_d.
-
-    """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-
-    f_size = DTYPE_i(f_d.size)
-    f_ceil_d = gpuarray.empty_like(f_d)
-
-    mod_floor = SourceModule("""
-    __global__ void ceil_gpu(float *dest, float *src, int n)
-    {
-        // dest : output argument
-
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= n){return;}
-
-        dest[t_idx] = ceilf(src[t_idx]);
-    }
-    """)
-    block_size = 32
-    x_blocks = int(f_size // block_size + 1)
-    floor_gpu = mod_floor.get_function("ceil_gpu")
-    floor_gpu(f_ceil_d, f_d, f_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return f_ceil_d
-
-
-def gpu_floor(f_d):
-    """Takes the floor of each element in the gpu array.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        Array to be floored.
-
-    Returns
-    -------
-    GPUArray
-        Float, same size as f_d. Floored values of f_d.
-
-    """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-
-    f_size = DTYPE_i(f_d.size)
-    f_ceil_d = gpuarray.empty_like(f_d)
-
-    mod_floor = SourceModule("""
-    __global__ void floor_gpu(float *dest, float *src, int n)
-    {
-        // dest : output argument
-
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= n){return;}
-
-        dest[t_idx] = floorf(src[t_idx]);
-    }
-    """)
-    block_size = 32
-    x_blocks = int(f_size // block_size + 1)
-    floor_gpu = mod_floor.get_function("floor_gpu")
-    floor_gpu(f_ceil_d, f_d, f_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return f_ceil_d
 
 
 def gpu_round(f_d):
