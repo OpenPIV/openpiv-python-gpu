@@ -291,10 +291,10 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     """Ensures the results of the GPU algorithm remains unchanged."""
     file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
                                                                   str(nb_validation_iter))
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
-    # # save the results to a numpy file file.
+    # x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    # # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
+    # # save the results to a numpy file.
     # if not os.path.isdir(_fixture_dir):
     #     os.mkdir(_fixture_dir)
     # np.savez(file_str, u=u, v=v)
@@ -303,6 +303,8 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     with np.load(file_str + '.npz') as data:
         u0 = data['u']
         v0 = data['v']
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
     # compare with the previous results
     assert np.allclose(u, u0, atol=_tolerance)

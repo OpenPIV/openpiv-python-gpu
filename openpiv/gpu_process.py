@@ -891,7 +891,7 @@ class PIVGPU:
                  smooth=True,
                  nb_validation_iter=1,
                  validation_method='median_velocity',
-                 trust_1st_iter=True,
+                 trust_1st_iter=False,
                  **kwargs):
 
         # input checks
@@ -1036,14 +1036,13 @@ class PIVGPU:
             else:
                 # TODO this should take care of more of the arguments
                 extended_size = None
-                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, k)
+                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_previous_d, v_previous_d, k)
 
             # Get window displacement to subpixel accuracy
             sp_i, sp_j = self.corr(ws[k], overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
             # TODO this shouldn't be a step
-            # reshape the peaks
             i_peak = np.reshape(sp_i, (n_row[k], n_col[k]))
             j_peak = np.reshape(sp_j, (n_row[k], n_col[k]))
             u_d, v_d = self._update_values(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
@@ -1061,7 +1060,7 @@ class PIVGPU:
             if k < self.nb_iter_max - 1:
                 u_previous_d = u_d
                 v_previous_d = v_d
-                dp_x_d, dp_y_d, u_d, v_d = self._get_next_iteration_prediction(u_d, v_d, x_d, y_d, k)
+                dp_x_d, dp_y_d = self._get_next_iteration_prediction(u_d, v_d, x_d, y_d, k)
 
                 logging.info('[DONE] -----> going to iteration {}.\n'.format(k + 1))
 
@@ -1122,8 +1121,7 @@ class PIVGPU:
 
         return u_d, v_d
 
-    # TODO this method should have only dp_x_d and u_previous as arguments
-    def _get_corr_arguments(self, dp_x_d, dp_y_d, u_d, v_d, u_previous_d, v_previous_d, k):
+    def _get_corr_arguments(self, dp_x_d, dp_y_d, u_previous_d, v_previous_d, k):
         assert type(dp_x_d) == type(dp_y_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
         assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be dtype.'
         assert dp_x_d.shape == dp_y_d.shape, 'Inputs must have same shape.'
@@ -1142,7 +1140,7 @@ class PIVGPU:
         # compute the strain rate
         if self.deform:
             if self.ws[k] != self.ws[k - 1]:
-                strain_d = gpu_strain(u_d, v_d, spacing)
+                strain_d = gpu_strain(dp_x_d, dp_y_d, spacing)
             else:
                 strain_d = gpu_strain(u_previous_d, v_previous_d, spacing)
 
@@ -1189,7 +1187,7 @@ class PIVGPU:
                 dp_x_d = u_d.copy()
                 dp_y_d = v_d.copy()
 
-        return dp_x_d, dp_y_d, u_d, v_d
+        return dp_x_d, dp_y_d
 
     def _update_values(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
         """Function to update the velocity values after each iteration."""
@@ -1280,7 +1278,7 @@ def get_field_shape(image_size, window_size, overlap):
 
 
 def get_field_coords(window_size, overlap, n_row, n_col):
-    """Returns the coordinates
+    """Returns the coordinates.
 
     Parameters
     ----------
@@ -1354,7 +1352,7 @@ def gpu_mask(frame_d, mask_d):
     return frame_masked_d
 
 
-# TODO consider operating on u and v separately. THis way non-uniform meshes can be accomodated.
+# TODO consider operating on u and v separately. This way non-uniform meshes can be accommodated.
 def gpu_strain(u_d, v_d, spacing=1):
     """Computes the full strain rate tensor.
 
@@ -2174,11 +2172,7 @@ def __get_gpu_memory():
 
 
 def __check_inputs(*arrays, array_type, dtype=DTYPE_f, shape=2, dim):
-    # type
     assert all([type(array) == array_type for array in arrays]), 'Inputs must have same dtype.'
-    # datatype
     assert all([array.dtype == dtype for array in arrays]), 'Inputs must have same dtype.'
-    # shape
     assert all([array.shape == shape for array in arrays]), 'Inputs must have same dtype.'
-    # dimensions
     assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dtype.'
