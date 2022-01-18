@@ -1090,11 +1090,7 @@ class PIVGPU:
 
     # TODO this should not depend on k
     def _validate_fields(self, u_d, v_d, x_d, y_d, u_previous_d, v_previous_d, k):
-        assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
-        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
-        assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
-        assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
-        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be float type.'
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 
         m, n = u_d.shape
 
@@ -1122,11 +1118,8 @@ class PIVGPU:
         return u_d, v_d
 
     def _get_corr_arguments(self, dp_x_d, dp_y_d, u_previous_d, v_previous_d, k):
-        assert type(dp_x_d) == type(dp_y_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
-        assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be dtype.'
-        assert dp_x_d.shape == dp_y_d.shape, 'Inputs must have same shape.'
-        assert len(dp_x_d.shape) == len(dp_y_d.shape) == 2, 'Inputs must be 2D.'
-        assert dp_x_d.dtype == dp_y_d.dtype == DTYPE_f, 'Inputs must be float type.'
+        """Returns the shift and strain arguments to the correlation class."""
+        _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 
         m, n = dp_x_d.shape
         strain_d = None
@@ -1148,11 +1141,8 @@ class PIVGPU:
 
     # TODO this function should return only dp_x_d
     def _get_next_iteration_prediction(self, u_d, v_d, x_d, y_d, k):
-        assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'Inputs must be GPUArrays.'
-        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be dtype.'
-        assert u_d.shape == v_d.shape, 'Inputs must have same shape.'
-        assert len(u_d.shape) == len(v_d.shape) == 2, 'Inputs must be 2D.'
-        assert u_d.dtype == v_d.dtype == DTYPE_f, 'Inputs must be float type.'
+        """Returns the velocity field to begin the next iteration."""
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 
         # interpolate if dimensions do not agree
         if self.ws[k + 1] != self.ws[k]:
@@ -1190,12 +1180,9 @@ class PIVGPU:
         return dp_x_d, dp_y_d
 
     def _update_values(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
-        """Function to update the velocity values after each iteration."""
-        assert type(dx_d) == type(dy_d) == gpuarray.GPUArray, '[0, 1]-arguments must be GPUArray.'
-        assert type(i_peak) == type(i_peak) == np.ndarray, '[2, 3]-arguments must be ndarray.'
-        assert dx_d.shape == dy_d.shape == i_peak.shape == j_peak.shape, 'Inputs must be same shape'
-        assert len(dx_d.shape) == len(dy_d.shape) == len(i_peak.shape) == len(j_peak.shape), 'Inputs must be 2D.'
-        assert dx_d.dtype == dy_d.dtype == i_peak.dtype == j_peak.dtype == DTYPE_f, 'Inputs must be float type.'
+        """Updates the velocity values after each iteration."""
+        _check_inputs(dx_d, dy_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, dim=2)
 
         size = DTYPE_i(dx_d.size)
         u_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
@@ -1232,9 +1219,7 @@ class PIVGPU:
     @staticmethod
     def _log_residual(i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
-        assert type(i_peak) == type(j_peak) == np.ndarray, 'Inputs must be ndarrays.'
-        assert i_peak.shape == j_peak.shape, 'Inputs must have same shape.'
-        assert i_peak.dtype == i_peak.dtype == DTYPE_f, 'Inputs must be float type.'
+        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, dim=2)
 
         try:
             normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size) / 0.5
@@ -1248,7 +1233,7 @@ class PIVGPU:
 
 # TODO should share arguments with piv_gpu()
 def get_field_shape(image_size, window_size, overlap):
-    """Compute the shape of the resulting flow field.
+    """Returns the shape of the resulting velocity field.
 
     Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
     rows and columns of the resulting flow field.
@@ -1278,7 +1263,7 @@ def get_field_shape(image_size, window_size, overlap):
 
 
 def get_field_coords(window_size, overlap, n_row, n_col):
-    """Returns the coordinates.
+    """Returns the coordinates of the resulting velocity field.
 
     Parameters
     ----------
@@ -1294,7 +1279,7 @@ def get_field_coords(window_size, overlap, n_row, n_col):
     Returns
     -------
     x, y : ndarray
-        2D flaot, the shape of the resulting flow field
+        2D float, the shape of the resulting flow field
 
     """
     assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
@@ -1324,10 +1309,7 @@ def gpu_mask(frame_d, mask_d):
         2D int, masked frame.
 
     """
-    assert type(frame_d) == type(mask_d) == gpuarray.GPUArray, '[0, 1]-arguments must be GPUArray.'
-    assert frame_d.shape == mask_d.shape, 'Inputs must be same shape'
-    assert len(frame_d.shape) == len(mask_d.shape), 'Inputs must be 2D.'
-    assert frame_d.dtype == mask_d.dtype == DTYPE_i, 'Inputs must be int type.'
+    _check_inputs(frame_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
 
     size = DTYPE_f(frame_d.size)
     m, n = frame_d.shape
@@ -1369,9 +1351,7 @@ def gpu_strain(u_d, v_d, spacing=1):
         3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
-    assert type(u_d) == type(v_d) == gpuarray.GPUArray, 'u_d and v_d must be GPUArrays.'
-    assert u_d.dtype == u_d.dtype == DTYPE_f, 'Input arrays must float type.'
-    assert u_d.shape == v_d.shape, 'u_d and v_d must have same shape.'
+    _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     assert spacing > 0, 'Spacing must be greater than 0.'
 
     m, n = u_d.shape
@@ -2171,8 +2151,18 @@ def __get_gpu_memory():
     return info.free, info.used, info.total
 
 
-def __check_inputs(*arrays, array_type, dtype=DTYPE_f, shape=2, dim):
-    assert all([type(array) == array_type for array in arrays]), 'Inputs must have same dtype.'
-    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have same dtype.'
-    assert all([array.shape == shape for array in arrays]), 'Inputs must have same dtype.'
-    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dtype.'
+def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
+    first_array = arrays[0]
+    if array_type is None:
+        array_type = type(first_array)
+    if dtype is None:
+        dtype = first_array.dtype
+    if shape is None:
+        shape = first_array.shape
+    if dim is None:
+        dim = len(first_array.shape)
+
+    assert all([type(array) == array_type for array in arrays]), 'Inputs must be {}.'.format(array_type)
+    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype {}.'.format(dtype)
+    assert all([array.shape == shape for array in arrays]), 'Inputs must have shape {} (all must be same shape).'.format(shape)
+    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim {}.'.format(dim)
