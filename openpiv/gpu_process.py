@@ -24,7 +24,6 @@ from openpiv.smoothn import smoothn as smoothn
 
 # Define 32-bit types
 DTYPE_i = np.int32
-DTYPE_b = np.uint8
 DTYPE_f = np.float32
 
 # initialize the skcuda library
@@ -85,7 +84,6 @@ class GPUCorrelation:
             3D floot, locations of the subpixel peaks
 
         """
-        # for debugging
         assert window_size >= 8, "Window size is too small."
         assert window_size % 8 == 0, "Window size should be a multiple of 8."
 
@@ -118,7 +116,7 @@ class GPUCorrelation:
         return row_sp, col_sp
 
     def _iw_arrange(self, frame_a_d, frame_b_d, shift_d, strain_d):
-        """Creates a 3D array stack of all of the interrogation windows.
+        """Creates a 3D array stack of all the interrogation windows.
 
         This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin of the image.
 
@@ -134,10 +132,19 @@ class GPUCorrelation:
         Returns
         -------
         win_a_d, win_b_d : GPUArray
-            3D float, All interrogation windows stacked on each other
+            3D float, all interrogation windows stacked on each other.
 
         """
-        # define window slice algorithm
+        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
+
+        ht, wd = self.shape
+        spacing = DTYPE_i(self.window_size - self.overlap)
+        diff = DTYPE_i(spacing - self.extended_size / 2)
+
+        # create GPU arrays to store the window data
+        win_a_d = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
+        win_b_d = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
+
         mod_ws = SourceModule("""
             __global__ void window_slice(int *input, float *output, int ws, int spacing, int diff, int n_col, int wd, int ht)
         {
@@ -220,17 +227,6 @@ class GPUCorrelation:
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
         }
         """)
-
-        # get field shapes
-        ht, wd = self.shape
-        spacing = DTYPE_i(self.window_size - self.overlap)
-        diff = DTYPE_i(spacing - self.extended_size / 2)
-
-        # create GPU arrays to store the window data
-        win_a_d = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
-        win_b_d = gpuarray.zeros((self.n_windows, self.extended_size, self.extended_size), dtype=DTYPE_f)
-
-        # gpu parameters
         block_size = 8
         grid_size = int(self.extended_size / block_size)
 
@@ -276,12 +272,12 @@ class GPUCorrelation:
         Parameters
         ----------
         win_a_d, win_b_d : GPUArray
-            3D float, stack of first IWs
+            3D float, stack of first IWs.
 
         Returns
         -------
         win_a_norm_d, win_b_norm_d : GPUArray
-            3D float, the normalized intensities in the windows
+            3D float, the normalized intensities in the windows.
 
         """
         mod_norm = SourceModule("""
@@ -344,12 +340,12 @@ class GPUCorrelation:
         Parameters
         ----------
         win_a_norm_d, win_b_norm_d : GPUArray
-            3D float, arrays to be zero padded
+            3D float, arrays to be zero padded.
 
         Returns
         -------
         win_a_zp_d, win_b_zp_d : GPUArray
-            3D float, windows which have been zero-padded
+            3D float, windows which have been zero-padded.
 
         """
         mod_zp = SourceModule("""
@@ -406,12 +402,12 @@ class GPUCorrelation:
         Parameters
         ----------
         win_a_zp_d, win_b_zp_d : GPUArray
-            correlation windows
+            3D float, zero-padded correlation windows.
 
         Returns
         -------
-        corr : ndarray
-            2D, a two dimensional array for the correlation function.
+        ndarray
+            2D, output of the correlation function.
 
         """
         # FFT size
@@ -451,7 +447,7 @@ class GPUCorrelation:
         return corr
 
     def _find_peak(self, corr):
-        """Find row and column of highest peak in correlation function
+        """Find the row and column of the highest peak in correlation function
 
         Parameters
         ----------
@@ -488,9 +484,9 @@ class GPUCorrelation:
         return row, col, maximum
 
     def _find_second_peak(self, width):
-        """Find the value of the second largest peak.
+        """Find the value of the second-largest peak.
 
-        The second largest peak is the height of the peak in the region outside a "width * width" submatrix around
+        The second-largest peak is the height of the peak in the region outside a "width * width" submatrix around
         the first correlation peak.
 
         Parameters
@@ -506,8 +502,6 @@ class GPUCorrelation:
         """
         # create a masked view of the self.data array
         tmp = self.data.view(ma.MaskedArray)
-
-        # cdef Py_ssize_t i, j
 
         # set (width x width) square sub-matrix around the first correlation peak as masked
         for i in range(-width, width + 1):
@@ -574,9 +568,9 @@ class GPUCorrelation:
         return row_sp.reshape((self.n_rows, self.n_cols)), col_sp.reshape((self.n_rows, self.n_cols))
 
     def sig2noise_ratio(self, method='peak2peak', width=2):
-        """Computes the signal to noise ratio.
+        """Computes the signal-to-noise ratio.
 
-        The signal to noise ratio is computed from the correlation map with one of two available method. It is a measure
+        The signal-to-noise ratio is computed from the correlation map with one of two available method. It is a measure
         of the quality of the matching between two interrogation windows.
 
         Parameters
@@ -930,6 +924,7 @@ class PIVGPU:
         self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
         self.corr = None
         self.sig2noise = None
+        # TODO reduce the size of this definition
         self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
@@ -1855,7 +1850,6 @@ def _f_dichotomy_gpu(range_d, k, side, pos_index_d, w, overlap, n_row, n_col):
         dxa = DTYPE_f(w_a - overlap[k + 1])
         dxb = DTYPE_f(w_b - overlap[k])
 
-        # get gpu kernel
         f_dichotomy_x = mod_f_dichotomy.get_function("f_dichotomy_x")
         f_dichotomy_x(range_d, low_d, high_d, k, pos_index_d, w_a, w_b, dxa, dxb, n_row[k], n_row[-1], n,
                       block=(block_size, 1, 1), grid=(x_blocks, 1))
@@ -1866,7 +1860,6 @@ def _f_dichotomy_gpu(range_d, k, side, pos_index_d, w, overlap, n_row, n_col):
         dya = DTYPE_f(w_a - overlap[k + 1])
         dyb = DTYPE_f(w_b - overlap[k])
 
-        # get gpu kernel
         f_dichotomy_y = mod_f_dichotomy.get_function("f_dichotomy_y")
         f_dichotomy_y(range_d, low_d, high_d, k, pos_index_d, w_a, w_b, dya, dyb, n_col[k], n_col[-1], n,
                       block=(block_size, 1, 1), grid=(x_blocks, 1))
@@ -2034,8 +2027,6 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     """
     r_size = DTYPE_i(values_d.size)
 
-    # dest_d = gpuarray.empty_like(values_d)
-
     mod_index_update = SourceModule("""
     __global__ void index_update(float *dest, float *values, int *indices, int r_size)
     {
@@ -2046,7 +2037,6 @@ def _gpu_index_update(dest_d, values_d, indices_d):
         dest[indices[t_idx]] = values[t_idx];
     }
     """)
-    # define gpu parameters
     block_size = 32
     x_blocks = int(r_size // block_size + 1)
     index_update = mod_index_update.get_function("index_update")

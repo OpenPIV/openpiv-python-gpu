@@ -6,7 +6,6 @@ from pycuda.compiler import SourceModule
 
 # Define 32-bit types
 DTYPE_i = np.int32
-DTYPE_b = np.uint8
 DTYPE_f = np.float32
 
 
