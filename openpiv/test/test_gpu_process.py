@@ -167,7 +167,7 @@ def test_gpu_piv_zero(image_size):
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
 @pytest.mark.parametrize('window_size_iters,min_window_size', [((1, 2), 16), ((1, 2, 2), 8)])
 def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
-    """Benchmarks the PIV """
+    """Benchmarks the PIV function."""
     frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
     args = {'mask': None,
             'window_size_iters': window_size_iters,
@@ -182,6 +182,7 @@ def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_
             }
 
     benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
+    # benchmark(gpu_process_old.gpu_piv, frame_a, frame_b, **args)
 
 
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
@@ -211,6 +212,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
             }
 
     piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
+    # piv_gpu = gpu_process_old.PIVGPU(_image_size_rectangle, **args)
 
     @benchmark
     def repeat_10():
