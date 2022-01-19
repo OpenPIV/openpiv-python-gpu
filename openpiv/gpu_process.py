@@ -82,7 +82,7 @@ class GPUCorrelation:
         Returns
         -------
         row_sp, col_sp : ndarray
-            3D flaot, locations of the subpixel peaks
+            3D floot, locations of the subpixel peaks
 
         """
         # for debugging
@@ -541,10 +541,6 @@ class GPUCorrelation:
         row_c = np.array(self.p_row, dtype=DTYPE_f)
         col_c = np.array(self.p_col, dtype=DTYPE_f)
 
-        # Define arrays to store the data
-        row_sp = np.empty(self.n_windows, dtype=DTYPE_f)
-        col_sp = np.empty(self.n_windows, dtype=DTYPE_f)
-
         # Move boundary peaks inward one node. Replace later in sig2noise
         row_tmp = np.copy(self.p_row)
         row_tmp[row_tmp < 1] = 1
@@ -573,7 +569,9 @@ class GPUCorrelation:
                 2 * np.log(cl) - 4 * np.log(c) + 2 * np.log(cr) + small)) * non_zero - self.fft_size / 2
         col_sp = col_c + ((np.log(cd) - np.log(cu)) / (
                 2 * np.log(cd) - 4 * np.log(c) + 2 * np.log(cu) + small)) * non_zero - self.fft_size / 2
-        return row_sp, col_sp
+
+        # TODO could be cleaner
+        return row_sp.reshape((self.n_rows, self.n_cols)), col_sp.reshape((self.n_rows, self.n_cols))
 
     def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal to noise ratio.
@@ -997,8 +995,6 @@ class PIVGPU:
             2D, the v velocity component, in pixels/seconds.
 
         """
-        n_row = self.n_row
-        n_col = self.n_col
         x_d = self.x_d
         y_d = self.y_d
         mask_d = self.mask_d
@@ -1008,9 +1004,8 @@ class PIVGPU:
         v_previous_d = None
         shift_d = None
         strain_d = None
-        # TODO shouldnt have to define this here
-        dp_x_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
-        dp_y_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
+        dp_x_d = None
+        dp_y_d = None
 
         # send masked frames to device
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
@@ -1032,14 +1027,10 @@ class PIVGPU:
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # get window displacement to subpixel accuracy
-            sp_i, sp_j = self.corr(self.ws[k], self.overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            i_peak, j_peak = self.corr(self.ws[k], self.overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
-            # TODO this shouldn't be a step
-            i_peak = np.reshape(sp_i, (n_row[k], n_col[k]))
-            j_peak = np.reshape(sp_j, (n_row[k], n_col[k]))
             u_d, v_d = self._update_values(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
-
             self._log_residual(i_peak, j_peak)
 
             # VALIDATION
@@ -1086,6 +1077,7 @@ class PIVGPU:
         _check_inputs(frame_a, frame_b, dim=2)
 
         if self.im_mask is not None:
+            # TODO consider accepting an ndarray into gpu_mask
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
             frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_i)), self.im_mask)
         else:
@@ -1173,14 +1165,17 @@ class PIVGPU:
 
         return dp_x_d, dp_y_d
 
-    def _update_values(self, dx_d, dy_d, mask_d, i_peak, j_peak, k):
+    def _update_values(self, dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k):
         """Updates the velocity values after each iteration."""
-        _check_inputs(dx_d, dy_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+        if dp_x_d == dp_y_d is None:
+            # TODO need variable self.field_shape
+            dp_x_d = gpuarray.zeros((int(self.n_row[k]), int(self.n_col[k])), dtype=DTYPE_f)
+            dp_y_d = gpuarray.zeros((int(self.n_row[k]), int(self.n_col[k])), dtype=DTYPE_f)
         _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, dim=2)
-
-        size = DTYPE_i(dx_d.size)
-        u_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
-        v_d = gpuarray.empty_like(dx_d, dtype=DTYPE_f)
+        _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+        size = DTYPE_i(dp_x_d.size)
+        u_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
+        v_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
         i_peak_d = gpuarray.to_gpu(i_peak)
         j_peak_d = gpuarray.to_gpu(j_peak)
         # TODO this should be on device already
@@ -1201,8 +1196,8 @@ class PIVGPU:
         x_blocks = int(self.n_col[k] * self.n_row[k] // block_size + 1)
         update_values = mod_update.get_function("update_values")
         # TODO investigate why the i- and j-peaks are flipped
-        update_values(u_d, dx_d, j_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-        update_values(v_d, dy_d, i_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(u_d, dp_x_d, j_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(v_d, dp_y_d, i_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
         i_peak_d.gpudata.free()
         j_peak_d.gpudata.free()
