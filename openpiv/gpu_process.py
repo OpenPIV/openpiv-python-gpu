@@ -999,8 +999,6 @@ class PIVGPU:
         """
         n_row = self.n_row
         n_col = self.n_col
-        ws = self.ws
-        overlap = self.overlap
         x_d = self.x_d
         y_d = self.y_d
         mask_d = self.mask_d
@@ -1013,6 +1011,7 @@ class PIVGPU:
         shift_d = None
         strain_d = None
 
+        # TODO class method for this
         # mask the images and send to gpu
         if self.im_mask is not None:
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
@@ -1031,14 +1030,14 @@ class PIVGPU:
 
             if k == 0:
                 # check if extended search area is used for first iteration
-                extended_size = ws[k] * self.extend_ratio if self.extend_ratio is not None else None
+                extended_size = self.ws[k] * self.extend_ratio if self.extend_ratio is not None else None
             else:
                 # TODO this should take care of more of the arguments
                 extended_size = None
-                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, u_previous_d, v_previous_d, k)
+                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # Get window displacement to subpixel accuracy
-            sp_i, sp_j = self.corr(ws[k], overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            sp_i, sp_j = self.corr(self.ws[k], self.overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
             # TODO this shouldn't be a step
@@ -1107,6 +1106,7 @@ class PIVGPU:
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, m * n, n_val / (m * n)))
 
+                # TODO can simplify this to not require u_previous
                 u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
                                                v_mean_d, k, self.n_row, self.n_col, self.ws, self.overlap)
 
@@ -1116,7 +1116,7 @@ class PIVGPU:
 
         return u_d, v_d
 
-    def _get_corr_arguments(self, dp_x_d, dp_y_d, u_previous_d, v_previous_d, k):
+    def _get_corr_arguments(self, dp_x_d, dp_y_d, k):
         """Returns the shift and strain arguments to the correlation class."""
         _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 
@@ -1131,10 +1131,7 @@ class PIVGPU:
 
         # compute the strain rate
         if self.deform:
-            if self.ws[k] != self.ws[k - 1]:
-                strain_d = gpu_strain(dp_x_d, dp_y_d, spacing)
-            else:
-                strain_d = gpu_strain(u_previous_d, v_previous_d, spacing)
+            strain_d = gpu_strain(dp_x_d, dp_y_d, spacing)
 
         return shift_d, strain_d
 
@@ -1159,21 +1156,12 @@ class PIVGPU:
             v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, self.n_row, self.n_col, self.ws,
                                                self.overlap, k)
 
-            if self.smooth:
-                dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
-                dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
-
-            else:
-                dp_x_d = u_d.copy()
-                dp_y_d = v_d.copy()
-
+        if self.smooth:
+            dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
+            dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
         else:
-            if self.smooth:
-                dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
-                dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
-            else:
-                dp_x_d = u_d.copy()
-                dp_y_d = v_d.copy()
+            dp_x_d = u_d.copy()
+            dp_y_d = v_d.copy()
 
         return dp_x_d, dp_y_d
 
