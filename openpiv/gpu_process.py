@@ -1006,19 +1006,14 @@ class PIVGPU:
         v_d = None
         u_previous_d = None
         v_previous_d = None
-        dp_x_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
-        dp_y_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
         shift_d = None
         strain_d = None
+        # TODO shouldnt have to define this here
+        dp_x_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
+        dp_y_d = gpuarray.zeros((int(n_row[0]), int(n_col[0])), dtype=DTYPE_f)
 
-        # TODO class method for this
-        # mask the images and send to gpu
-        if self.im_mask is not None:
-            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
-            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_i)), self.im_mask)
-        else:
-            frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
-            frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
+        # send masked frames to device
+        frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # create the correlation object
         # TODO this can be done in __init__()?
@@ -1036,7 +1031,7 @@ class PIVGPU:
                 extended_size = None
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
-            # Get window displacement to subpixel accuracy
+            # get window displacement to subpixel accuracy
             sp_i, sp_j = self.corr(self.ws[k], self.overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
@@ -1085,6 +1080,19 @@ class PIVGPU:
         else:
             s2n = self.corr.sig2noise_ratio(method=self.sig2noise_method)
         return s2n
+
+    def _mask_image(self, frame_a, frame_b):
+        """Mask the images before sending to device."""
+        _check_inputs(frame_a, frame_b, dim=2)
+
+        if self.im_mask is not None:
+            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
+            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_i)), self.im_mask)
+        else:
+            frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_i))
+            frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
+
+        return frame_a_d, frame_b_d
 
     # TODO this should not depend on k
     def _validate_fields(self, u_d, v_d, x_d, y_d, u_previous_d, v_previous_d, k):
@@ -2071,7 +2079,7 @@ def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
     if dim is None:
         dim = len(first_array.shape)
 
-    assert all([type(array) == array_type for array in arrays]), 'Inputs must be {}.'.format(array_type)
-    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype {}.'.format(dtype)
-    assert all([array.shape == shape for array in arrays]), 'Inputs must have shape {} (all must be same shape).'.format(shape)
-    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim {}.'.format(dim)
+    assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
+    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
+    assert all([array.shape == shape for array in arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(shape)
+    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim ({}).'.format(dim)
