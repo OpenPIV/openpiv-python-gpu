@@ -80,7 +80,7 @@ class GPUCorrelation:
         Returns
         -------
         row_sp, col_sp : ndarray
-            3D floot, locations of the subpixel peaks
+            3D floqt, locations of the subpixel peaks
 
         """
         assert window_size >= 8, "Window size is too small."
@@ -254,10 +254,6 @@ class GPUCorrelation:
                                 self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
 
-            # free GPU memory
-            shift_d.gpudata.free()
-            strain_d.gpudata.free()
-
         else:
             # use non-translating windows
             window_slice_deform = mod_ws.get_function("window_slice")
@@ -322,12 +318,6 @@ class GPUCorrelation:
         normalize(win_a_d, win_a_norm_d, mean_a_d, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
         normalize(win_b_d, win_b_norm_d, mean_b_d, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
 
-        # free GPU memory
-        mean_a_d.gpudata.free()
-        mean_b_d.gpudata.free()
-        win_a_d.gpudata.free()
-        win_b_d.gpudata.free()
-
         return win_a_norm_d, win_b_norm_d
 
     def _zero_pad(self, win_a_norm_d, win_b_norm_d):
@@ -383,10 +373,6 @@ class GPUCorrelation:
         zero_pad(win_b_zp_d, win_b_norm_d, self.fft_size, self.extended_size, s0_b, s1_b,
                  block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
-        # Free GPU memory
-        win_a_norm_d.gpudata.free()
-        win_b_norm_d.gpudata.free()
-
         return win_a_zp_d, win_b_zp_d
 
     def _correlate_windows(self, win_a_zp_d, win_b_zp_d):
@@ -430,14 +416,6 @@ class GPUCorrelation:
         # transfer back to cpu to do FFTshift
         # possible to do this on GPU?
         corr = fftshift(win_i_fft_d.get().real, axes=(1, 2))
-
-        # free gpu memory
-        win_i_fft_d.gpudata.free()
-        win_fft_d.gpudata.free()
-        search_area_fft_d.gpudata.free()
-        tmp_d.gpudata.free()
-        win_a_zp_d.gpudata.free()
-        win_b_zp_d.gpudata.free()
 
         return corr
 
@@ -2033,7 +2011,7 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     index_update(dest_d, values_d, indices_d, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
-def __get_gpu_memory():
+def _get_gpu_memory():
     nvidia_smi.nvmlInit()
     handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
     # card id 0 hardcoded here, there is also a call to get all available card ids, so we could iterate
