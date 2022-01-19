@@ -31,7 +31,7 @@ cu_misc.init()
 
 class GPUCorrelation:
     def __init__(self, frame_a_d, frame_b_d, nfft_x=None):
-        """A class representing a cross correlation function.
+        """A class representing the cross correlation function.
 
         Parameters
         ----------
@@ -60,15 +60,15 @@ class GPUCorrelation:
         self.peak_col = None
         self.frame_shape = DTYPE_i(frame_a_d.shape)
 
-    def __call__(self, window_size, overlap, extended_size=None, d_shift=None, d_strain=None):
+    def __call__(self, window_size, overlap_ratio, extended_size=None, d_shift=None, d_strain=None):
         """Returns the pixel peaks using the specified correlation method.
 
         Parameters
         ----------
         window_size : int
             size of the interrogation window
-        overlap : int
-            pixel overlap between interrogation windows
+        overlap_ratio : float
+            overlap between interrogation windows
         extended_size : int
             extended window size to search in the second frame
         d_shift : GPUArray
@@ -80,18 +80,20 @@ class GPUCorrelation:
         Returns
         -------
         row_sp, col_sp : ndarray
-            3D floqt, locations of the subpixel peaks
+            3D float, locations of the subpixel peaks.
 
         """
         assert window_size >= 8, "Window size is too small."
-        assert window_size % 8 == 0, "Window size should be a multiple of 8."
-        self.window_size = DTYPE_i(window_size)
-        self.overlap = DTYPE_i(overlap)
+        assert window_size % 8 == 0, "Window size must be a multiple of 8."
+        self.window_size = window_size
+        self.overlap_ratio = overlap_ratio
+        self.spacing = self.window_size * overlap_ratio
+        # TODO remove unnecessary type casts
         self.extended_size = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
         self.fft_size = DTYPE_i(self.extended_size * self.nfft)
         # TODO shouldn't call this more than once
-        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap))
-        self.n_windows = DTYPE_i(self.n_rows * self.n_cols)
+        self.n_row, self.n_col = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
+        self.n_windows = self.n_row * self.n_col
 
         # Return stack of all IWs
         win_a_d, win_b_d = self._iw_arrange(self.frame_a_d, self.frame_b_d, d_shift, d_strain)
@@ -113,8 +115,8 @@ class GPUCorrelation:
 
         # TODO this could be GPU array --would be faster?
         # reshape to field window coordinates
-        i_peak = row_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size / 2
-        j_peak = col_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size / 2
+        i_peak = row_sp.reshape((self.n_row, self.n_col)) - self.fft_size / 2
+        j_peak = col_sp.reshape((self.n_row, self.n_col)) - self.fft_size / 2
 
         return i_peak, j_peak
 
@@ -140,7 +142,7 @@ class GPUCorrelation:
         """
         _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
         ht, wd = self.frame_shape
-        spacing = DTYPE_i(self.window_size - self.overlap)
+        spacing = DTYPE_i(self.window_size * self.overlap_ratio)
         diff = DTYPE_i(spacing - self.extended_size / 2)
 
         # create GPU arrays to store the window data
@@ -237,7 +239,7 @@ class GPUCorrelation:
             # use translating windows
             # TODO this might be redundant
             if strain_d is None:
-                strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
+                strain_d = gpuarray.zeros((4, self.n_row, self.n_col), dtype=DTYPE_f)
 
             # factors to apply the symmetric shift
             shift_factor_a = DTYPE_f(-0.5)
@@ -247,19 +249,19 @@ class GPUCorrelation:
             window_slice_deform = mod_ws.get_function("window_slice_deform")
             window_slice_deform(frame_a_d, win_a_d, shift_d, strain_d, shift_factor_a, self.extended_size, spacing,
                                 diff,
-                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
+                                self.n_col, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
             window_slice_deform(frame_b_d, win_b_d, shift_d, strain_d, shift_factor_b, self.extended_size, spacing,
                                 diff,
-                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
+                                self.n_col, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
 
         else:
             # use non-translating windows
             window_slice_deform = mod_ws.get_function("window_slice")
-            window_slice_deform(frame_a_d, win_a_d, self.extended_size, spacing, diff, self.n_cols, wd, ht,
+            window_slice_deform(frame_a_d, win_a_d, self.extended_size, spacing, diff, self.n_col, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(frame_b_d, win_b_d, self.extended_size, spacing, diff, self.n_cols, wd, ht,
+            window_slice_deform(frame_b_d, win_b_d, self.extended_size, spacing, diff, self.n_col, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
         return win_a_d, win_b_d
@@ -586,7 +588,7 @@ class GPUCorrelation:
         sig2noise[np.array(self.peak_row == 0) * np.array(self.peak_row == self.data.shape[1]) * np.array(
             self.peak_col == 0) * np.array(self.peak_col == self.data.shape[2])] = 0.0
 
-        return sig2noise.reshape(self.n_rows, self.n_cols)
+        return sig2noise.reshape(self.n_row, self.n_col)
 
 
 def gpu_extended_search_area(frame_a, frame_b,
@@ -633,7 +635,7 @@ def gpu_extended_search_area(frame_a, frame_b,
         Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
     width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
-    nfftx : int
+    nfft_x : int
         The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Example
@@ -642,7 +644,7 @@ def gpu_extended_search_area(frame_a, frame_b,
 
     """
     # Extract the parameters
-    nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
+    nfft_x = kwargs['nfft_x'] if 'nfft_x' in kwargs else None
     overlap = int(overlap_ratio * window_size)
 
     # cast images as floats and sent to gpu
@@ -650,14 +652,14 @@ def gpu_extended_search_area(frame_a, frame_b,
     frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_i))
 
     # Get correlation function
-    c = GPUCorrelation(frame_a_d, frame_b_d, nfftx)
+    corr = GPUCorrelation(frame_a_d, frame_b_d, nfft_x)
 
     # Get window displacement to subpixel accuracy
-    sp_i, sp_j = c(window_size, overlap, search_area_size)
+    sp_i, sp_j = corr(window_size, overlap_ratio, search_area_size)
 
     # reshape the peaks
-    i_peak = np.reshape(sp_i, (c.n_rows, c.n_cols))
-    j_peak = np.reshape(sp_j, (c.n_rows, c.n_cols))
+    i_peak = np.reshape(sp_i, (corr.n_row, corr.n_col))
+    j_peak = np.reshape(sp_j, (corr.n_row, corr.n_col))
 
     # calculate velocity fields
     u = j_peak / dt
@@ -819,7 +821,7 @@ class PIVGPU:
         Method of signal-to-noise-ratio measurement.
     s2n_width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
-    nfftx : int
+    nfft_x : int
         The size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Attributes
@@ -857,6 +859,7 @@ class PIVGPU:
         dt = DTYPE_f(dt)
         ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
         num_ws = len(ws_iters)
+        self.overlap_ratio = overlap_ratio
         self.dt = dt
         self.deform = deform
         self.smooth = smooth
@@ -869,6 +872,7 @@ class PIVGPU:
             [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for _ in range(ws_iters[i])],
             dtype=DTYPE_i)
 
+        # TODO These are terrible for understanding. Try a dictionary instead.
         # validation method
         self.val_tols = [None, None, None, None]
         val_methods = validation_method if type(validation_method) == str else (validation_method,)
@@ -885,7 +889,7 @@ class PIVGPU:
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
-        self.nfftx = kwargs['nfftx'] if 'nfftx' in kwargs else None
+        self.nfft_x = kwargs['nfft_x'] if 'nfft_x' in kwargs else None
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
         self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
         self.corr = None
@@ -893,17 +897,16 @@ class PIVGPU:
         # TODO reduce the size of this definition
         self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        self.overlap = np.zeros(nb_iter_max, dtype=DTYPE_i)
+        self.spacing = np.zeros(nb_iter_max, dtype=DTYPE_i)
 
         # overlap init
         for K in range(nb_iter_max):
-            self.overlap[K] = int(overlap_ratio * self.ws[K])
+            self.spacing[K] = self.ws[K] - int(self.ws[K] * overlap_ratio)
 
         # n_col and n_row init
         for K in range(nb_iter_max):
-            spacing = self.ws[K] - self.overlap[K]
-            self.n_row[K] = (ht - spacing) // spacing
-            self.n_col[K] = (wd - spacing) // spacing
+            self.n_row[K] = (ht - self.spacing[K]) // self.spacing[K]
+            self.n_col[K] = (wd - self.spacing[K]) // self.spacing[K]
 
         # initialize x and y
         # TODO make a pythonic object to store x, y and mask
@@ -912,16 +915,15 @@ class PIVGPU:
         mask_array = np.zeros([nb_iter_max, self.n_row[nb_iter_max - 1], self.n_col[nb_iter_max - 1]], dtype=DTYPE_f)
 
         for K in range(nb_iter_max):
-            spacing = self.ws[K] - self.overlap[K]
-            x[K, :, 0] = spacing  # init x on first column
-            y[K, 0, :] = spacing  # init y on first row
+            x[K, :, 0] = self.spacing[K]  # init x on first column
+            y[K, 0, :] = self.spacing[K]  # init y on first row
 
             # init x on subsequent columns
             for J in range(1, self.n_col[K]):
-                x[K, :, J] = x[K, 0, J - 1] + spacing
+                x[K, :, J] = x[K, 0, J - 1] + self.spacing[K]
             # init y on subsequent rows
             for I in range(1, self.n_row[K]):
-                y[K, I, :] = y[K, I - 1, 0] + spacing
+                y[K, I, :] = y[K, I - 1, 0] + self.spacing[K]
         self.x = x[-1, :, :]
         self.y = y[-1, ::-1, :]
 
@@ -973,7 +975,7 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # create the correlation object
-        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfftx)
+        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfft_x)
 
         # MAIN LOOP
         for k in range(self.nb_iter_max):
@@ -988,7 +990,7 @@ class PIVGPU:
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # get window displacement to subpixel accuracy
-            i_peak, j_peak = self.corr(self.ws[k], self.overlap[k], extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            i_peak, j_peak = self.corr(self.ws[k], self.overlap_ratio, extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
 
             # update the field with new values
             u_d, v_d = self._update_values(dp_x_d, dp_y_d, mask_d, i_peak, j_peak, k)
@@ -1068,8 +1070,9 @@ class PIVGPU:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, m * n, n_val / (m * n)))
 
                 # TODO can simplify this to not require u_previous
+                overlap = self.ws - self.spacing
                 u_d, v_d = gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
-                                               v_mean_d, k, self.n_row, self.n_col, self.ws, self.overlap)
+                                               v_mean_d, k, self.n_row, self.n_col, self.ws, overlap)
 
                 logging.info('[DONE]\n')
             else:
@@ -1083,7 +1086,6 @@ class PIVGPU:
 
         m, n = dp_x_d.shape
         strain_d = None
-        spacing = self.ws[k] - self.overlap[k]
 
         # compute the shift
         shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
@@ -1092,7 +1094,7 @@ class PIVGPU:
 
         # compute the strain rate
         if self.deform:
-            strain_d = gpu_strain(dp_x_d, dp_y_d, spacing)
+            strain_d = gpu_strain(dp_x_d, dp_y_d, self.spacing[k])
 
         return shift_d, strain_d
 
@@ -1112,10 +1114,11 @@ class PIVGPU:
             # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
             # TODO this should be private class method.
             # TODO this should be refactored to return a consistent sized array
+            overlap = self.ws - self.spacing
             u_d = gpu_interpolate_surroundings(x_d, y_d, u_d, u_next_d, v_list, self.n_row, self.n_col, self.ws,
-                                               self.overlap, k)
+                                               overlap, k)
             v_d = gpu_interpolate_surroundings(x_d, y_d, v_d, v_next_d, v_list, self.n_row, self.n_col, self.ws,
-                                               self.overlap, k)
+                                               overlap, k)
 
         if self.smooth:
             dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
@@ -1183,7 +1186,7 @@ class PIVGPU:
 
 
 # TODO should share arguments with piv_gpu()
-def get_field_shape(image_size, window_size, overlap):
+def get_field_shape(image_size, window_size, overlap_ratio):
     """Returns the shape of the resulting velocity field.
 
     Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
@@ -1195,37 +1198,36 @@ def get_field_shape(image_size, window_size, overlap):
         (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
     window_size : int
         Size of the interrogation windows.
-    overlap : int
-        Number of pixels by which two adjacent interrogation windows overlap.
+    overlap_ratio : float
+        Ratio by which two adjacent interrogation windows overlap.
 
     Returns
     -------
-    field_shape : two elements tuple
-        the shape of the resulting flow field
+    n_row, n_col : int
+        The shape of the resulting flow field.
 
     """
-    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
-    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+    assert window_size >= 8, "Window size is too small."
+    assert window_size % 8 == 0, "Window size must be a multiple of 8."
+    assert 0 < overlap_ratio < 1, 'overlap_ratio must be a float between 0 and 1.'
 
-    spacing = window_size - overlap
+    spacing = window_size * overlap_ratio
     n_row = DTYPE_i((image_size[0] - spacing) // spacing)
     n_col = DTYPE_i((image_size[1] - spacing) // spacing)
     return n_row, n_col
 
 
-def get_field_coords(window_size, overlap, n_row, n_col):
+def get_field_coords(field_shape, window_size, overlap_ratio):
     """Returns the coordinates of the resulting velocity field.
 
     Parameters
     ----------
-    window_size : two elements tuple
-        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
+    field_shape : tuple
+        (n_row, n_col), the shape of the resulting flow field.
     window_size : int
         Size of the interrogation windows.
-    overlap : int
-        Number of pixels by which two adjacent interrogation windows overlap.
-    n_row, n_col : int
-        Number of rows and columns in the final vector field.
+    overlap_ratio : float
+        Ratio by which two adjacent interrogation windows overlap.
 
     Returns
     -------
@@ -1233,10 +1235,12 @@ def get_field_coords(window_size, overlap, n_row, n_col):
         2D float, the shape of the resulting flow field
 
     """
-    assert DTYPE_i(window_size) == window_size, 'window_size must be an integer (passed {})'.format(window_size)
-    assert DTYPE_i(overlap) == overlap, 'window_size must be an integer (passed {})'.format(overlap)
+    assert window_size >= 8, "Window size is too small."
+    assert window_size % 8 == 0, "Window size must be a multiple of 8."
+    assert 0 < overlap_ratio < 1, 'overlap_ratio should be a float between 0 and 1.'
+    n_row, n_col = field_shape
 
-    spacing = window_size - overlap
+    spacing = window_size * overlap_ratio
     x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_col - 1), n_col, dtype=DTYPE_f), (n_row, 1))
     y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_row - 1), n_row, dtype=DTYPE_f),
                 (n_col, 1)).T
