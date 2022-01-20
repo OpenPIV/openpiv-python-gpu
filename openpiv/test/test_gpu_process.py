@@ -1,22 +1,19 @@
-# -*- coding: utf-8 -*-
-
 import os
 import sys
 import numpy as np
 import pytest
+from math import sqrt
+
 import pycuda.gpuarray as gpuarray
-import pycuda.driver as drv
-import openpiv.gpu_process as gpu_process
-import openpiv.gpu_validation as gpu_validation
-from pycuda.compiler import SourceModule
+import pyximport
 from skimage.util import random_noise
 from skimage import img_as_ubyte
 from scipy.ndimage import shift
 from imageio import imread
-from math import sqrt
-from openpiv.smoothn import smoothn
 
-import pyximport
+import openpiv.gpu_process as gpu_process
+import openpiv.gpu_validation as gpu_validation
+from openpiv.smoothn import smoothn
 
 pyximport.install(setup_args={"include_dirs": np.get_include()}, language_level=3)
 import openpiv.gpu_process_old as gpu_process_old
