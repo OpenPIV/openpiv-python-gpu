@@ -6,6 +6,7 @@ from math import sqrt
 
 import pycuda.gpuarray as gpuarray
 import pyximport
+import scipy.interpolate as interp
 from skimage.util import random_noise
 from skimage import img_as_ubyte
 from scipy.ndimage import shift
@@ -114,6 +115,55 @@ def test_gpu_round():
     f_round_gpu = (gpu_process.gpu_round(f_d)).get()
 
     assert np.array_equal(f_round, f_round_gpu)
+
+
+def test_gpu_interpolate():
+    ws0 = 16
+    ws1 = 8
+    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, 0.5)
+    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
+    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, 0.5)
+    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
+
+    f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
+    x0_d = gpuarray.to_gpu(x0[0, :])
+    x1_d = gpuarray.to_gpu(x1[0, :])
+    y0_d = gpuarray.to_gpu(y0[:, 0])
+    y1_d = gpuarray.to_gpu(y1[:, 0])
+
+    interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
+    f1 = np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0)  # interp2d returns interpolation results with increasing y
+
+    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
+    f1_gpu = f1_d.get()
+
+    assert np.allclose(f1, f1_gpu, 0.01)
+
+
+def test_gpu_interpolate_validation():
+    ws0 = 16
+    ws1 = 8
+    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, 0.5)
+    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
+    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, 0.5)
+    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
+
+    f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
+    f1, f1_d = generate_cpu_gpu_pair((n_row1, n_col1))
+    x0_d = gpuarray.to_gpu(x0[0, :])
+    x1_d = gpuarray.to_gpu(x1[0, :])
+    y0_d = gpuarray.to_gpu(y0[:, 0])
+    y1_d = gpuarray.to_gpu(y1[:, 0])
+
+    val_location, val_location_d = generate_cpu_gpu_pair((n_row1, n_col1), magnitude=2, dtype=DTYPE_i)
+
+    interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
+    f1_val = (1 - val_location) * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * val_location  # interp2d returns interpolation results with increasing y
+
+    f1_val_d = gpu_process.gpu_interpolate_surroundings(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_location=val_location)
+    f1_val_gpu = f1_val_d.get()
+
+    assert np.allclose(f1_val, f1_val_gpu, 0.01)
 
 
 # INTEGRATION TESTS
@@ -291,9 +341,9 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
                                                                   str(nb_validation_iter))
 
-    # # x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
     # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
-    #
+
     # # save the results to a numpy file.
     # if not os.path.isdir(_fixture_dir):
     #     os.mkdir(_fixture_dir)

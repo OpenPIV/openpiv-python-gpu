@@ -9,6 +9,7 @@ with GPU. Scalars should be python int type in general to work as function argum
 arguments to GPU kernels should be identified with ending in either _i or _f.
 
 """
+import time
 
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
@@ -53,7 +54,7 @@ class GPUCorrelation:
     """
 
     def __init__(self, frame_a_d, frame_b_d, nfft_x=None):
-        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
+        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_i, dim=2)
         if nfft_x is None:
             self.nfft = 2
         else:
@@ -65,7 +66,7 @@ class GPUCorrelation:
         self.peak_col = None
         self.frame_shape = DTYPE_i(frame_a_d.shape)
 
-    def __call__(self, window_size, overlap_ratio, extended_size=None, d_shift=None, d_strain=None):
+    def __call__(self, window_size, overlap_ratio, extended_size=None, shift_d=None, strain_d=None):
         """Returns the pixel peaks using the specified correlation method.
 
         Parameters
@@ -76,10 +77,10 @@ class GPUCorrelation:
             Overlap between interrogation windows.
         extended_size : int
             Extended window size to search in the second frame.
-        d_shift : GPUArray
+        shift_d : GPUArray
             2D ([dx, dy]), dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
             This is using the x-y convention of this code where x is the row and y is the column.
-        d_strain : GPUArray
+        strain_d : GPUArray
             2D float, strain tensor. First dimension is (u_x, u_y, v_x, v_y).
 
         Returns
@@ -99,7 +100,7 @@ class GPUCorrelation:
         self.n_windows = self.n_rows * self.n_cols
 
         # Return stack of all IWs
-        win_a_d, win_b_d = self._iw_arrange(self.frame_a_d, self.frame_b_d, d_shift, d_strain)
+        win_a_d, win_b_d = self._iw_arrange(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
 
         # normalize array by computing the norm of each IW
         win_a_norm_d, win_b_norm_d = self._normalize_intensity(win_a_d, win_b_d)
@@ -143,7 +144,7 @@ class GPUCorrelation:
             3D float, all interrogation windows stacked on each other.
 
         """
-        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
+        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_b_d.shape, dtype=DTYPE_i, dim=2)
         ht, wd = self.frame_shape
         spacing = DTYPE_i(self.window_size * (1 - self.overlap_ratio))
         diff_extended = DTYPE_i(spacing - self.size_extended / 2)
@@ -992,7 +993,7 @@ class PIVGPU:
                 shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # get window displacement to subpixel accuracy
-            i_peak, j_peak = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size, d_shift=shift_d, d_strain=strain_d)
+            i_peak, j_peak = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size, shift_d=shift_d, strain_d=strain_d)
 
             # update the field with new values
             u_d, v_d = self._update_values(i_peak, j_peak, dp_x_d, dp_y_d, mask_d, k)
@@ -1039,7 +1040,7 @@ class PIVGPU:
 
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
-        _check_inputs(frame_a, frame_b, dim=2)
+        _check_inputs(frame_a, frame_b, shape=frame_a.shape, dim=2)
         if self.im_mask is not None:
             # TODO consider accepting an ndarray into gpu_mask
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_i)), self.im_mask)
@@ -1053,7 +1054,7 @@ class PIVGPU:
     # TODO this should not depend on k
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d, k):
         """Return velocity fields with outliers removed."""
-        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, dim=2)
         m, n = u_d.shape
 
         if self.val_tols[0] is not None and self.nb_validation_iter > 0:
@@ -1071,9 +1072,8 @@ class PIVGPU:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, m * n, n_val / (m * n)))
 
                 # TODO can simplify this to not require u_previous
-                overlap = self.window_size - self.spacing
-                u_d, v_d = gpu_replace_vectors(self.x_d, self.y_d, u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
-                                               v_mean_d, self.n_row, self.n_col, self.window_size, overlap, k, self.x_new_d[k - 1], self.y_new_d[k - 1], self.x_new_d[k], self.y_new_d[k])
+                u_d, v_d = _gpu_replace_vectors(self.x_new_d[k], self.y_new_d[k], self.x_new_d[k - 1], self.y_new_d[k - 1], u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
+                                                v_mean_d, self.n_row, self.n_col, k)
 
                 logging.info('[DONE]\n')
             else:
@@ -1083,16 +1083,16 @@ class PIVGPU:
 
     def _get_corr_arguments(self, dp_x_d, dp_y_d, k):
         """Returns the shift and strain arguments to the correlation class."""
-        _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+        _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, dim=2)
         m, n = dp_x_d.shape
         strain_d = None
 
-        # compute the shift
+        # Compute the shift.
         shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
         shift_d[0, :, :] = dp_x_d
         shift_d[1, :, :] = dp_y_d
 
-        # compute the strain rate
+        # Compute the strain rate.
         if self.deform:
             strain_d = gpu_strain(dp_x_d, dp_y_d, self.spacing[k])
 
@@ -1100,25 +1100,12 @@ class PIVGPU:
 
     def _get_next_iteration_prediction(self, u_d, v_d, k):
         """Returns the velocity field to begin the next iteration."""
-        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
-
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, dim=2)
         # interpolate if dimensions do not agree
         if self.window_size[k + 1] != self.window_size[k]:
-            # TODO can avoid defining these variables?
-            u_next_d = gpuarray.zeros((int(self.n_row[k + 1]), int(self.n_col[k + 1])), dtype=DTYPE_f)
-            v_next_d = gpuarray.zeros((int(self.n_row[k + 1]), int(self.n_col[k + 1])), dtype=DTYPE_f)
-
-            # TODO what is this?
-            v_locations = np.ones((self.n_row[k + 1], self.n_col[k + 1]), dtype=bool)
-
             # interpolate velocity onto next iterations grid. Then use it as the predictor for the next step
-            # TODO this should be private class method.
-            # TODO this should be refactored to return a consistent sized array
-            overlap = self.window_size - self.spacing
-            u_d = gpu_interpolate_surroundings(self.x_d, self.y_d, u_d, u_next_d, v_locations, self.n_row, self.n_col, self.window_size,
-                                               overlap, k, self.x_new_d[k], self.y_new_d[k], self.x_new_d[k + 1], self.y_new_d[k + 1])
-            v_d = gpu_interpolate_surroundings(self.x_d, self.y_d, v_d, v_next_d, v_locations, self.n_row, self.n_col, self.window_size,
-                                               overlap, k, self.x_new_d[k], self.y_new_d[k], self.x_new_d[k + 1], self.y_new_d[k + 1])
+            u_d = gpu_interpolate(self.x_new_d[k][0, :], self.y_new_d[k][:, 0], self.x_new_d[k + 1][0, :], self.y_new_d[k + 1][:, 0], u_d)
+            v_d = gpu_interpolate(self.x_new_d[k][0, :], self.y_new_d[k][:, 0], self.x_new_d[k + 1][0, :], self.y_new_d[k + 1][:, 0], v_d)
 
         if self.smooth:
             dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
@@ -1131,7 +1118,7 @@ class PIVGPU:
 
     def _update_values(self, i_peak, j_peak, dp_x_d, dp_y_d, mask_d, k):
         """Updates the velocity values after each iteration."""
-        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, dim=2)
+        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, shape=i_peak.shape, dim=2)
         if dp_x_d == dp_y_d is None:
             # TODO need variable self.field_shape
             dp_x_d = gpuarray.zeros((int(self.n_row[k]), int(self.n_col[k])), dtype=DTYPE_f)
@@ -1141,7 +1128,7 @@ class PIVGPU:
         size = DTYPE_i(dp_x_d.size)
 
         u_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
-        v_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
+        v_d = gpuarray.empty_like(dp_y_d, dtype=DTYPE_f)
         i_peak_d = gpuarray.to_gpu(i_peak)
         j_peak_d = gpuarray.to_gpu(j_peak)
         # TODO this should be on device already
@@ -1173,7 +1160,7 @@ class PIVGPU:
     @staticmethod
     def _log_residual(i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
-        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, dim=2)
+        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, shape=i_peak.shape, dim=2)
 
         try:
             normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size) / 0.5
@@ -1241,7 +1228,7 @@ def get_field_coords(field_shape, window_size, overlap_ratio):
 
     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
     x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n - 1), n, dtype=DTYPE_f), (m, 1))
-    y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (m - 1), m, dtype=DTYPE_f), (n, 1)).T
+    y = np.tile(np.linspace(window_size / 2 + spacing * (m - 1), window_size / 2, m, dtype=DTYPE_f), (n, 1)).T
 
     return x, y
 
@@ -1262,7 +1249,7 @@ def gpu_mask(frame_d, mask_d):
         2D int, masked frame.
 
     """
-    _check_inputs(frame_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, dim=2)
+    _check_inputs(frame_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=frame_d.shape, dim=2)
 
     size = DTYPE_f(frame_d.size)
     m, n = frame_d.shape
@@ -1304,7 +1291,7 @@ def gpu_strain(u_d, v_d, spacing=1):
         3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
-    _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f)
     assert spacing > 0, 'Spacing must be greater than 0.'
 
     m, n = u_d.shape
@@ -1370,7 +1357,7 @@ def gpu_round(f_d):
     Returns
     -------
     GPUArray
-        Float, same size as f_d. Floored values of f_d.
+        Float, same size as f_d. Rounded values of f_d.
 
     """
     assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
@@ -1420,20 +1407,23 @@ def gpu_smooth(f_d, s=0.5):
     assert s > 0, 'Smoothing parameter must be greater than 0.'
 
     f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f))
+    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn return F-ordered array.
 
     return f_smooth_d
 
 
 # TODO this shouldn't depend on k, or else there should be a public version which doesn't
-def gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, validation_list, u_mean_d, v_mean_d, n_row,
-                        n_col, w, overlap, k, x0_new_d, y0_new_d, x1_new_d, y1_new_d):
+# TODO do multiple replacement methods actually improve results?
+def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, validation_list, u_mean_d, v_mean_d, n_row,
+                         n_col, k):
     """Replace spurious vectors by the mean or median of the surrounding points.
 
     Parameters
     ----------
-    x_d, y_d : GPUArray
-        3D float, grid coordinates.
+    x0_d, y0_d : GPUArray
+        3D float, grid coordinates of previous iteration.
+    x1_d, y1_d : GPUArray
+        3D float, grid coordinates of current iteration.
     u_d, v_d : GPUArray
         2D float, velocities at current iteration.
     u_previous_d, v_previous_d
@@ -1444,85 +1434,81 @@ def gpu_replace_vectors(x_d, y_d, u_d, v_d, u_previous_d, v_previous_d, validati
         3D float, mean velocity surrounding each point.
     n_row, n_col : ndarray
         int, number of rows and columns in each main loop iteration.
-    w : ndarray
-        int, pixels between interrogation windows.
-    overlap : ndarray
-        int, ratio of overlap between interrogation windows.
     k : int
         Main loop iteration count.
 
     """
-    # TODO refactor validation_location to be more clear
-    # change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation
-    validation_location = np.invert(validation_list.astype(bool))
+    # TODO refactor val_locations to be more clear
+    # Change validation_list to type boolean and invert it. Now - True indicates that point needs to be validated, False indicates no validation.
+    val_locations = np.invert(validation_list.astype(bool))
 
-    # first iteration, just replace with mean velocity
+    # First iteration, just replace with mean velocity.
     if k == 0:
-        # get indices and send them to the gpu
-        indices = np.where(validation_location.flatten() == 1)[0].astype(DTYPE_i)
+        # Get indices and send them to the gpu.
+        indices = np.where(val_locations.flatten() == 1)[0].astype(DTYPE_i)
         indices_d = gpuarray.to_gpu(indices)
 
-        # get mean velocity at validation points
+        # Get mean velocity at validation points.
         u_tmp_d = _gpu_array_index(u_mean_d, indices_d, DTYPE_f)
         v_tmp_d = _gpu_array_index(v_mean_d, indices_d, DTYPE_f)
 
-        # update the velocity values
-        # TODO copy() in wrong scope
+        # Update the velocity values.
         _gpu_index_update(u_d, u_tmp_d, indices_d)
         _gpu_index_update(v_d, v_tmp_d, indices_d)
 
-        # you don't need to do all these calculations. Could write a function that only does it for the ones that have been validated
-
-    # case if different dimensions: interpolation using previous iteration
+    # Case if different dimensions: interpolation using previous iteration.
     elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
-        # TODO this should be private class method.
-        # TODO this should be refactored to return a consistent sized array
-        # TODO this functions needs to be split--it currently does both interpolation and vector replacement
-        u_d = gpu_interpolate_surroundings(x_d, y_d, u_previous_d, u_d, validation_location, n_row, n_col, w, overlap,
-                                           k - 1, x0_new_d, y0_new_d, x1_new_d, y1_new_d)
-        v_d = gpu_interpolate_surroundings(x_d, y_d, v_previous_d, v_d, validation_location, n_row, n_col, w, overlap,
-                                           k - 1, x0_new_d, y0_new_d, x1_new_d, y1_new_d)
+        # TODO can avoid slicing here
+        u_d = gpu_interpolate_surroundings(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], u_previous_d, u_d, val_location=val_locations.astype(DTYPE_i))
+        v_d = gpu_interpolate_surroundings(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], v_previous_d, v_d, val_location=val_locations.astype(DTYPE_i))
 
-    # case if same dimensions
+    # Case if same dimensions.
     elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
-        # get indices and send them to the gpu
-        indices = np.where(validation_location.flatten() == 1)[0].astype(DTYPE_i)
+        # Get indices and send them to the gpu.
+        indices = np.where(val_locations.flatten() == 1)[0].astype(DTYPE_i)
         indices_d = gpuarray.to_gpu(indices)
 
-        # update the velocity values with the previous values.
+        # Update the velocity values with the previous values.
         # This is essentially a bilinear interpolation when the value is right on top of the other.
-        # could replace with the mean of the previous values surrounding the point
-        # TODO copy() in wrong scope
+        # Could replace with the mean of the previous values surrounding the point.
         u_tmp_d = _gpu_array_index(u_previous_d, indices_d, DTYPE_f)
         v_tmp_d = _gpu_array_index(v_previous_d, indices_d, DTYPE_f)
         _gpu_index_update(u_d, u_tmp_d, indices_d)
         _gpu_index_update(v_d, v_tmp_d, indices_d)
 
+    # # Get indices and send them to the gpu.
+    # indices = np.where(val_locations.flatten() == 1)[0].astype(DTYPE_i)
+    # indices_d = gpuarray.to_gpu(indices)
+    #
+    # # Get mean velocity at validation points.
+    # u_tmp_d = _gpu_array_index(u_mean_d, indices_d, DTYPE_f)
+    # v_tmp_d = _gpu_array_index(v_mean_d, indices_d, DTYPE_f)
+    #
+    # # Update the velocity values.
+    # _gpu_index_update(u_d, u_tmp_d, indices_d)
+    # _gpu_index_update(v_d, v_tmp_d, indices_d)
+
     return u_d, v_d
 
 
-# TODO this shouldn't depend on k
-def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n_col, window_size, overlap, k, x0_new_d, y0_new_d, x1_new_d, y1_new_d):
-    """Interpolate points from their surroundings.
+# TODO is this function faster than GPU for high/low numbers of validation points.
+def gpu_interpolate_surroundings(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_location=None):
+    """Performs an interpolation of a field from one mesh to another.
 
-    Separate validation list into multiple lists for each region before doing the interpolation
+    The implementation requires that the mesh spacing is uniform. The spacing can be different in x and y directions.
 
     Parameters
     ----------
-    x_d, y_d : GPUArray
-        3D float, grid coordinates.
-    f_d, f_new_d : GPUArray
-        2D float, data to be interpolated.
-    val_locations : ndarray
-        2D bool, indicates which values must be validated. True means validate.
-    n_row, n_col : ndarray
-        1D, number rows and columns in each iteration.
-    window_size : ndarray
-       int, size of interrogation windows.
-    overlap : ndarray
-        int, overlap of the interrogation windows.
-    k : int
-        Current iteration count.
+    x0_d, y0_d : GPUArray
+        1D float, grid coordinates of the original field
+    x1_d, y1_d : GPUArray
+        1D float, grid coordinates of the field to be interpolated.
+    f0_d : GPUArray
+        2D float, field to be interpolated.
+    f1_d : GPUArray
+        2D float, field to be validated
+    val_location : GPUArray
+        Locations where the interpolation is to be done. True means interpolate.
 
     Returns
     -------
@@ -1530,487 +1516,99 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
         2D float, interpolated field.
 
     """
-    interior_ind_x_d = None
-    interior_ind_y_d = None
-    interior_ind_d = None
-    top_ind_d = None
-    bottom_ind_d = None
-    left_ind_d = None
-    right_ind_d = None
-    x0_axis = x0_new_d[:, 0].copy()
-    y0_axis = y0_new_d[0, :].copy()
-    x1_axis = x1_new_d[:, 0].copy()
-    y1_axis = y1_new_d[0, :].copy()
-    x_axes = x_d[k:k + 2, :, 0].copy()
-    y_axes = y_d[k:k + 2, 0, :].copy()
-    # Set all sides to false for interior points.
-    interior_list = val_locations.copy()
-    interior_list[0, :] = 0
-    interior_list[-1, :] = 0
-    interior_list[:, 0] = 0
-    interior_list[:, -1] = 0
+    f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
 
-    # Define array with the indices of the points to be validated.
-    interior_ind = np.where(interior_list.flatten())[0].astype(DTYPE_i)
-    if interior_ind.size != 0:
-        # Get the x and y indices of the interior points that must be validated.
-        interior_ind_x = interior_ind // n_col[k + 1]
-        interior_ind_y = interior_ind % n_col[k + 1]
-        interior_ind_x_d = gpuarray.to_gpu(interior_ind_x)
-        interior_ind_y_d = gpuarray.to_gpu(interior_ind_y)
+    if val_location is not None:
+        _check_inputs(val_location, array_type=np.ndarray, dtype=DTYPE_i, shape=f1_d.shape, dim=2)
+        val_location_d = gpuarray.to_gpu(val_location)
+        val_location_invert_d = gpuarray.to_gpu((1 - val_location))
+        f1_tmp_d = cu_misc.multiply(f1_d, val_location_invert_d).astype(DTYPE_f)
+        f1_val_d = cu_misc.multiply(f1_val_d, val_location_d).astype(DTYPE_f)
+        f1_val_d = cu_misc.add(f1_tmp_d, f1_val_d).astype(DTYPE_f)
 
-        # Use this to update the final d_F array after the interpolation.
-        interior_ind_d = gpuarray.to_gpu(interior_ind)
-
-    # Only select sides and remove corners.
-    top_list = val_locations[0, :].copy()
-    top_list[0] = 0
-    top_list[-1] = 0
-    top_ind = np.where(top_list.flatten())[0].astype(DTYPE_i)
-    if top_ind.size != 0:
-        top_ind_d = gpuarray.to_gpu(top_ind)
-
-    bottom_list = val_locations[-1, :].copy()
-    bottom_list[0] = 0
-    bottom_list[-1] = 0
-    bottom_ind = np.where(bottom_list.flatten())[0].astype(DTYPE_i)
-    if bottom_ind.size != 0:
-        bottom_ind_d = gpuarray.to_gpu(bottom_ind)
-
-    left_list = val_locations[:, 0].copy()
-    left_list[0] = 0
-    left_list[-1] = 0
-    left_ind = np.where(left_list.flatten())[0].astype(DTYPE_i)
-    if left_ind.size != 0:
-        left_ind_d = gpuarray.to_gpu(left_ind)
-
-    right_list = val_locations[:, -1].copy()
-    right_list[0] = 0
-    right_list[-1] = 0
-    right_ind = np.where(right_list.flatten())[0].astype(DTYPE_i)
-    if right_ind.size != 0:
-        right_ind_d = gpuarray.to_gpu(right_ind)
-
-    # --------------------------INTERIOR GRID---------------------------------
-    if interior_ind.size != 0:
-        # Get gpu data for position now.
-        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, 'x_axis', interior_ind_x_d, window_size, overlap, n_row, n_col, k)
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', interior_ind_y_d, window_size, overlap, n_row, n_col, k)
-
-        # Get indices surrounding the position now.
-        x1_d = _gpu_array_index(x0_axis, low_x_d, DTYPE_f)
-        x2_d = _gpu_array_index(x0_axis, high_x_d, DTYPE_f)
-        y1_d = _gpu_array_index(y0_axis, low_y_d, DTYPE_f)
-        y2_d = _gpu_array_index(y0_axis, high_y_d, DTYPE_f)
-        x_c_d = _gpu_array_index(x1_axis, interior_ind_x_d, DTYPE_f)
-        y_c_d = _gpu_array_index(y1_axis, interior_ind_y_d, DTYPE_f)
-
-        # Get indices for the function values at each spot surrounding the validation points.
-        f1_ind_d = low_x_d * n_col[k] + low_y_d
-        f2_ind_d = low_x_d * n_col[k] + high_y_d
-        f3_ind_d = high_x_d * n_col[k] + low_y_d
-        f4_ind_d = high_x_d * n_col[k] + high_y_d
-
-        # Return the values of the function surrounding the validation point.
-        f1_d = _gpu_array_index(f_d, f1_ind_d, DTYPE_f)
-        f2_d = _gpu_array_index(f_d, f2_ind_d, DTYPE_f)
-        f3_d = _gpu_array_index(f_d, f3_ind_d, DTYPE_f)
-        f4_d = _gpu_array_index(f_d, f4_ind_d, DTYPE_f)
-
-        # Do interpolation.
-        interior_bilinear_d = _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_c_d, y_c_d, f1_d, f2_d, f3_d, f4_d)
-
-        # Update values.
-        ib_tmp_d = f_new_d.copy()
-        _gpu_index_update(ib_tmp_d, interior_bilinear_d, interior_ind_d)
-        f_new_d[:] = ib_tmp_d
-
-    # ------------------------------SIDES-----------------------------------
-    # LEFT
-    if left_ind.size > 0:
-        # Get position data.
-        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, 'x_axis', left_ind_d, window_size, overlap, n_row, n_col, k)
-
-        # Get values to compute interpolation.
-        x1_d = _gpu_array_index(x0_axis, low_x_d, DTYPE_f)
-        x2_d = _gpu_array_index(x0_axis, high_x_d, DTYPE_f)
-        x_c_d = _gpu_array_index(x1_axis, left_ind_d, DTYPE_f)
-
-        # Return the values of the function surrounding the validation point.
-        f_left_d = f_d[:, 0].copy()
-        f1_d = _gpu_array_index(f_left_d, low_x_d, DTYPE_f)
-        f2_d = _gpu_array_index(f_left_d, high_x_d, DTYPE_f)
-
-        # Do interpolation.
-        left_linear_d = linear_interp_gpu(x1_d, x2_d, x_c_d, f1_d, f2_d)
-
-        # Update values.
-        ll_tmp_d = f_new_d[:, 0].copy()
-        _gpu_index_update(ll_tmp_d, left_linear_d, left_ind_d)
-        f_new_d[:, 0] = ll_tmp_d
-
-    # RIGHT
-    if right_ind.size > 0:
-        # Get position data.
-        low_x_d, high_x_d = _f_dichotomy_gpu(y_axes, 'x_axis', right_ind_d, window_size, overlap, n_row, n_col, k)
-
-        # Get values to compute interpolation.
-        x1_d = _gpu_array_index(x_d[k, :, int(n_col[k] - 1)].copy(), low_x_d, DTYPE_f)
-        x2_d = _gpu_array_index(x_d[k, :, int(n_col[k] - 1)].copy(), high_x_d, DTYPE_f)
-        x_c_d = _gpu_array_index(x_d[k + 1, :, int(n_col[k + 1] - 1)].copy(), right_ind_d, DTYPE_f)
-
-        # Return the values of the function surrounding the validation point.
-        f_right_d = f_d[:, -1].copy()
-        f1_d = _gpu_array_index(f_right_d, low_x_d, DTYPE_f)
-        f2_d = _gpu_array_index(f_right_d, high_x_d, DTYPE_f)
-
-        # Do interpolation.
-        right_linear_d = linear_interp_gpu(x1_d, x2_d, x_c_d, f1_d, f2_d)
-
-        # Update values.
-        tmp_rl_d = f_new_d[:, -1].copy()
-        _gpu_index_update(tmp_rl_d, right_linear_d, right_ind_d)
-        f_new_d[:, -1] = tmp_rl_d
-
-    if top_ind.size > 0:
-        # Get now position and surrounding points.
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', top_ind_d, window_size, overlap, n_row, n_col, k)
-
-        # Get values to compute interpolation.
-        y1_d = _gpu_array_index(y0_axis, low_y_d, DTYPE_f)
-        y2_d = _gpu_array_index(y0_axis, high_y_d, DTYPE_f)
-        y_c_d = _gpu_array_index(y1_axis, top_ind_d, DTYPE_f)
-
-        # return the values of the function surrounding the validation point.
-        f_top_d = f_d[0, :].copy()
-        f1_d = _gpu_array_index(f_top_d, low_y_d, DTYPE_f)
-        f2_d = _gpu_array_index(f_top_d, high_y_d, DTYPE_f)
-
-        # Do interpolation.
-        top_linear_d = linear_interp_gpu(y1_d, y2_d, y_c_d, f1_d, f2_d)
-
-        # Update values.
-        tmp_tl_d = f_new_d[0, :].copy()
-        _gpu_index_update(tmp_tl_d, top_linear_d, top_ind_d)
-        f_new_d[0, :] = tmp_tl_d
-
-    # BOTTOM
-    if bottom_ind.size > 0:
-        # Get position data.
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', bottom_ind_d, window_size, overlap, n_row, n_col, k)
-
-        # Get values to compute interpolation
-        y1_d = _gpu_array_index(y_d[k, int(n_row[k] - 1), :].copy(), low_y_d, DTYPE_f)
-        y2_d = _gpu_array_index(y_d[k, int(n_row[k] - 1), :].copy(), high_y_d, DTYPE_f)
-        y_c_d = _gpu_array_index(y_d[k + 1, int(n_row[k + 1] - 1), :].copy(), bottom_ind_d, DTYPE_f)
-
-        # Return the values of the function surrounding the validation point.
-        f_bottom_d = f_d[-1, :].copy()
-        f1_d = _gpu_array_index(f_bottom_d, low_y_d, DTYPE_f)
-        f2_d = _gpu_array_index(f_bottom_d, high_y_d, DTYPE_f)
-
-        # Do interpolation
-        bottom_linear_d = linear_interp_gpu(y1_d, y2_d, y_c_d, f1_d, f2_d)
-
-        # Update values.
-        bl_tmp_d = f_new_d[-1, :].copy()
-        _gpu_index_update(bl_tmp_d, bottom_linear_d, bottom_ind_d)
-        f_new_d[-1, :] = bl_tmp_d
-
-    # ----------------------------CORNERS-----------------------------------
-    # Top left.
-    if val_locations[0, 0] == 1:
-        f_new_d[0, 0] = f_d[0, 0]
-    # Top right.
-    if val_locations[0, n_col[k + 1] - 1] == 1:
-        f_new_d[0, -1] = f_d[0, -1]
-    # Bottom left.
-    if val_locations[n_row[k + 1] - 1, 0] == 1:
-        f_new_d[-1, 0] = f_d[-1, 0]
-    # Bottom right.
-    if val_locations[n_row[k + 1] - 1, n_col[k + 1] - 1] == 1:
-        f_new_d[-1, -1] = f_d[-1, int(n_col[k] - 1)]
-
-    return f_new_d
+    return f1_val_d
 
 
-def _f_dichotomy_gpu(range_d, side, pos_index_d, window_sizes, overlap, n_row, n_col, k):
-    """Look for the position of the vectors at the previous iteration that surround the current point in the frame
-    you want to validate. Returns the low and high index of the points from the previous iteration on either side of
-    the point in the current iteration that needs to be validated.
+def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
+    """Performs an interpolation of a field from one mesh to another.
+
+    The implementation requires that the mesh spacing is uniform. The spacing can be different in x and y directions.
 
     Parameters
     ----------
-    range_d : GPUArray
-        2D float, x or y locations along the grid for the current and next iteration.
-        Example:
-        For side = x_axis then the input looks like range_d = x_d[K:K+2, :, 0].copy()
-        For side = y_axis then the input looks like range_d = y_d[K:K+2, 0, :].copy()
-    side : string
-        Axis of interest : can be either 'x_axis' or 'y_axis'.
-    pos_index_d : GPUArray
-        1D int, index of the point in the frame you want to validate (along the axis 'side').
-    window_sizes : ndarray
-        1D int, window sizes.
-    overlap : ndarray
-        1D int, overlap in number of pixels.
-    n_row, n_col : ndarray
-        1D int, number of rows and columns in the F dataset in each iteration.
-    k : int
-        Iteration you want to use to validate. Typically, the previous iteration from the
-        one that the code is in now. (1st index for F).
+    x0_d, y0_d : GPUArray
+        1D float, grid coordinates of the original field
+    x1_d, y1_d : GPUArray
+        1D float, grid coordinates of the field to be interpolated.
+    f0_d : GPUArray
+        2D float, field to be interpolated.
 
     Returns
     -------
-    low_d, high_d : GPUArray
-        1D int, smallest/largest index at the iteration K along the 'side' axis so that the position of index low in the frame is less/greater than or equal to pos_now.
+    GPUArray
+        2D float, interpolated field.
 
     """
-    assert side == 'x_axis' or side == 'y_axis', 'Not a proper axis. Choose either x or y axis.'
-    ws_a = DTYPE_f(window_sizes[k + 1])
-    ws_b = DTYPE_f(window_sizes[k])
-    n_points = DTYPE_i(pos_index_d.size)
-    n_row = DTYPE_i(n_row)
-    n_col = DTYPE_i(n_col)
+    _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
+    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 
-    low_d = gpuarray.zeros_like(pos_index_d, dtype=DTYPE_i)
-    high_d = gpuarray.zeros_like(pos_index_d, dtype=DTYPE_i)
+    ht_i = DTYPE_i(y0_d.size)
+    wd_i = DTYPE_i(x0_d.size)
+    n = x1_d.size
+    m = y1_d.size
+    size_i = DTYPE_i(m * n)
 
-    mod_f_dichotomy = SourceModule("""
-    __global__ void f_dichotomy_x(int *low, int *high, float *x, int *pos_index, float ws_a, float ws_b, float dx_a, float dx_b, int n_row, int n_row_max, int n_points)
+    f1_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+
+    # Calculate the relationship between the two grid coordinates.
+    buffer_x_f = DTYPE_f((x0_d[0]).get())
+    buffer_y_f = DTYPE_f((y0_d[0]).get())
+    # TODO this can't handle negatives
+    spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
+    spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
+
+    mod_interpolate = SourceModule("""
+        __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x, float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
     {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= n_points){return;}
-
-        // initial guess for low and high values
-        low[t_idx] = (int)floorf((ws_a / 2. - ws_b / 2. + pos_index[t_idx] * dx_a) / dx_b);
-        high[t_idx] = low[t_idx] + 1 * (x[n_row_max + pos_index[t_idx]] != x[low[t_idx]]);
-
-        // if lower than lowest
-        low[t_idx] = low[t_idx] * (low[t_idx] >= 0);
-        high[t_idx] = high[t_idx] * (low[t_idx] >= 0);
-
-        // if higher than highest
-        low[t_idx] = low[t_idx] + (n_row - 1 - low[t_idx]) * (high[t_idx] > n_row - 1);
-        high[t_idx] = high[t_idx] + (n_row - 1 - high[t_idx]) * (high[t_idx] > n_row - 1);
-    }
-
-    __global__ void f_dichotomy_y(int *low, int *high, float *y, int *pos_index, float ws_a, float ws_b, float dy_a, float dy_b, int n_col, int n_col_max, int n_points)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= n_points){return;}
-
-        low[t_idx] = (int)floorf((ws_a / 2. - ws_b / 2. + pos_index[t_idx] * dy_a) / dy_b);
-        high[t_idx] = low[t_idx] + 1 * (y[n_col_max + pos_index[t_idx]] != y[low[t_idx]]);
-
-        // if lower than lowest
-        low[t_idx] = low[t_idx] * (low[t_idx] >= 0);
-        high[t_idx] = high[t_idx] * (low[t_idx] >= 0);
-
-        // if higher than highest
-        low[t_idx] = low[t_idx] + (n_col - 1 - low[t_idx]) * (high[t_idx] > n_col - 1);
-        high[t_idx] = high[t_idx] + (n_col - 1 - high[t_idx]) * (high[t_idx] > n_col - 1);
-    }
-    """)
-    block_size = 32
-    x_blocks = int(len(pos_index_d) // block_size + 1)
-
-    if side == 'x_axis':
-        assert pos_index_d[-1].get() < n_row[
-            k + 1], 'Position index for validation point is outside the grid. Not possible - all points should be on ' \
-                    'the grid. '
-        dx_a = DTYPE_f(ws_a - overlap[k + 1])
-        dx_b = DTYPE_f(ws_b - overlap[k])
-
-        f_dichotomy_x = mod_f_dichotomy.get_function("f_dichotomy_x")
-        f_dichotomy_x(low_d, high_d, range_d, pos_index_d, ws_a, ws_b, dx_a, dx_b, n_row[k], n_row[-1], n_points,
-                      block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    elif side == "y_axis":
-        assert pos_index_d[-1].get() < n_col[
-            k + 1], 'Position index for validation point is outside the grid. Not possible - all points should be on ' \
-                    'the grid. '
-        dy_a = DTYPE_f(ws_a - overlap[k + 1])
-        dy_b = DTYPE_f(ws_b - overlap[k])
-
-        f_dichotomy_y = mod_f_dichotomy.get_function('f_dichotomy_y')
-        f_dichotomy_y(low_d, high_d, range_d, pos_index_d, ws_a, ws_b, dy_a, dy_b, n_col[k], n_col[-1], n_points,
-                      block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return low_d, high_d
-
-
-# TODO is this function faster than GPU for high/low numbers of validation points.
-# def gpu_interpolation(x0_d, y0_d, x1_d, y1_d, f0_d, val_location=None):
-#     """Performs an interpolation of a field from one mesh to another.
-#
-#     Parameters
-#     ----------
-#     x0_d, y0_d : GPUArray
-#         1D float, grid coordinates of the original field
-#     x1_d, y1_d : GPUArray
-#         1D float, grid coordinates of the field to be interpolated.
-#     f0_d : GPUArray
-#         2D float, field to be interpolated.
-#     val_location : GPUArray
-#         Locations where the interpolation is to be done. True means interpolate.
-#
-#     Returns
-#     -------
-#     GPUArray
-#         2D float, interpolated field.
-#
-#     """
-#     _check_inputs(x0_d, y0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
-#     _check_inputs(x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
-#     _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
-#     if val_location is not None:
-#         _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f0_d.shape, dim=2)
-#     n = x1_d.size
-#     m = y1_d.size
-#     size_i = DTYPE_i(m * n)
-#
-#     f1_d = gpuarray.empty_like((m, n), dtype=DTYPE_f)
-#
-#     # TODO this is being done already in the main loop?--check performance impact
-#     # Calculate the relationship between the two grid coordinates
-#     spacing_x0 = x0_d[1] - x0_d[0]
-#     spacing_x1 = x1_d[1] - x1_d[0]
-#     spacing_y0 = y0_d[1] - y0_d[0]
-#     spacing_y1 = y1_d[1] - y1_d[0]
-#
-#     # TODO test this step vs GPU
-#     buffer_diff_x = x0_d[0] - x1_d[0]
-#     buffer_diff_y = y0_d[0] - y1_d[0]
-#     x1_low = (x1_d.get() - buffer_diff_x) // spacing_x0
-#     x1_high = x1_low + 1
-#     y1_low = (y1_d.get() - buffer_diff_y) // spacing_y0
-#     y1_high = y1_low + 1
-#
-#     mod_interpolate = SourceModule("""
-#         __global__ void bilinear_interpolation(float *output, int *input, float *shift, float *strain, float f, int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
-#     {
-#         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-#         if(idx >= size){return;}
-#
-#         // compute the window vector
-#         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-#         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
-#
-#         // apply deformation operation
-#         float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-#         float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
-#
-#         // do the mapping
-#         float x = (idx_i % n_col) * spacing + diff_extended;
-#         float y = (idx_i / n_col) * spacing + diff_extended;
-#
-#         // do bilinear interpolation
-#         int x1 = floorf(x);
-#         int x2 = x1 + 1;
-#         int y1 = floorf(y);
-#         int y2 = y1 + 1;
-#
-#         // find limits of domain
-#         int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-#
-#         // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
-#         float f11 = input[(y1 * wd + x1) * outside_range];
-#         float f21 = input[(y1 * wd + x2) * outside_range];
-#         float f12 = input[(y2 * wd + x1) * outside_range];
-#         float f22 = input[(y2 * wd + x2) * outside_range];
-#
-#         // indices of image to map to
-#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-#
-#         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-#         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
-#     }
-#     """)
-#     block_size = 32
-#     x_blocks = int(size_i // block_size + 1)
-#     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
-#     interpolate_gpu(f_round_d, f_d, spacing_x, spacing_y, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
-#
-#     if val_location is not None:
-#         f1_d = cu_misc.multiply(f1_d, val_location)
-#
-#     return f1_d
-
-
-def _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d):
-    """Performs bilinear interpolation on the GPU."""
-    size_i = DTYPE_i(x1_d.size)
-
-    f_d = gpuarray.empty_like(x1_d, dtype=DTYPE_f)
-
-    mod_bi = SourceModule("""
-    __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int size)
-    {
-        // 1D grid of 1D blocks
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_idx >= size){return;}
 
-        // avoid the points that are equal to each other
+        // Map indices to old mesh coordinates.
+        int x_idx = (t_idx % n);
+        int y_idx = (t_idx / n);
+        float x = (x_grid[x_idx] - buffer_x) / spacing_x;
+        float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+        
+        // Find limits of domain.
+        int inside_left = x >= 0;
+        int inside_right = x < wd - 1;
+        int inside_top = y >= 0;
+        int inside_bottom = y < ht - 1;
+        x = x * inside_left * inside_right + (1 - inside_right) * (wd - 1);
+        y = y * inside_top * inside_bottom + (1 - inside_bottom) * (ht - 1);
+        
+        // Do bilinear interpolation.
+        int x1 = floorf(x - (1 - inside_right));
+        int x2 = x1 + 1;
+        int y1 = floorf(y - (1 - inside_bottom));
+        int y2 = y1 + 1;
 
-        float n1 = f1[t_idx] * (x2[t_idx] - x[t_idx]) * (y2[t_idx] - y[t_idx]);
-        n1 = n1 * (float)(y1[t_idx] != y2[t_idx]) + f1[t_idx] * (float)(y1[t_idx] == y2[t_idx]) * (x2[t_idx] - x[t_idx]);
-        n1 = n1 * (float)(x1[t_idx] != x2[t_idx]) + f1[t_idx] * (float)(x1[t_idx] == x2[t_idx]) * (y2[t_idx] - y[t_idx]);
-        n1 = n1 * (float)((y1[t_idx] != y2[t_idx]) || (x1[t_idx] != x2[t_idx])) + f1[t_idx] * (float)((y1[t_idx] == y2[t_idx]) && (x1[t_idx] == x2[t_idx]));
+        // Terms of the bilinear interpolation. Multiply by outside_range to avoid index error.
+        float f11 = f0[(y1 * wd + x1)];
+        float f21 = f0[(y1 * wd + x2)];
+        float f12 = f0[(y2 * wd + x1)];
+        float f22 = f0[(y2 * wd + x2)];
 
-        float n2 = f2[t_idx] * (x2[t_idx] - x[t_idx]) * (y[t_idx] - y1[t_idx]);
-        n2 = n2 * (float)(x1[t_idx] != x2[t_idx]) + f2[t_idx] * (float)(x1[t_idx] == x2[t_idx]) * (y[t_idx] - y1[t_idx]);
-        n2 = n2 * (float)(y1[t_idx] != y2[t_idx]);
-
-        float n3 = f3[t_idx] * (x[t_idx] - x1[t_idx]) * (y2[t_idx] - y[t_idx]);
-        n3 = n3 * (float)(y1[t_idx] != y2[t_idx]) + f3[t_idx] * (float)(y1[t_idx] == y2[t_idx]) * (x[t_idx] - x1[t_idx]);
-        n3 = n3 * (float)(x1[t_idx] != x2[t_idx]) * (x1[t_idx] != x2[t_idx]);
-
-        float n4 = f4[t_idx] * (x[t_idx] - x1[t_idx]) * (y[t_idx] - y1[t_idx]);
-        n4 = n4 * (float)(y1[t_idx] != y2[t_idx]) * (float)(x1[t_idx] != x2[t_idx]);
-
-        float numerator = n1 + n2 + n3 + n4;
-
-        float denominator = (x2[t_idx] - x1[t_idx]) * (y2[t_idx] - y1[t_idx]);
-        denominator = denominator * (float)(x1[t_idx] != x2[t_idx]) + (y2[t_idx] - y1[t_idx]) * (float)(x1[t_idx] == x2[t_idx]);
-        denominator = denominator * (float)(y1[t_idx] != y2[t_idx]) + (x2[t_idx] - x1[t_idx]) * (float)(y1[t_idx] == y2[t_idx]);
-        denominator = denominator * (float)((y1[t_idx] != y2[t_idx]) || (x1[t_idx] != x2[t_idx])) + 1.0 * (float)((y1[t_idx] == y2[t_idx]) && (x1[t_idx] == x2[t_idx]));
-
-        f[t_idx] = numerator / denominator;
+        // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+        f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1);
     }
     """)
     block_size = 32
     x_blocks = int(size_i // block_size + 1)
-    bilinear_interp = mod_bi.get_function('bilinear_interp')
-    bilinear_interp(f_d, x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d, size_i, block=(block_size, 1, 1),
-                    grid=(x_blocks, 1))
+    interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
+    interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i, DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return f_d
-
-
-def linear_interp_gpu(x1_d, x2_d, x_d, f1_d, f2_d):
-    """Returns the linear interpolation between two points."""
-    size_i = DTYPE_i(x1_d.size)
-
-    f_d = gpuarray.zeros_like(x1_d, dtype=DTYPE_f)
-
-    mod_lin = SourceModule("""
-    __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int size)
-    {
-        // 1D grid of 1D blocks
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if(idx >= size){return;}
-
-        float tmp = ((x2[idx]-x[idx])/(x2[idx]-x1[idx]))*f1[idx] + ((x[idx]-x1[idx])/(x2[idx]-x1[idx]))*f2[idx];
-        f[idx] = tmp * (float)(x2[idx] != x1[idx]) + f1[idx]*(float)(x2[idx] == x1[idx]) ;
-    }
-    """)
-    block_size = 32
-    x_blocks = int(size_i // block_size + 1)
-    linear_interp = mod_lin.get_function('linear_interp')
-    linear_interp(f_d, x1_d, x2_d, x_d, f1_d, f2_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return f_d
+    return f1_d
 
 
 def _gpu_array_index(array_d, indices, dtype):
@@ -2120,17 +1718,11 @@ def _get_gpu_memory():
 
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
-    first_array = arrays[0]
-    if array_type is None:
-        array_type = type(first_array)
-    if dtype is None:
-        dtype = first_array.dtype
-    if shape is None:
-        shape = first_array.shape
-    if dim is None:
-        dim = len(first_array.shape)
-
-    assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
-    assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
-    assert all([array.shape == shape for array in arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(shape)
-    assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim ({}).'.format(dim)
+    if array_type is not None:
+        assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
+    if dtype is not None:
+        assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
+    if shape is not None:
+        assert all([array.shape == shape for array in arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(shape)
+    if dim is not None:
+        assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim ({}).'.format(dim)
