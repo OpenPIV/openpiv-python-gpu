@@ -1,8 +1,12 @@
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support.
 
-Note that all data must 32-bit at most to be stored on GPUs. All identifiers ending with '_d' exist on the GPU and not
-the CPU. The GPU is referred to as the device, and therefore "_d" signifies that it is a device variable. Please adhere
-to this standard as it makes developing and debugging much easier.
+All identifiers ending with '_d' exist on the GPU and not the CPU. The GPU is referred to as the device, and therefore
+"_d" signifies that it is a device variable. Please adhere to this standard as it makes developing and debugging much
+easier.
+
+Note that all data must 32-bit at most to be stored on GPUs. Numpy types should be always 32-bit for compatibility
+with GPU. Scalars should be python int type in general to work as function arguments. C-type scalars or arrays that are
+arguments to GPU kernels should be identified with ending in either _i or _f.
 
 """
 
@@ -91,8 +95,8 @@ class GPUCorrelation:
         # TODO remove unnecessary type casts--Python structures should have python types.
         self.size_extended = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
         self.fft_size = DTYPE_i(self.size_extended * self.nfft)
-        self.n_row, self.n_col = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
-        self.n_windows = self.n_row * self.n_col
+        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
+        self.n_windows = self.n_rows * self.n_cols
 
         # Return stack of all IWs
         win_a_d, win_b_d = self._iw_arrange(self.frame_a_d, self.frame_b_d, d_shift, d_strain)
@@ -114,8 +118,8 @@ class GPUCorrelation:
 
         # TODO this could be GPU array--would be faster?
         # reshape to field window coordinates
-        i_peak = row_sp.reshape((self.n_row, self.n_col)) - self.fft_size / 2
-        j_peak = col_sp.reshape((self.n_row, self.n_col)) - self.fft_size / 2
+        i_peak = row_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size / 2
+        j_peak = col_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size / 2
 
         return i_peak, j_peak
 
@@ -149,60 +153,60 @@ class GPUCorrelation:
         win_b_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
 
         mod_ws = SourceModule("""
-            __global__ void window_slice(int *input, float *output, int ws, int spacing, int diff_extended, int n_col, int wd, int ht)
+            __global__ void window_slice(float *output, int *input, int ws, int spacing, int diff_extended, int n_col, int wd, int ht)
         {
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int ind_i = blockIdx.x;
-            int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+            int idx_i = blockIdx.x;
+            int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+            int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
             
             // do the mapping
-            int x = (ind_i % n_col) * spacing + diff_extended + ind_x;
-            int y = (ind_i / n_col) * spacing + diff_extended + ind_y;
+            int x = (idx_i % n_col) * spacing + diff_extended + idx_x;
+            int y = (idx_i / n_col) * spacing + diff_extended + idx_y;
             
             // find limits of domain
             int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
 
             // indices of new array to map to
-            int w_range = ind_i * ws * ws + ws * ind_y + ind_x;
+            int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
             
             // apply the mapping
             output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
         }
 
-            __global__ void window_slice_deform(int *input, float *output, float *shift, float *strain, float f, int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
+            __global__ void window_slice_deform(float *output, int *input, float *shift, float *strain, float f, int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
         {
             // f : factor to apply to the shift and strain tensors
             // wd : width (number of columns in the full image)
             // h : height (number of rows in the full image)
 
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int ind_i = blockIdx.x;  // window index
-            int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
-            int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+            int idx_i = blockIdx.x;  // window index
+            int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+            int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
 
             // Loop through each interrogation window and apply the shift and deformation.
             // get the shift values
-            float dx = shift[ind_i] * f;
-            float dy = shift[num_window + ind_i] * f;
+            float dx = shift[idx_i] * f;
+            float dy = shift[num_window + idx_i] * f;
 
             // get the strain tensor values
-            float u_x = strain[ind_i] * f;
-            float u_y = strain[num_window + ind_i] * f;
-            float v_x = strain[2 * num_window + ind_i] * f;
-            float v_y = strain[3 * num_window + ind_i] * f;
+            float u_x = strain[idx_i] * f;
+            float u_y = strain[num_window + idx_i] * f;
+            float v_x = strain[2 * num_window + idx_i] * f;
+            float v_y = strain[3 * num_window + idx_i] * f;
 
             // compute the window vector
-            float r_x = ind_x - ws / 2 + 0.5;  // r_x = x - x_c
-            float r_y = ind_y - ws / 2 + 0.5;  // r_y = y - y_c
+            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
 
             // apply deformation operation
-            float x_shift = ind_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-            float y_shift = ind_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
+            float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+            float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
 
             // do the mapping
-            float x = (ind_i % n_col) * spacing + diff_extended + x_shift;
-            float y = (ind_i / n_col) * spacing + diff_extended + y_shift;
+            float x = (idx_i % n_col) * spacing + diff_extended + x_shift;
+            float y = (idx_i / n_col) * spacing + diff_extended + y_shift;
 
             // do bilinear interpolation
             int x1 = floorf(x);
@@ -220,7 +224,7 @@ class GPUCorrelation:
             float f22 = input[(y2 * wd + x2) * outside_range];
 
             // indices of image to map to
-            int w_range = ind_i * ws * ws + ws * ind_y + ind_x;
+            int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
@@ -234,7 +238,7 @@ class GPUCorrelation:
             # use translating windows
             # TODO this might be redundant
             if strain_d is None:
-                strain_d = gpuarray.zeros((4, self.n_row, self.n_col), dtype=DTYPE_f)
+                strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
 
             # factors to apply the symmetric shift
             shift_factor_a = DTYPE_f(-0.5)
@@ -242,21 +246,21 @@ class GPUCorrelation:
 
             # shift frames and deform
             window_slice_deform = mod_ws.get_function("window_slice_deform")
-            window_slice_deform(frame_a_d, win_a_d, shift_d, strain_d, shift_factor_a, self.size_extended, spacing,
+            window_slice_deform(win_a_d, frame_a_d, shift_d, strain_d, shift_factor_a, self.size_extended, spacing,
                                 diff_extended,
-                                self.n_col, self.n_windows, wd, ht, block=(block_size, block_size, 1),
+                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(frame_b_d, win_b_d, shift_d, strain_d, shift_factor_b, self.size_extended, spacing,
+            window_slice_deform(win_b_d, frame_b_d, shift_d, strain_d, shift_factor_b, self.size_extended, spacing,
                                 diff_extended,
-                                self.n_col, self.n_windows, wd, ht, block=(block_size, block_size, 1),
+                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
 
         else:
             # use non-translating windows
             window_slice_deform = mod_ws.get_function("window_slice")
-            window_slice_deform(frame_a_d, win_a_d, self.size_extended, spacing, diff_extended, self.n_col, wd, ht,
+            window_slice_deform(win_a_d, frame_a_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(frame_b_d, win_b_d, self.size_extended, spacing, diff_extended, self.n_col, wd, ht,
+            window_slice_deform(win_b_d, frame_b_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
         return win_a_d, win_b_d
@@ -582,7 +586,7 @@ class GPUCorrelation:
         sig2noise[np.array(self.peak_row == 0) * np.array(self.peak_row == self.data.shape[1]) * np.array(
             self.peak_col == 0) * np.array(self.peak_col == self.data.shape[2])] = 0.0
 
-        return sig2noise.reshape(self.n_row, self.n_col)
+        return sig2noise.reshape(self.n_rows, self.n_cols)
 
 
 def gpu_extended_search_area(frame_a, frame_b,
@@ -651,8 +655,8 @@ def gpu_extended_search_area(frame_a, frame_b,
     sp_i, sp_j = corr(window_size, overlap_ratio, search_area_size)
 
     # reshape the peaks
-    i_peak = np.reshape(sp_i, (corr.n_row, corr.n_col))
-    j_peak = np.reshape(sp_j, (corr.n_row, corr.n_col))
+    i_peak = np.reshape(sp_i, (corr.n_rows, corr.n_cols))
+    j_peak = np.reshape(sp_j, (corr.n_rows, corr.n_cols))
 
     # calculate velocity fields
     u = j_peak / dt
@@ -1198,7 +1202,7 @@ def get_field_shape(image_size, window_size, overlap_ratio):
 
     Returns
     -------
-    n_row, n_col : int
+    m, n : int
         Shape of the resulting flow field.
 
     """
@@ -1207,9 +1211,9 @@ def get_field_shape(image_size, window_size, overlap_ratio):
     assert 0 <= overlap_ratio < 1, 'overlap_ratio must be a float between 0 and 1.'
 
     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
-    n_row = DTYPE_i((image_size[0] - spacing) // spacing)
-    n_col = DTYPE_i((image_size[1] - spacing) // spacing)
-    return n_row, n_col
+    m = DTYPE_i((image_size[0] - spacing) // spacing)
+    n = DTYPE_i((image_size[1] - spacing) // spacing)
+    return m, n
 
 
 def get_field_coords(field_shape, window_size, overlap_ratio):
@@ -1218,7 +1222,7 @@ def get_field_coords(field_shape, window_size, overlap_ratio):
     Parameters
     ----------
     field_shape : tuple
-        (n_row, n_col), the shape of the resulting flow field.
+        (m, n), the shape of the resulting flow field.
     window_size : int
         Size of the interrogation windows.
     overlap_ratio : float
@@ -1233,12 +1237,11 @@ def get_field_coords(field_shape, window_size, overlap_ratio):
     assert window_size >= 8, "Window size is too small."
     assert window_size % 8 == 0, "Window size must be a multiple of 8."
     assert 0 <= overlap_ratio < 1, 'overlap_ratio should be a float between 0 and 1.'
-    n_row, n_col = field_shape
+    m, n = field_shape
 
     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
-    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_col - 1), n_col, dtype=DTYPE_f), (n_row, 1))
-    y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n_row - 1), n_row, dtype=DTYPE_f),
-                (n_col, 1)).T
+    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n - 1), n, dtype=DTYPE_f), (m, 1))
+    y = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (m - 1), m, dtype=DTYPE_f), (n, 1)).T
 
     return x, y
 
@@ -1265,8 +1268,8 @@ def gpu_mask(frame_d, mask_d):
     m, n = frame_d.shape
     frame_masked_d = gpuarray.empty_like(frame_d, dtype=DTYPE_i)
 
-    mod_update = SourceModule("""
-        __global__ void mask_frame(int *frame_masked, int *frame, int *mask, int size)
+    mod_mask = SourceModule("""
+        __global__ void mask_frame_gpu(int *frame_masked, int *frame, int *mask, int size)
         {
             // frame_masked : output argument
         
@@ -1278,8 +1281,8 @@ def gpu_mask(frame_d, mask_d):
         """)
     block_size = 32
     x_blocks = int(n * m // block_size + 1)
-    mask_frame = mod_update.get_function("mask_frame")
-    mask_frame(frame_masked_d, frame_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mask_frame_gpu = mod_mask.get_function("mask_frame_gpu")
+    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return frame_masked_d
 
@@ -1307,8 +1310,8 @@ def gpu_strain(u_d, v_d, spacing=1):
     m, n = u_d.shape
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
-    mod = SourceModule("""
-    __global__ void gradient(float *strain, float *u, float *v, float h, int m, int n)
+    mod_strain = SourceModule("""
+    __global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n)
     {
         // strain : output argument
     
@@ -1350,8 +1353,8 @@ def gpu_strain(u_d, v_d, spacing=1):
     """)
     block_size = 32
     n_blocks = int((m * n) // block_size + 1)
-    gradient = mod.get_function('gradient')
-    gradient(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), block=(block_size, 1, 1), grid=(n_blocks, 1))
+    strain_gpu = mod_strain.get_function('strain_gpu')
+    strain_gpu(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), block=(block_size, 1, 1), grid=(n_blocks, 1))
 
     return strain_d
 
@@ -1591,8 +1594,8 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
     # --------------------------INTERIOR GRID---------------------------------
     if interior_ind.size != 0:
         # Get gpu data for position now.
-        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, "x_axis", interior_ind_x_d, window_size, overlap, n_row, n_col, k)
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, "y_axis", interior_ind_y_d, window_size, overlap, n_row, n_col, k)
+        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, 'x_axis', interior_ind_x_d, window_size, overlap, n_row, n_col, k)
+        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', interior_ind_y_d, window_size, overlap, n_row, n_col, k)
 
         # Get indices surrounding the position now.
         x1_d = _gpu_array_index(x0_axis, low_x_d, DTYPE_f)
@@ -1626,7 +1629,7 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
     # LEFT
     if left_ind.size > 0:
         # Get position data.
-        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, "x_axis", left_ind_d, window_size, overlap, n_row, n_col, k)
+        low_x_d, high_x_d = _f_dichotomy_gpu(x_axes, 'x_axis', left_ind_d, window_size, overlap, n_row, n_col, k)
 
         # Get values to compute interpolation.
         x1_d = _gpu_array_index(x0_axis, low_x_d, DTYPE_f)
@@ -1649,7 +1652,7 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
     # RIGHT
     if right_ind.size > 0:
         # Get position data.
-        low_x_d, high_x_d = _f_dichotomy_gpu(y_axes, "x_axis", right_ind_d, window_size, overlap, n_row, n_col, k)
+        low_x_d, high_x_d = _f_dichotomy_gpu(y_axes, 'x_axis', right_ind_d, window_size, overlap, n_row, n_col, k)
 
         # Get values to compute interpolation.
         x1_d = _gpu_array_index(x_d[k, :, int(n_col[k] - 1)].copy(), low_x_d, DTYPE_f)
@@ -1671,7 +1674,7 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
 
     if top_ind.size > 0:
         # Get now position and surrounding points.
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, "y_axis", top_ind_d, window_size, overlap, n_row, n_col, k)
+        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', top_ind_d, window_size, overlap, n_row, n_col, k)
 
         # Get values to compute interpolation.
         y1_d = _gpu_array_index(y0_axis, low_y_d, DTYPE_f)
@@ -1694,7 +1697,7 @@ def gpu_interpolate_surroundings(x_d, y_d, f_d, f_new_d, val_locations, n_row, n
     # BOTTOM
     if bottom_ind.size > 0:
         # Get position data.
-        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, "y_axis", bottom_ind_d, window_size, overlap, n_row, n_col, k)
+        low_y_d, high_y_d = _f_dichotomy_gpu(y_axes, 'y_axis', bottom_ind_d, window_size, overlap, n_row, n_col, k)
 
         # Get values to compute interpolation
         y1_d = _gpu_array_index(y_d[k, int(n_row[k] - 1), :].copy(), low_y_d, DTYPE_f)
@@ -1837,7 +1840,7 @@ def _f_dichotomy_gpu(range_d, side, pos_index_d, window_sizes, overlap, n_row, n
     return low_d, high_d
 
 
-# # TODO is this function faster than GPU for high/low numbers of validation points.
+# TODO is this function faster than GPU for high/low numbers of validation points.
 # def gpu_interpolation(x0_d, y0_d, x1_d, y1_d, f0_d, val_location=None):
 #     """Performs an interpolation of a field from one mesh to another.
 #
@@ -1863,6 +1866,11 @@ def _f_dichotomy_gpu(range_d, side, pos_index_d, window_sizes, overlap, n_row, n
 #     _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
 #     if val_location is not None:
 #         _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f0_d.shape, dim=2)
+#     n = x1_d.size
+#     m = y1_d.size
+#     size_i = DTYPE_i(m * n)
+#
+#     f1_d = gpuarray.empty_like((m, n), dtype=DTYPE_f)
 #
 #     # TODO this is being done already in the main loop?--check performance impact
 #     # Calculate the relationship between the two grid coordinates
@@ -1872,35 +1880,76 @@ def _f_dichotomy_gpu(range_d, side, pos_index_d, window_sizes, overlap, n_row, n
 #     spacing_y1 = y1_d[1] - y1_d[0]
 #
 #     # TODO test this step vs GPU
-#     x1_low = (x1_d.get() - (x0_d[0] - x1_d[0])) // spacing_x0
+#     buffer_diff_x = x0_d[0] - x1_d[0]
+#     buffer_diff_y = y0_d[0] - y1_d[0]
+#     x1_low = (x1_d.get() - buffer_diff_x) // spacing_x0
 #     x1_high = x1_low + 1
-#     y1_low = (y1_d.get() - (y0_d[0] - y1_d[0])) // spacing_y0
+#     y1_low = (y1_d.get() - buffer_diff_y) // spacing_y0
 #     y1_high = y1_low + 1
 #
-#     # Generate the surrounding values
+#     mod_interpolate = SourceModule("""
+#         __global__ void bilinear_interpolation(float *output, int *input, float *shift, float *strain, float f, int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
+#     {
+#         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+#         if(idx >= size){return;}
 #
+#         // compute the window vector
+#         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+#         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
 #
-#     # Do the interpolation
-#     _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d)
+#         // apply deformation operation
+#         float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+#         float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
 #
-#     # Handle corners.
+#         // do the mapping
+#         float x = (idx_i % n_col) * spacing + diff_extended;
+#         float y = (idx_i / n_col) * spacing + diff_extended;
+#
+#         // do bilinear interpolation
+#         int x1 = floorf(x);
+#         int x2 = x1 + 1;
+#         int y1 = floorf(y);
+#         int y2 = y1 + 1;
+#
+#         // find limits of domain
+#         int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+#
+#         // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
+#         float f11 = input[(y1 * wd + x1) * outside_range];
+#         float f21 = input[(y1 * wd + x2) * outside_range];
+#         float f12 = input[(y2 * wd + x1) * outside_range];
+#         float f22 = input[(y2 * wd + x2) * outside_range];
+#
+#         // indices of image to map to
+#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+#
+#         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+#         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
+#     }
+#     """)
+#     block_size = 32
+#     x_blocks = int(size_i // block_size + 1)
+#     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
+#     interpolate_gpu(f_round_d, f_d, spacing_x, spacing_y, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+#
+#     if val_location is not None:
+#         f1_d = cu_misc.multiply(f1_d, val_location)
 #
 #     return f1_d
 
 
 def _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d):
     """Performs bilinear interpolation on the GPU."""
-    n = DTYPE_i(x1_d.size)
+    size_i = DTYPE_i(x1_d.size)
 
     f_d = gpuarray.empty_like(x1_d, dtype=DTYPE_f)
 
     mod_bi = SourceModule("""
-    __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int n)
+    __global__ void bilinear_interp(float *f, float *x1, float *x2, float *y1, float *y2, float *x, float *y, float *f1, float *f2, float *f3, float *f4, int size)
     {
         // 1D grid of 1D blocks
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-        if(t_idx >= n){return;}
+        if(t_idx >= size){return;}
 
         // avoid the points that are equal to each other
 
@@ -1931,9 +1980,9 @@ def _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_
     }
     """)
     block_size = 32
-    x_blocks = int(len(x1_d) // block_size + 1)
-    bilinear_interp = mod_bi.get_function("bilinear_interp")
-    bilinear_interp(f_d, x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d, n, block=(block_size, 1, 1),
+    x_blocks = int(size_i // block_size + 1)
+    bilinear_interp = mod_bi.get_function('bilinear_interp')
+    bilinear_interp(f_d, x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_d, size_i, block=(block_size, 1, 1),
                     grid=(x_blocks, 1))
 
     return f_d
@@ -1941,26 +1990,25 @@ def _gpu_bilinear_interp(x1_d, x2_d, y1_d, y2_d, x_d, y_d, f1_d, f2_d, f3_d, f4_
 
 def linear_interp_gpu(x1_d, x2_d, x_d, f1_d, f2_d):
     """Returns the linear interpolation between two points."""
-    n = DTYPE_i(x1_d.size)
+    size_i = DTYPE_i(x1_d.size)
 
     f_d = gpuarray.zeros_like(x1_d, dtype=DTYPE_f)
 
     mod_lin = SourceModule("""
-    __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int n)
+    __global__ void linear_interp(float *f, float *x1, float *x2, float *x, float *f1, float *f2, int size)
     {
         // 1D grid of 1D blocks
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
-
-        if(idx >= n){return;}
+        if(idx >= size){return;}
 
         float tmp = ((x2[idx]-x[idx])/(x2[idx]-x1[idx]))*f1[idx] + ((x[idx]-x1[idx])/(x2[idx]-x1[idx]))*f2[idx];
         f[idx] = tmp * (float)(x2[idx] != x1[idx]) + f1[idx]*(float)(x2[idx] == x1[idx]) ;
     }
     """)
     block_size = 32
-    x_blocks = int(len(x1_d) // block_size + 1)
-    linear_interp = mod_lin.get_function("linear_interp")
-    linear_interp(f_d, x1_d, x2_d, x_d, f1_d, f2_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    x_blocks = int(size_i // block_size + 1)
+    linear_interp = mod_lin.get_function('linear_interp')
+    linear_interp(f_d, x1_d, x2_d, x_d, f1_d, f2_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return f_d
 
@@ -1992,20 +2040,20 @@ def _gpu_array_index(array_d, indices, dtype):
     return_values_d = gpuarray.zeros(indices.size, dtype=dtype)
 
     mod_array_index = SourceModule("""
-    __global__ void array_index_float(float *return_values, float *array, int *return_list, int r_size )
+    __global__ void array_index_float(float *return_values, float *array, int *return_list, int size)
     {
         // 1D grid of 1D blocks
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= r_size){return;}
+        if(t_idx >= size){return;}
 
         return_values[t_idx] = array[return_list[t_idx]];
     }
 
-    __global__ void array_index_int(float *array, int *return_values, int *return_list, int r_size )
+    __global__ void array_index_int(float *array, int *return_values, int *return_list, int size)
     {
         // 1D grid of 1D blocks
         int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if(t_idx >= r_size){return;}
+        if(t_idx >= size){return;}
 
         return_values[t_idx] = (int)array[return_list[t_idx]];
     }
@@ -2015,10 +2063,10 @@ def _gpu_array_index(array_d, indices, dtype):
     x_blocks = int(r_size // block_size + 1)
 
     if dtype == DTYPE_f:
-        array_index = mod_array_index.get_function("array_index_float")
+        array_index = mod_array_index.get_function('array_index_float')
         array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
     elif dtype == DTYPE_i:
-        array_index = mod_array_index.get_function("array_index_int")
+        array_index = mod_array_index.get_function('array_index_int')
         array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return return_values_d
@@ -2042,22 +2090,22 @@ def _gpu_index_update(dest_d, values_d, indices_d):
         Float, input array with values updated
 
     """
-    r_size = DTYPE_i(values_d.size)
+    size_i = DTYPE_i(values_d.size)
 
     mod_index_update = SourceModule("""
-    __global__ void index_update(float *dest, float *values, int *indices, int r_size)
+    __global__ void index_update(float *dest, float *values, int *indices, int size)
     {
         // 1D grid of 1D blocks
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= r_size){return;}
+        if(t_idx >= size){return;}
 
         dest[indices[t_idx]] = values[t_idx];
     }
     """)
     block_size = 32
-    x_blocks = int(r_size // block_size + 1)
-    index_update = mod_index_update.get_function("index_update")
-    index_update(dest_d, values_d, indices_d, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    x_blocks = int(size_i // block_size + 1)
+    index_update = mod_index_update.get_function('index_update')
+    index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
 def _get_gpu_memory():
