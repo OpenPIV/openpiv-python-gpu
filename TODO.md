@@ -65,6 +65,7 @@
 - [ ] allow non-isotropic x, y, overlap
 - [ ] allow non-power-of-2 window sizes
 - [ ] center-on-field functionality
+- [ ] GPU kernel to do validation replacement
 
 ## Object-oriented features
 - [x] return the mask

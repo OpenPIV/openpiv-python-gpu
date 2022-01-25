@@ -74,7 +74,7 @@ def generate_cpu_gpu_pair(size, magnitude=1, dtype=DTYPE_f):
 
 # UNIT TESTS
 def test_gpu_mask():
-    frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
+    frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_f)
     mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
 
     frame_masked = frame * mask

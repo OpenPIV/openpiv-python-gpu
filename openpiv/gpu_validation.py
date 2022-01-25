@@ -197,7 +197,6 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
         5D [n_row, n_col, 2, 3, 3], values of u and v of the neighbours of a point.
 
     """
-    # TODO why dtype f?
     neighbours_d = gpuarray.zeros((int(n_row), int(n_col), 2, 3, 3), dtype=DTYPE_f)
 
     # Find neighbours.
