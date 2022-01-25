@@ -61,6 +61,9 @@
   - [ ] remove this requirement in lieu of dynamic allocation of array sizes
 - [ ] add more sophisticated object-oriented features to set algorithm parameters in gpu_piv()
 - [ ] accept either floats or ints as frame inputs
+- [ ] allow non-integer x, y, overlap
+- [ ] allow non-isotropic x, y, overlap
+- [ ] allow non-power-of-2 window sizes
 
 ## Object-oriented features
 - [x] return the mask
@@ -73,10 +76,13 @@
 ## Clean code
 - [x] refactor names to be more readable
 - [x] use logging rather than printing to console
-- - [x] separate public functions from private functions in GPU-module
+- [x] separate public functions from private functions in GPU-module
 - [ ] add input checks to all public functions
 - [ ] add error handling exceptions to all gpu functions
 - [ ] cleanly separate validation functions from processing functions in gpu_accelerated modules
 - [ ] eliminate output arguments in the gpu-accelerated functions
 - [ ] don't pass/return None
 - [ ] find a better way to log gpu piv iterations
+- [ ] evaluate purpose of old code not found in openpiv-python
+- [ ] Try to work with python types whenever possible
+  - indicate np types with encoding ending with _*f

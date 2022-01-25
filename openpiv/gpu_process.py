@@ -288,6 +288,7 @@ class GPUCorrelation:
         iw_size = DTYPE_i(self.size_extended * self.size_extended)
 
         # get mean of each IW using skcuda
+        # TODO possible to avoid using cumisc?
         mean_a_d = cu_misc.mean(win_a_d.reshape(self.n_windows, iw_size), axis=1)
         mean_b_d = cu_misc.mean(win_b_d.reshape(self.n_windows, iw_size), axis=1)
 
@@ -409,7 +410,7 @@ class GPUCorrelation:
 
         # multiply the FFTs
         win_fft_d = win_fft_d.conj()
-        tmp_d = cu_misc.multiply(search_area_fft_d, win_fft_d)
+        tmp_d = search_area_fft_d * win_fft_d
 
         # inverse transform
         plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, DTYPE_f, self.n_windows)
@@ -767,7 +768,7 @@ def gpu_piv(frame_a, frame_b,
 
     """
     piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smooth,
-                     nb_validation_iter, validation_method, trust_1st_iter, **kwargs)
+                     nb_validation_iter, validation_method, **kwargs)
 
     return_sig2noise = kwargs['return_sig2noise'] if 'return_sig2noise' in kwargs else False
     x, y = piv_gpu.coords
@@ -802,11 +803,11 @@ class PIVGPU:
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
         Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
-    trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
 
     Other Parameters
     ----------------
+    trust_1st_iter : bool
+        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
     s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
         Tolerance of the validation methods.
     smoothing_par : float
@@ -849,7 +850,6 @@ class PIVGPU:
                  smooth=True,
                  nb_validation_iter=1,
                  validation_method='median_velocity',
-                 trust_1st_iter=False,
                  **kwargs):
 
         # input checks
@@ -863,7 +863,6 @@ class PIVGPU:
         self.smooth = smooth
         self.nb_iter_max = nb_iter_max = sum(ws_iters)
         self.nb_validation_iter = nb_validation_iter
-        self.trust_1st_iter = trust_1st_iter
 
         # windows sizes
         self.window_size = np.asarray(
@@ -875,15 +874,16 @@ class PIVGPU:
         self.val_tols = [None, None, None, None]
         val_methods = validation_method if type(validation_method) == str else (validation_method,)
         if 's2n' in val_methods:
-            self.val_tols[0] = kwargs['s2n_tol'] if 's2n_tol' in kwargs else 1.2  # default tolerance
+            self.val_tols[0] = kwargs['s2n_tol'] if 's2n_tol' in kwargs else 1.2
         if 'median_velocity' in val_methods:
-            self.val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2  # default tolerance
+            self.val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
         if 'mean_velocity' in val_methods:
-            self.val_tols[2] = kwargs['mean_tol'] if 'mean_tol' in kwargs else 2  # default tolerance
+            self.val_tols[2] = kwargs['mean_tol'] if 'mean_tol' in kwargs else 2
         if 'rms_velocity' in val_methods:
-            self.val_tols[3] = kwargs['rms_tol'] if 'rms_tol' in kwargs else 2  # default tolerance
+            self.val_tols[3] = kwargs['rms_tol'] if 'rms_tol' in kwargs else 2
 
         # other parameters
+        self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
@@ -1522,9 +1522,10 @@ def gpu_interpolate_surroundings(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locatio
         _check_inputs(val_location, array_type=np.ndarray, dtype=DTYPE_i, shape=f1_d.shape, dim=2)
         val_location_d = gpuarray.to_gpu(val_location)
         val_location_invert_d = gpuarray.to_gpu((1 - val_location))
-        f1_tmp_d = cu_misc.multiply(f1_d, val_location_invert_d).astype(DTYPE_f)
-        f1_val_d = cu_misc.multiply(f1_val_d, val_location_d).astype(DTYPE_f)
-        f1_val_d = cu_misc.add(f1_tmp_d, f1_val_d).astype(DTYPE_f)
+        # TODO shouldn't have to do .astype()
+        f1_tmp_d = (f1_d * val_location_invert_d).astype(DTYPE_f)
+        f1_val_d = (f1_val_d * val_location_d).astype(DTYPE_f)
+        f1_val_d = (f1_tmp_d + f1_val_d).astype(DTYPE_f)
 
     return f1_val_d
 
@@ -1560,10 +1561,10 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
 
     f1_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
+    # TODO is this most efficient implementation?
     # Calculate the relationship between the two grid coordinates.
     buffer_x_f = DTYPE_f((x0_d[0]).get())
     buffer_y_f = DTYPE_f((y0_d[0]).get())
-    # TODO this can't handle negatives
     spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 

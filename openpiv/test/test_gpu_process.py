@@ -22,7 +22,6 @@ import openpiv.gpu_process_old as gpu_process_old
 # GLOBAL VARIABLES
 # datatypes used in gpu_process
 DTYPE_i = np.int32
-DTYPE_b = np.uint8
 DTYPE_f = np.float32
 
 # dirs
@@ -267,55 +266,6 @@ def test_gpu_piv_benchmark_oop(benchmark):
             piv_gpu(frame_a, frame_b)
 
 
-# def test_gpu_piv_py():
-#     # the images are loaded using imageio.
-#     frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
-#     frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
-#     args = {'mask': None,
-#             'window_size_iters': (1, 1, 2),
-#             'min_window_size': 8,
-#             'overlap_ratio': 0.5,
-#             'dt': 1,
-#             'deform': True,
-#             'smooth': True,
-#             'nb_validation_iter': 2,
-#             'validation_method': "median_velocity",
-#             'trust_1st_iter': False,
-#             }
-#
-#     args1 = {'mask': None,
-#              'window_size_iters': (1, 1, 2),
-#              'min_window_size': 8,
-#              'overlap_ratio': 0.5,
-#              'dt': 1,
-#              'deform': True,
-#              'smooth': True,
-#              'nb_validation_iter': 2,
-#              'validation_method': "median_velocity",
-#              'trust_1st_iter': False,
-#              'smoothing_par': 0.5
-#              }
-#
-#     """Ensures the results of the GPU algorithm remains unchanged."""
-#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-#     x, y, u0, v0, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args1)
-#
-#     # # save the results to a numpy file file.
-#     # if not os.path.isfile(_fixture_dir + './test_data'):
-#     #     if not os.path.isdir(_fixture_dir):
-#     #         os.mkdir(_fixture_dir)
-#     #     np.savez(_fixture_dir + './test_data', u=u, v=v)
-#
-#     # # load the results for comparison
-#     # with np.load(_fixture_dir + 'test_data.npz') as data:
-#     #     u0 = data['u']
-#     #     v0 = data['v']
-#
-#     # compare with the previous results
-#     assert np.allclose(u, u0, atol=_tolerance)
-#     assert np.allclose(v, v0, atol=_tolerance)
-
-
 # sweep the input variables to ensure everything is same
 @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
 @pytest.mark.parametrize('min_window_size', [8, 16])
@@ -360,46 +310,3 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     assert np.allclose(u, u0, atol=_tolerance)
     assert np.allclose(v, v0, atol=_tolerance)
 
-# def test_mask():
-#     pass
-#
-#
-# def test_correlation_function():
-#     pass
-#
-#
-# def test_deform():
-#     pass
-#
-#
-# def test_gpu_validation_mean():
-#     """Validates a field with exactly one spurious vector"""
-#     pass
-#
-#
-# def test_gpu_validation_median():
-#     """Validates a field with exactly one spurious vector"""
-#     pass
-#
-#
-# def test_gpu_validation_():
-#     """Validates a field with exactly one spurious vector"""
-#     pass
-#
-#
-# def test_gpu_validation_s2n():
-#     """Validates a field with exactly one spurious vector"""
-#     pass
-#
-#
-# def test_replace_vectors():
-#     pass
-#
-#
-# def test_get_field_shape():
-#     """Validates a field with exactly one spurious vector"""
-#     # test square field
-#
-#     # test rectangular field
-#
-#     pass
