@@ -165,6 +165,14 @@ def test_gpu_interpolate_validation():
     assert np.allclose(f1_val, f1_val_gpu, 0.01)
 
 
+def test_subpixel_approximation():
+    pass
+
+
+def test_gpu_mean():
+    pass
+
+
 # INTEGRATION TESTS
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):
