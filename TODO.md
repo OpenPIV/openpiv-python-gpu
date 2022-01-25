@@ -8,7 +8,7 @@
 - [ ] completely blank frames cause smoothn to error
 - [x] smoothing parameter doesn't default to 0.5
 - [x] validation being done on first iteration even when trust_first_iter is True
-- [ ] smoothing is not being applied to functions
+- [x] smoothing is not being applied to functions
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
@@ -31,12 +31,12 @@
 - [ ] correlation class
   - [x] reduce operations outside of CUDA kernels in iw_arrange()
   - [x] move methods out of init()
-  - [ ] define fewer GPU arrays
+  - [x] define fewer GPU arrays
   - [ ] use CUDA kernel in subpixel location
   - [ ] return a GPU array for the validation list
 
 - [x] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
-- [ ] reduce the number of temporary gpu arrays created
+- [x] reduce the number of temporary gpu arrays created
 - [x] make consistent the strain and shift array arguments in the correlation function
 
 ## Features
@@ -64,6 +64,7 @@
 - [ ] allow non-integer x, y, overlap
 - [ ] allow non-isotropic x, y, overlap
 - [ ] allow non-power-of-2 window sizes
+- [ ] center-on-field functionality
 
 ## Object-oriented features
 - [x] return the mask
@@ -83,6 +84,6 @@
 - [ ] eliminate output arguments in the gpu-accelerated functions
 - [ ] don't pass/return None
 - [ ] find a better way to log gpu piv iterations
-- [ ] evaluate purpose of old code not found in openpiv-python
+- [x] evaluate purpose of old code not found in openpiv-python
 - [ ] Try to work with python types whenever possible
-  - indicate np types with encoding ending with _*f
+  - [ ] indicate np types with encoding ending with _*f

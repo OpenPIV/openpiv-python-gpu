@@ -136,7 +136,7 @@ class GPUCorrelation:
         shift_d : GPUArray
             3D float, shift of the second window
         strain_d : GPUArray
-            4D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y)
+            3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y)
 
         Returns
         -------
@@ -234,18 +234,15 @@ class GPUCorrelation:
         block_size = 8
         grid_size = int(self.size_extended / block_size)
 
-        # slice windows
+        # Use translating windows.
         if shift_d is not None:
-            # use translating windows
-            # TODO this might be redundant
-            if strain_d is None:
-                strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
-
-            # factors to apply the symmetric shift
+            # Factors to apply the symmetric shift.
             shift_factor_a = DTYPE_f(-0.5)
             shift_factor_b = DTYPE_f(0.5)
 
-            # shift frames and deform
+            if strain_d is None:
+                strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
+
             window_slice_deform = mod_ws.get_function("window_slice_deform")
             window_slice_deform(win_a_d, frame_a_d, shift_d, strain_d, shift_factor_a, self.size_extended, spacing,
                                 diff_extended,
@@ -256,8 +253,8 @@ class GPUCorrelation:
                                 self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
                                 grid=(int(self.n_windows), grid_size, grid_size))
 
+        # Use non-translating windows.
         else:
-            # use non-translating windows
             window_slice_deform = mod_ws.get_function("window_slice")
             window_slice_deform(win_a_d, frame_a_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
@@ -831,7 +828,7 @@ class PIVGPU:
     mask : ndarray
         2D, the boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
-        2D, the signal to noise ratio of the final velocity field.
+        2D, the signal-to-noise ratio of the final velocity field.
 
     Methods
     -------
@@ -912,13 +909,13 @@ class PIVGPU:
 
         # Initialize x, y and mask.
         # TODO use a setter to construct these objects
-        self.x_new_d = []
-        self.y_new_d = []
+        self.x_d = []
+        self.y_d = []
         self.field_mask_d = []
         for k in range(nb_iter_max):
             x, y = get_field_coords((self.n_row[k], self.n_col[k]), self.window_size[k], overlap_ratio)
-            self.x_new_d.append(gpuarray.to_gpu(x))
-            self.y_new_d.append(gpuarray.to_gpu(y))
+            self.x_d.append(gpuarray.to_gpu(x))
+            self.y_d.append(gpuarray.to_gpu(y))
 
             # create the mask arrays for each iteration
             if mask is not None:
@@ -952,8 +949,6 @@ class PIVGPU:
         v_d = None
         u_previous_d = None
         v_previous_d = None
-        shift_d = None
-        strain_d = None
         dp_x_d = None
         dp_y_d = None
 
@@ -966,14 +961,7 @@ class PIVGPU:
         # MAIN LOOP
         for k in range(self.nb_iter_max):
             logging.info('ITERATION {}'.format(k))
-
-            if k == 0:
-                # Check if extended search area is used for first iteration.
-                extended_size = self.window_size[k] * self.extend_ratio if self.extend_ratio is not None else None
-            else:
-                # TODO this should take care of more of the arguments
-                extended_size = None
-                shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
+            extended_size, shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # Get window displacement to subpixel accuracy.
             i_peak, j_peak = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size, shift_d=shift_d, strain_d=strain_d)
@@ -1000,7 +988,7 @@ class PIVGPU:
         u_last_d = u_d
         v_last_d = v_d
         u = (u_last_d / self.dt).get()
-        v = (v_last_d / -self.dt).get()  # TODO clarify justification for this negation
+        v = (v_last_d / -self.dt).get()
 
         logging.info('[DONE]\n')
 
@@ -1061,7 +1049,7 @@ class PIVGPU:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, total_vectors, n_val / (m * n)))
 
                 # TODO can simplify this to not require u_previous
-                u_d, v_d = _gpu_replace_vectors(self.x_new_d[k], self.y_new_d[k], self.x_new_d[k - 1], self.y_new_d[k - 1], u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
+                u_d, v_d = _gpu_replace_vectors(self.x_d[k], self.y_d[k], self.x_d[k - 1], self.y_d[k - 1], u_d, v_d, u_previous_d, v_previous_d, val_list, u_mean_d,
                                                 v_mean_d, self.n_row, self.n_col, k)
 
                 logging.info('[DONE]\n')
@@ -1072,20 +1060,27 @@ class PIVGPU:
 
     def _get_corr_arguments(self, dp_x_d, dp_y_d, k):
         """Returns the shift and strain arguments to the correlation class."""
-        _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, dim=2)
-        m, n = dp_x_d.shape
+        # Check if extended search area is used for first iteration.
+        shift_d = None
         strain_d = None
+        extended_size = None
+        if k == 0:
+            if self.extend_ratio is not None:
+                extended_size = self.window_size[k] * self.extend_ratio
+        else:
+            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, dim=2)
+            m, n = dp_x_d.shape
 
-        # Compute the shift.
-        shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
-        shift_d[0, :, :] = dp_x_d
-        shift_d[1, :, :] = dp_y_d
+            # Compute the shift.
+            shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
+            shift_d[0, :, :] = dp_x_d
+            shift_d[1, :, :] = dp_y_d
 
-        # Compute the strain rate.
-        if self.deform:
-            strain_d = gpu_strain(dp_x_d, dp_y_d, self.spacing[k])
+            # Compute the strain rate.
+            if self.deform:
+                strain_d = gpu_strain(dp_x_d, dp_y_d, self.spacing[k])
 
-        return shift_d, strain_d
+        return extended_size, shift_d, strain_d
 
     def _get_next_iteration_prediction(self, u_d, v_d, k):
         """Returns the velocity field to begin the next iteration."""
@@ -1093,8 +1088,8 @@ class PIVGPU:
         # Interpolate if dimensions do not agree
         if self.window_size[k + 1] != self.window_size[k]:
             # Interpolate velocity onto next iterations grid. Then use it as the predictor for the next step.
-            u_d = gpu_interpolate(self.x_new_d[k][0, :], self.y_new_d[k][:, 0], self.x_new_d[k + 1][0, :], self.y_new_d[k + 1][:, 0], u_d)
-            v_d = gpu_interpolate(self.x_new_d[k][0, :], self.y_new_d[k][:, 0], self.x_new_d[k + 1][0, :], self.y_new_d[k + 1][:, 0], v_d)
+            u_d = gpu_interpolate(self.x_d[k][0, :], self.y_d[k][:, 0], self.x_d[k + 1][0, :], self.y_d[k + 1][:, 0], u_d)
+            v_d = gpu_interpolate(self.x_d[k][0, :], self.y_d[k][:, 0], self.x_d[k + 1][0, :], self.y_d[k + 1][:, 0], v_d)
 
         if self.smooth:
             dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
@@ -1120,7 +1115,6 @@ class PIVGPU:
         v_d = gpuarray.empty_like(dp_y_d, dtype=DTYPE_f)
         i_peak_d = gpuarray.to_gpu(i_peak)
         j_peak_d = gpuarray.to_gpu(j_peak)
-        f6_tmp_d = self.field_mask_d[k]
 
         mod_update = SourceModule("""
             __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
@@ -1136,9 +1130,8 @@ class PIVGPU:
         block_size = 32
         x_blocks = int(self.n_col[k] * self.n_row[k] // block_size + 1)
         update_values = mod_update.get_function("update_values")
-        # TODO investigate why the i- and j-peaks are flipped
-        update_values(u_d, dp_x_d, j_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-        update_values(v_d, dp_y_d, i_peak_d, f6_tmp_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(u_d, dp_x_d, j_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(v_d, dp_y_d, i_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
         i_peak_d.gpudata.free()
         j_peak_d.gpudata.free()
@@ -1160,7 +1153,6 @@ class PIVGPU:
         return normalized_residual
 
 
-# TODO should just wrap the same methods from pyprocess?
 def get_field_shape(image_size, window_size, overlap_ratio):
     """Returns the shape of the resulting velocity field.
 
@@ -1192,7 +1184,6 @@ def get_field_shape(image_size, window_size, overlap_ratio):
     return m, n
 
 
-# TODO add center-on-field functionality?
 def get_field_coords(field_shape, window_size, overlap_ratio):
     """Returns the coordinates of the resulting velocity field.
 
@@ -1481,7 +1472,6 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
     return u_d, v_d
 
 
-# TODO is this function faster than GPU for high/low numbers of validation points.
 def gpu_interpolate_surroundings(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_location=None):
     """Performs an interpolation of a field from one mesh to another.
 
