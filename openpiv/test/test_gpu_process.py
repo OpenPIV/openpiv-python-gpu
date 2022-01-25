@@ -154,12 +154,12 @@ def test_gpu_interpolate_validation():
     y0_d = gpuarray.to_gpu(y0[:, 0])
     y1_d = gpuarray.to_gpu(y1[:, 0])
 
-    val_location, val_location_d = generate_cpu_gpu_pair((n_row1, n_col1), magnitude=2, dtype=DTYPE_i)
+    val_locations, val_locations_d = generate_cpu_gpu_pair((n_row1, n_col1), magnitude=2, dtype=DTYPE_i)
 
     interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
-    f1_val = (1 - val_location) * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * val_location  # interp2d returns interpolation results with increasing y
+    f1_val = val_locations * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * (1 - val_locations)  # interp2d returns interpolation results with increasing y
 
-    f1_val_d = gpu_process.gpu_interpolate_surroundings(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_location=val_location)
+    f1_val_d = gpu_process.gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d=val_locations_d)
     f1_val_gpu = f1_val_d.get()
 
     assert np.allclose(f1_val, f1_val_gpu, 0.01)

@@ -1,4 +1,4 @@
-"""This module is for GPU-accelerated validation algoritms."""
+"""This module is for GPU-accelerated validation algorithms."""
 
 import numpy as np
 import pycuda.gpuarray as gpuarray
@@ -9,12 +9,12 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 
-def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None, rms_tol=None):
+def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None, rms_tol=None):
     """Returns an array indicating which indices need to be validated.
 
     Parameters
     ----------
-    d_u, d_v : GPUArray
+    u_d, v_d : GPUArray
         2D float, velocity fields to be validated
     n_row, n_col : int
         number of rows and columns in the velocity field
@@ -35,9 +35,9 @@ def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
     -------
     val_list : GPUArray
         2D int, array of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means no correction is needed
-    d_u_mean : GPUArray
+    u_mean_d : GPUArray
         2D float, mean of the velocities surrounding each point in this iteration.
-    d_v_mean : GPUArray
+    v_mean_d : GPUArray
         2D float, mean of the velocities surrounding each point in this iteration.
 
     """
@@ -81,10 +81,10 @@ def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
     
     """)
 
-    # create array to store validation list
-    d_val_list = gpuarray.ones_like(d_u, dtype=DTYPE_i)
+    # Create array to store validation list.
+    val_locations_d = gpuarray.ones_like(u_d, dtype=DTYPE_i)
 
-    # cast inputs to appropriate data types
+    # Cast inputs to appropriate data types.
     n_row = DTYPE_i(n_row)
     n_col = DTYPE_i(n_col)
     spacing = DTYPE_f(spacing)
@@ -97,11 +97,11 @@ def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
     block_size = 32
     x_blocks = int(n_col * n_row / block_size + 1)
 
-    # get neighbours information
-    d_neighbours, d_neighbours_present = gpu_get_neighbours(d_u, d_v, n_row, n_col)
+    # Get neighbours information.
+    neighbours_d, neighbours_present_d = gpu_get_neighbours(u_d, v_d, n_row, n_col)
 
-    # compute the mean velocities to be returned
-    d_u_median, d_v_median = gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col)
+    # Compute the mean velocities to be returned.
+    u_median_d, v_median_d = gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col)
 
     # S2N VALIDATION
     if s2n_tol is not None:
@@ -109,66 +109,38 @@ def gpu_validation(d_u, d_v, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
 
         # Launch signal to noise kernel
         s2n = mod_validation.get_function("s2n_validation")
-        s2n(d_val_list, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-        # Free gpu memory
-        d_sig2noise.gpudata.free()
+        s2n(val_locations_d, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # MEDIAN VALIDATION
     if median_tol is not None:
-        # get median velocity data
-        d_u_median_fluc, d_v_median_fluc = gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col)
+        # Get median velocity data.
+        u_median_fluc_d, v_median_fluc_d = gpu_median_fluc(neighbours_d, neighbours_present_d, u_median_d, v_median_d, n_row, n_col)
 
-        # launch validation kernel
+        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(d_val_list, d_u, d_v, d_u_median, d_v_median, d_u_median_fluc, d_v_median_fluc, n_row, n_col, median_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-        # Free gpu memory
-        # d_u_median.gpudata.free()
-        # d_v_median.gpudata.free()
-        d_u_median_fluc.gpudata.free()
-        d_v_median_fluc.gpudata.free()
+        neighbour_validation(val_locations_d, u_d, v_d, u_median_d, v_median_d, u_median_fluc_d, v_median_fluc_d, n_row, n_col, median_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # MEAN VALIDATION
     if mean_tol is not None:
-        # get mean velocity data
-        d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
-        d_u_mean_fluc, d_v_mean_fluc = gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
+        # Get mean velocity data.
+        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col)
+        u_mean_fluc_d, v_mean_fluc_d = gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row, n_col)
 
-        # launch validation kernel
+        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(d_val_list, d_u, d_v, d_u_mean, d_v_mean, d_u_mean_fluc, d_v_mean_fluc, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-        # Free gpu memory
-        d_u_mean.gpudata.free()
-        d_v_mean.gpudata.free()
-        d_u_mean_fluc.gpudata.free()
-        d_v_mean_fluc.gpudata.free()
+        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_mean_fluc_d, v_mean_fluc_d, n_row, n_col, mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     # RMS VALIDATION
     if rms_tol is not None:
-        # get rms velocity data
-        d_u_mean, d_v_mean = gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col)
-        d_u_rms, d_v_rms = gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col)
+        # Get rms velocity data.
+        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col)
+        u_rms_d, v_rms_d = gpu_rms(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row, n_col)
 
-        # launch validation kernel
+        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(d_val_list, d_u, d_v, d_u_mean, d_v_mean, d_u_rms, d_v_rms, n_row, n_col, rms_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_rms_d, v_rms_d, n_row, n_col, rms_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-        d_u_rms.gpudata.free()
-        d_v_rms.gpudata.free()
-
-    # return the final validation list
-    val_list = d_val_list.get()
-
-    # Free gpu memory
-    d_val_list.gpudata.free()
-    d_u.gpudata.free()
-    d_v.gpudata.free()
-    d_neighbours_present.gpudata.free()
-    d_neighbours.gpudata.free()
-
-    return val_list, d_u_median, d_v_median
+    return val_locations_d, u_median_d, v_median_d
 
 
 def gpu_find_neighbours(n_row, n_col):
@@ -181,7 +153,7 @@ def gpu_find_neighbours(n_row, n_col):
 
     Returns
     -------
-    d_neighbours_present : GPUArray
+    neighbours_present_d : GPUArray
         4D [n_row, n_col, 3 , 3]
 
     """
@@ -233,23 +205,24 @@ def gpu_find_neighbours(n_row, n_col):
     }
     """)
 
-    # GPU settings
+    # GPU settings.
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
 
-    # allocate space for new array
+    # Allocate space for new array.
     neighbours_present = np.ones([n_row, n_col, 3, 3], dtype=DTYPE_i)
 
     assert neighbours_present.dtype == DTYPE_i, "Wrong data type for neighbours present"
 
-    # send data to gpu
-    d_neighbours_present = gpuarray.to_gpu(neighbours_present)
+    # Send data to gpu.
+    # TODO don't use to_gpu
+    neighbours_present_d = gpuarray.to_gpu(neighbours_present)
 
-    # get and launch kernel
+    # Get and launch kernel.
     find_neighbours = mod_neighbours.get_function("find_neighbours")
-    find_neighbours(d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    find_neighbours(neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_neighbours_present
+    return neighbours_present_d
 
 
 def gpu_get_neighbours(d_u, d_v, n_row, n_col):
@@ -334,34 +307,34 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     }
     """)
 
-    # Get GPU grid dimensions and function
+    # Get GPU grid dimensions and function.
     block_size = 32
     x_blocks = int(n_col * n_row // block_size + 1)
     get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
     get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
 
-    # find neighbours
-    d_neighbours_present = gpu_find_neighbours(n_row, n_col)
+    # Find neighbours.
+    neighbours_present_d = gpu_find_neighbours(n_row, n_col)
     neighbours = np.zeros((n_row, n_col, 2, 3, 3), dtype=DTYPE_f)
 
-    # send data to the gpu
-    d_neighbours = gpuarray.to_gpu(neighbours)
+    # Send data to the gpu.
+    neighbours_d = gpuarray.to_gpu(neighbours)
 
-    # Get u and v data
-    get_u_neighbours(d_neighbours, d_neighbours_present, d_u, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    get_v_neighbours(d_neighbours, d_neighbours_present, d_v, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    # Get u and v data.
+    get_u_neighbours(neighbours_d, neighbours_present_d, d_u, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    get_v_neighbours(neighbours_d, neighbours_present_d, d_v, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_neighbours, d_neighbours_present
+    return neighbours_d, neighbours_present_d
 
 
-def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
+def gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     """Calculates the mean velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    d_neighbours: GPUArray
+    neighbours_d: GPUArray
         5D float, all the neighbouring velocities of every point
-    d_neighbours_present: GPUArray
+    neighbours_present_d: GPUArray
     4D float, indicates if a neighbour is present
     n_row, n_col : int
         number of rows and columns of the velocity field
@@ -420,45 +393,45 @@ def gpu_mean_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     }
     """)
 
-    # allocate space for arrays
+    # Allocate space for arrays.
     u_mean = np.zeros((n_row, n_col), dtype=DTYPE_f)
     v_mean = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
-    # define GPU data
-    # block_size = 16
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # send data to gpu
-    d_u_mean = gpuarray.to_gpu(u_mean)
-    d_v_mean = gpuarray.to_gpu(v_mean)
+    # Send data to gpu.
+    # TODO dont' send to gpu
+    u_mean_d = gpuarray.to_gpu(u_mean)
+    v_mean_d = gpuarray.to_gpu(v_mean)
 
-    # get and launch kernel
+    # Get and launch kernel.
     u_mean_vel = mod_mean_vel.get_function("u_mean_vel")
     v_mean_vel = mod_mean_vel.get_function("v_mean_vel")
-    u_mean_vel(d_u_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    v_mean_vel(d_v_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    u_mean_vel(u_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    v_mean_vel(v_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_mean, d_v_mean
+    return u_mean_d, v_mean_d
 
 
-def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col):
+def gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row, n_col):
     """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    d_neighbours : GPUArray
+    neighbours_d : GPUArray
         5D float, all the neighbouring velocities of every point
-    d_neighbours_present : GPUArray
+    neighbours_present_d : GPUArray
         4D float, indicates if a neighbour is present
-    d_u_mean, d_v_mean : GPUArray
+    u_mean_d, v_mean_d : GPUArray
         2D float, mean velocities around each point
     n_row, n_col : int
         number of rows and columns of the velocity field
 
     Returns
     -------
-    d_u_fluc, d_v_fluc : GPUArray
+    u_fluc_d, v_fluc_d : GPUArray
         2D float, rms velocities at each point
 
     """
@@ -518,35 +491,35 @@ def gpu_mean_fluc(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row,
     }
     """)
 
-    # allocate space for data
+    # Allocate space for data.
     u_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
     v_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
-    # define GPU data
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # send data to gpu
-    d_u_fluc = gpuarray.to_gpu(u_rms)
-    d_v_fluc = gpuarray.to_gpu(v_rms)
+    # Send data to gpu.
+    u_fluc_d = gpuarray.to_gpu(u_rms)
+    v_fluc_d = gpuarray.to_gpu(v_rms)
 
-    # get and launch kernel
+    # Get and launch kernel.
     mod_u_fluc = mod_mean_fluc.get_function("u_fluc_k")
     mod_v_fluc = mod_mean_fluc.get_function("v_fluc_k")
-    mod_u_fluc(d_u_fluc, d_u_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    mod_v_fluc(d_v_fluc, d_v_mean, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_u_fluc(u_fluc_d, u_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_fluc(v_fluc_d, v_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_fluc, d_v_fluc
+    return u_fluc_d, v_fluc_d
 
 
-def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
+def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    d_neighbours: GPUArray
+    neighbours_d: GPUArray
         5D float, all the neighbouring velocities of every point
-    d_neighbours_present: GPUArray
+    neighbours_present_d: GPUArray
         4D float, indicates if a neighbour is present
     n_row, n_col : int
         number of rows and columns of the velocity field
@@ -690,25 +663,25 @@ def gpu_median_vel(d_neighbours, d_neighbours_present, n_row, n_col):
     }
     """)
 
-    # allocate space for arrays
+    # Allocate space for arrays.
     u_median = np.zeros((n_row, n_col), dtype=DTYPE_f)
     v_median = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
-    # define GPU data
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # send data to gpu
-    d_u_median = gpuarray.to_gpu(u_median)
-    d_v_median = gpuarray.to_gpu(v_median)
+    # Send data to gpu.
+    u_median_d = gpuarray.to_gpu(u_median)
+    v_median_d = gpuarray.to_gpu(v_median)
 
-    # get and launch kernel
+    # Get and launch kernel.
     u_median_vel = mod_median_vel.get_function("u_median_vel")
     v_median_vel = mod_median_vel.get_function("v_median_vel")
-    u_median_vel(d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    v_median_vel(d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    u_median_vel(u_median_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    v_median_vel(v_median_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_median, d_v_median
+    return u_median_d, v_median_d
 
 
 def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col):
@@ -727,7 +700,7 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
 
     Returns
     -------
-    d_u_median_fluc, d_v_median_fluc : GPUArray
+    u_median_fluc_d, v_median_fluc_d : GPUArray
         2D float, rms velocities at each point
 
     """
@@ -872,25 +845,25 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
     }
     """)
 
-    # allocate space for data
+    # Allocate space for data.
     u_median_fluc = np.zeros((n_row, n_col), dtype=DTYPE_f)
     v_median_fluc = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
-    # define GPU data
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # send data to gpu
-    d_u_median_fluc = gpuarray.to_gpu(u_median_fluc)
-    d_v_median_fluc = gpuarray.to_gpu(v_median_fluc)
+    # Send data to gpu.
+    u_median_fluc_d = gpuarray.to_gpu(u_median_fluc)
+    v_median_fluc_d = gpuarray.to_gpu(v_median_fluc)
 
-    # get and launch kernel
+    # Get and launch kernel.
     mod_u_fluc = mod_median_fluc.get_function("u_fluc_k")
     mod_v_fluc = mod_median_fluc.get_function("v_fluc_k")
-    mod_u_fluc(d_u_median_fluc, d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    mod_v_fluc(d_v_median_fluc, d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_u_fluc(u_median_fluc_d, d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_fluc(v_median_fluc_d, d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_median_fluc, d_v_median_fluc
+    return u_median_fluc_d, v_median_fluc_d
 
 
 def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col):
@@ -909,7 +882,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
 
     Returns
     -------
-    d_u_rms, d_v_rms : GPUArray
+    u_rms_d, v_rms_d : GPUArray
         2D float32, rms velocities at each point
 
     """
@@ -971,35 +944,34 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
     }
     """)
 
-    # allocate space for data
+    # Allocate space for data.
     u_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
     v_rms = np.zeros((n_row, n_col), dtype=DTYPE_f)
 
-    # define GPU data
-    # block_size = 16
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # send data to gpu
-    d_u_rms = gpuarray.to_gpu(u_rms)
-    d_v_rms = gpuarray.to_gpu(v_rms)
+    # Send data to gpu.
+    u_rms_d = gpuarray.to_gpu(u_rms)
+    v_rms_d = gpuarray.to_gpu(v_rms)
 
-    # get and launch kernel
+    # Get and launch kernel.
     mod_u_rms = mod_rms.get_function("u_rms_k")
     mod_v_rms = mod_rms.get_function("v_rms_k")
-    mod_u_rms(d_u_rms, d_neighbours, d_neighbours_present, d_u_mean, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    mod_v_rms(d_v_rms, d_neighbours, d_neighbours_present, d_v_mean, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_u_rms(u_rms_d, d_neighbours, d_neighbours_present, d_u_mean, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mod_v_rms(v_rms_d, d_neighbours, d_neighbours_present, d_v_mean, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return d_u_rms, d_v_rms
+    return u_rms_d, v_rms_d
 
 
-def __gpu_divergence(d_u, d_v, w, n_row, n_col):
+def __gpu_divergence(u_d, v_d, w, n_row, n_col):
     """[This function very likely does not work as intended.] Calculates the divergence at each point in a velocity
     field.
 
     Parameters
     ----------
-    d_u, d_v: array - 2D float
+    u_d, v_d: array - 2D float
         velocity field
     w: int
         pixel separation between velocity vectors
@@ -1061,22 +1033,21 @@ def __gpu_divergence(d_u, d_v, w, n_row, n_col):
     n_col = DTYPE_i(n_col)
     w = DTYPE_f(w)
 
-    # define GPU data
-    # block_size = 16
+    # Define GPU data.
     block_size = 32
     x_blocks = int(n_row * n_col // block_size + 1)
 
-    # move data to gpu
-    d_div = gpuarray.to_gpu(div)
+    # Move data to gpu.
+    div_d = gpuarray.to_gpu(div)
 
-    # get and launch kernel
+    # Get and launch kernel.
     div_k = mod_div.get_function("div_k")
     div_boundary_k = mod_div.get_function("div_boundary_k")
-    div_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    div_boundary_k(d_div, d_u, d_v, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    div_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    div_boundary_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    # get single case of bottom i = 0, j = n_col-1
-    d_div[0, int(n_col - 1)] = (d_u[1, n_col - 1] - d_u[0, n_col - 1]) / w - (d_v[0, n_col - 1] - d_v[0, n_col - 2]) / w
-    d_div[int(n_row - 1), 0] = (d_u[n_row - 1, 0] - d_u[n_row - 2, 0]) / w - (d_v[n_row - 1, 1] - d_v[n_row - 1, 0]) / w
+    # Get single case of bottom i = 0, j = n_col-1.
+    div_d[0, int(n_col - 1)] = (u_d[1, n_col - 1] - u_d[0, n_col - 1]) / w - (v_d[0, n_col - 1] - v_d[0, n_col - 2]) / w
+    div_d[int(n_row - 1), 0] = (u_d[n_row - 1, 0] - u_d[n_row - 2, 0]) / w - (v_d[n_row - 1, 1] - v_d[n_row - 1, 0]) / w
 
-    return d_div, d_u, d_v
+    return div_d, u_d, v_d
