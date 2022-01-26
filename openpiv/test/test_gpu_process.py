@@ -11,6 +11,7 @@ from skimage.util import random_noise
 from skimage import img_as_ubyte
 from scipy.ndimage import shift
 from imageio import imread
+from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_validation as gpu_validation
@@ -32,7 +33,8 @@ _image_size_rectangle = (1024, 1024)
 _image_size_square = (1024, 2048)
 _u_shift = 8
 _v_shift = -4
-_tolerance = 0.1
+_accuracy_tolerance = 0.1
+_identity_tolerance = 0.01
 _trim_slice = slice(2, -2, 1)
 
 # test parameters
@@ -41,6 +43,7 @@ _test_size_small = (16, 16)
 _test_size_medium = (64, 64)
 _test_size_large = (256, 256)
 _test_size_super = (1024, 1024)
+_test_size_small_stack = (8, 16, 9)
 
 
 # SCRIPTS
@@ -165,6 +168,19 @@ def test_gpu_interpolate_validation():
     assert np.allclose(f1_val, f1_val_gpu, 0.01)
 
 
+def test_gpu_ftt_shift():
+    correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
+
+    # correlation_stack = correlation_stack * 0
+    # correlation_stack[0, 3, 3] = 1
+    # correlation_stack_d = gpuarray.to_gpu(correlation_stack)
+
+    shift_stack_cpu = fftshift(correlation_stack, axes=(1, 2))
+    shift_stack_gpu = gpu_process.gpu_fft_shift(correlation_stack_d).get()
+
+    assert np.allclose(shift_stack_cpu, shift_stack_gpu, 0.01)
+
+
 def test_subpixel_approximation():
     pass
 
@@ -192,8 +208,8 @@ def test_gpu_piv_fast(image_size):
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _tolerance
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _tolerance
+    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance
+    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
 
 
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
@@ -214,8 +230,8 @@ def test_gpu_piv_zero(image_size):
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    assert np.allclose(u, 0, _tolerance)
-    assert np.allclose(v, 0, _tolerance)
+    assert np.allclose(u, 0, _identity_tolerance)
+    assert np.allclose(v, 0, _identity_tolerance)
 
 
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
@@ -246,8 +262,8 @@ def test_gpu_extended_search_area_fast(image_size):
     u, v = gpu_process.gpu_extended_search_area(
         frame_a_rectangle, frame_b_rectangle, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1
     )
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _tolerance * 2
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _tolerance * 2
+    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance * 2
+    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance * 2
 
 
 def test_gpu_piv_benchmark_oop(benchmark):
@@ -315,6 +331,6 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
     # compare with the previous results
-    assert np.allclose(u, u0, atol=_tolerance)
-    assert np.allclose(v, v0, atol=_tolerance)
+    assert np.allclose(u, u0, atol=_identity_tolerance)
+    assert np.allclose(v, v0, atol=_identity_tolerance)
 

@@ -22,7 +22,7 @@ import logging
 import nvidia_smi
 from pycuda.compiler import SourceModule
 from scipy.fft import fftshift
-from math import sqrt
+from math import sqrt, ceil
 from openpiv.gpu_validation import gpu_validation
 from openpiv.smoothn import smoothn as smoothn
 
@@ -42,7 +42,7 @@ class GPUCorrelation:
     frame_a_d, frame_b_d : GPUArray
         2D int, image pair.
     nfft_x : int or None, optional
-        Window size for fft.
+        Window size multiplier for fft.
 
     Methods
     -------
@@ -94,6 +94,7 @@ class GPUCorrelation:
         self.window_size = window_size
         self.overlap_ratio = overlap_ratio
         # TODO remove unnecessary type casts--Python structures should have python types.
+        # TODO extended size must be power of 2?
         self.size_extended = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
         self.fft_size = DTYPE_i(self.size_extended * self.nfft)
         self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
@@ -109,7 +110,7 @@ class GPUCorrelation:
         win_a_zp_d, win_b_zp_d = self._zero_pad(win_a_norm_d, win_b_norm_d)
 
         # correlate Windows
-        self.correlation_data = self._correlate_windows(win_a_zp_d, win_b_zp_d)
+        self.correlation_data = self._correlate_windows(win_a_zp_d, win_b_zp_d).get()
 
         # get first peak of correlation function
         self.peak_row, self.peak_col, self.corr_max1 = self._find_peak(self.correlation_data)
@@ -127,7 +128,8 @@ class GPUCorrelation:
     def _iw_arrange(self, frame_a_d, frame_b_d, shift_d, strain_d):
         """Creates a 3D array stack of all the interrogation windows.
 
-        This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin of the image.
+        This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin
+        of the image. The implementation requires that the window sizes are multiples of 4.
 
         Parameters
         -----------
@@ -230,6 +232,7 @@ class GPUCorrelation:
             output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
         }
         """)
+        # TODO this may not work anymore
         block_size = 8
         grid_size = int(self.size_extended / block_size)
 
@@ -242,7 +245,7 @@ class GPUCorrelation:
             if strain_d is None:
                 strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
 
-            window_slice_deform = mod_ws.get_function("window_slice_deform")
+            window_slice_deform = mod_ws.get_function('window_slice_deform')
             window_slice_deform(win_a_d, frame_a_d, shift_d, strain_d, shift_factor_a, self.size_extended, spacing,
                                 diff_extended,
                                 self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
@@ -254,7 +257,7 @@ class GPUCorrelation:
 
         # Use non-translating windows.
         else:
-            window_slice_deform = mod_ws.get_function("window_slice")
+            window_slice_deform = mod_ws.get_function('window_slice')
             window_slice_deform(win_a_d, frame_a_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
                                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
             window_slice_deform(win_b_d, frame_b_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
@@ -381,7 +384,7 @@ class GPUCorrelation:
 
         Returns
         -------
-        ndarray
+        GPUArray
             2D, output of the correlation function.
 
         """
@@ -404,12 +407,9 @@ class GPUCorrelation:
         # inverse transform
         plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, DTYPE_f, self.n_windows)
         cu_fft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
+        corr_d = gpu_fft_shift(win_i_fft_d)
 
-        # transfer back to cpu to do FFTshift
-        # possible to do this on GPU?
-        corr = fftshift(win_i_fft_d.get().real, axes=(1, 2))
-
-        return corr
+        return corr_d
 
     def _find_peak(self, corr):
         """Find the row and column of the highest peak in correlation function.
@@ -429,6 +429,9 @@ class GPUCorrelation:
             1D int, column position of corr peak.
 
         """
+        # corr_d = gpuarray.to_gpu(corr)
+
+        # TODO account for the padded space
         corr_reshape = corr.reshape(self.n_windows, self.fft_size ** 2)
 
         # Get index and value of peak.
@@ -1246,7 +1249,6 @@ def gpu_mask(frame_d, mask_d):
     return frame_masked_d
 
 
-# TODO consider operating on u and v separately. This way non-uniform meshes can be accommodated.
 def gpu_strain(u_d, v_d, spacing=1):
     """Computes the full strain rate tensor.
 
@@ -1385,54 +1387,52 @@ def gpu_smooth(f_d, s=0.5):
     return f_smooth_d
 
 
-# TODO this shouldn't depend on k, or else there should be a public version which doesn't
-# TODO do multiple replacement methods actually improve results?
-def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
-                         v_mean_d, n_row,
-                         n_col, k):
-    """Replace spurious vectors by the mean or median of the surrounding points.
+def gpu_fft_shift(correlation_d):
+    """Shifts the fft to the center of the correlation windows.
 
     Parameters
     ----------
-    x0_d, y0_d : GPUArray
-        3D float, grid coordinates of previous iteration.
-    x1_d, y1_d : GPUArray
-        3D float, grid coordinates of current iteration.
-    u_d, v_d : GPUArray
-        2D float, velocities at current iteration.
-    u_previous_d, v_previous_d
-        2D float, velocities at previous iteration.
-    val_locations_d : ndarray
-        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is needed.
-    u_mean_d, v_mean_d : GPUArray
-        3D float, mean velocity surrounding each point.
-    n_row, n_col : ndarray
-        int, number of rows and columns in each main loop iteration.
-    k : int
-        Main loop iteration count.
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+
+    Returns
+    -------
+    GPUArray
+        3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
-    val_locations_inverse_d = 1 - val_locations_d
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=3)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
 
-    # First iteration, just replace with mean velocity.
-    if k == 0:
-        u_d = (val_locations_inverse_d * u_mean_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
-        v_d = (val_locations_inverse_d * v_mean_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+    correlation_shift_d = gpuarray.empty_like(correlation_d)
 
-    # Case if different dimensions: interpolation using previous iteration.
-    elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
-        # TODO can avoid slicing here
-        u_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], u_previous_d, u_d,
-                                      val_locations_d=val_locations_d)
-        v_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], v_previous_d, v_d,
-                                      val_locations_d=val_locations_d)
+    mod_fft_shift = SourceModule("""
+        __global__ void fft_shift(float *destination, float *source, int ws, int ht, int wd)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int idx_i = blockIdx.x;  // window index
+        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if(idx_x >= wd || idx_y >= ht){return;}
 
-    # Case if same dimensions.
-    elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
-        u_d = (val_locations_inverse_d * u_previous_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
-        v_d = (val_locations_inverse_d * v_previous_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+        // Compute the mapping.
+        int row_dest = (idx_y + ht / 2) % ht;
+        int col_dest = (idx_x + wd / 2) % wd;
 
-    return u_d, v_d
+        // Get the source and destination indices.
+        int s_idx = ws * idx_i + wd * idx_y + idx_x;
+        int d_idx = ws * idx_i + wd * row_dest + col_dest;
+
+        destination[d_idx] = source[s_idx];
+    }
+    """)
+    block_size = 8
+    grid_size = ceil(max(ht, ht) / block_size)
+    fft_shift = mod_fft_shift.get_function('fft_shift')
+    fft_shift(correlation_shift_d, correlation_d, window_size_i, DTYPE_i(ht), DTYPE_i(wd), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+
+    return correlation_shift_d
 
 
 def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
@@ -1557,6 +1557,56 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     return f1_d
 
 
+# TODO this shouldn't depend on k, or else there should be a public version which doesn't
+# TODO do multiple replacement methods actually improve results?
+def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
+                         v_mean_d, n_row,
+                         n_col, k):
+    """Replace spurious vectors by the mean or median of the surrounding points.
+
+    Parameters
+    ----------
+    x0_d, y0_d : GPUArray
+        3D float, grid coordinates of previous iteration.
+    x1_d, y1_d : GPUArray
+        3D float, grid coordinates of current iteration.
+    u_d, v_d : GPUArray
+        2D float, velocities at current iteration.
+    u_previous_d, v_previous_d
+        2D float, velocities at previous iteration.
+    val_locations_d : ndarray
+        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is needed.
+    u_mean_d, v_mean_d : GPUArray
+        3D float, mean velocity surrounding each point.
+    n_row, n_col : ndarray
+        int, number of rows and columns in each main loop iteration.
+    k : int
+        Main loop iteration count.
+
+    """
+    val_locations_inverse_d = 1 - val_locations_d
+
+    # First iteration, just replace with mean velocity.
+    if k == 0:
+        u_d = (val_locations_inverse_d * u_mean_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
+        v_d = (val_locations_inverse_d * v_mean_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+
+    # Case if different dimensions: interpolation using previous iteration.
+    elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
+        # TODO can avoid slicing here
+        u_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], u_previous_d, u_d,
+                                      val_locations_d=val_locations_d)
+        v_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], v_previous_d, v_d,
+                                      val_locations_d=val_locations_d)
+
+    # Case if same dimensions.
+    elif k > 0 and (n_row[k] == n_row[k - 1] or n_col[k] == n_col[k - 1]):
+        u_d = (val_locations_inverse_d * u_previous_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
+        v_d = (val_locations_inverse_d * v_previous_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+
+    return u_d, v_d
+
+
 def _gpu_array_index(array_d, indices, dtype):
     """Allows for arbitrary index selecting with numpy arrays
 
@@ -1650,16 +1700,6 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     x_blocks = int(size_i // block_size + 1)
     index_update = mod_index_update.get_function('index_update')
     index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-
-def _get_gpu_memory():
-    nvidia_smi.nvmlInit()
-    handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
-    # card id 0 hardcoded here, there is also a call to get all available card ids, so we could iterate
-    info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
-    nvidia_smi.nvmlShutdown()
-
-    return info.free, info.used, info.total
 
 
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
