@@ -110,15 +110,6 @@ def test_gpu_smooth():
     assert np.array_equal(f_smooth, f_smooth_gpu)
 
 
-def test_gpu_round():
-    f, f_d = generate_cpu_gpu_pair(_test_size_small)
-
-    f_round = np.round(f)
-    f_round_gpu = (gpu_process.gpu_round(f_d)).get()
-
-    assert np.array_equal(f_round, f_round_gpu)
-
-
 def test_gpu_interpolate():
     ws0 = 16
     ws1 = 8

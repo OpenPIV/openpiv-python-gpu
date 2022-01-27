@@ -115,17 +115,17 @@ class GPUCorrelation:
         self.correlation_d = self._correlate_windows(win_a_zp_d, win_b_zp_d)
 
         # get first peak of correlation function
+        # TODO don't transfer back to CPU.
         self.row_peak, self.col_peak, self.corr_max1 = self._find_peak(self.correlation_d)
         self.row_peak_d = gpuarray.to_gpu(self.row_peak)
         self.col_peak_d = gpuarray.to_gpu(self.col_peak)
 
         # get the subpixel location
-        row_sp, col_sp = self._subpixel_peak_location()
+        row_sp_d, col_sp_d = self._subpixel_peak_location()
 
-        # TODO this could be GPU array--would be faster?
-        # reshape to field window coordinates
-        i_peak = row_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size_y / 2
-        j_peak = col_sp.reshape((self.n_rows, self.n_cols)) - self.fft_size_x / 2
+        # Center the peak displacement.
+        i_peak = row_sp_d - DTYPE_f(self.fft_size_y / 2)
+        j_peak = col_sp_d - DTYPE_f(self.fft_size_x / 2)
 
         return i_peak, j_peak
 
@@ -498,7 +498,7 @@ class GPUCorrelation:
         """
         row_sp_d, col_sp_d = gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d, self.fft_size_x, self.fft_size_x)
 
-        return row_sp_d.get(), col_sp_d.get()
+        return row_sp_d, col_sp_d
 
     def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal-to-noise ratio.
@@ -614,15 +614,15 @@ def gpu_extended_search_area(frame_a, frame_b,
     corr = GPUCorrelation(frame_a_d, frame_b_d, nfft_x)
 
     # Get window displacement to subpixel accuracy
-    sp_i, sp_j = corr(window_size, overlap_ratio, search_area_size)
+    sp_i_d, sp_j_d = corr(window_size, overlap_ratio, search_area_size)
 
     # reshape the peaks
-    i_peak = np.reshape(sp_i, (corr.n_rows, corr.n_cols))
-    j_peak = np.reshape(sp_j, (corr.n_rows, corr.n_cols))
+    i_peak = sp_i_d.reshape(corr.n_rows, corr.n_cols)
+    j_peak = sp_j_d.reshape(corr.n_rows, corr.n_cols)
 
     # calculate velocity fields
-    u = j_peak / dt
-    v = -i_peak / dt
+    u = (j_peak / dt).get()
+    v = (-i_peak / dt).get()
 
     # Free gpu memory
     frame_a_d.gpudata.free()
@@ -924,12 +924,12 @@ class PIVGPU:
             extended_size, shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d, k)
 
             # Get window displacement to subpixel accuracy.
-            i_peak, j_peak = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size,
+            i_peak_d, j_peak_d = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size,
                                        shift_d=shift_d, strain_d=strain_d)
 
             # update the field with new values
-            u_d, v_d = self._update_values(i_peak, j_peak, dp_x_d, dp_y_d, k)
-            self._log_residual(i_peak, j_peak)
+            u_d, v_d = self._update_values(i_peak_d, j_peak_d, dp_x_d, dp_y_d, k)
+            self._log_residual(i_peak_d, j_peak_d)
 
             # VALIDATION
             if k == 0 and self.trust_1st_iter:
@@ -1061,21 +1061,19 @@ class PIVGPU:
 
         return dp_x_d, dp_y_d
 
-    def _update_values(self, i_peak, j_peak, dp_x_d, dp_y_d, k):
+    def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d, k):
         """Updates the velocity values after each iteration."""
-        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, shape=i_peak.shape, dim=2)
+        _check_inputs(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
         if dp_x_d == dp_y_d is None:
             # TODO need variable self.field_shape
             dp_x_d = gpuarray.zeros((int(self.n_row[k]), int(self.n_col[k])), dtype=DTYPE_f)
             dp_y_d = gpuarray.zeros((int(self.n_row[k]), int(self.n_col[k])), dtype=DTYPE_f)
         else:
-            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak.shape, dim=2)
+            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=dp_x_d.shape)
         size = DTYPE_i(dp_x_d.size)
 
         u_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
         v_d = gpuarray.empty_like(dp_y_d, dtype=DTYPE_f)
-        i_peak_d = gpuarray.to_gpu(i_peak)
-        j_peak_d = gpuarray.to_gpu(j_peak)
 
         mod_update = SourceModule("""
             __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
@@ -1094,18 +1092,15 @@ class PIVGPU:
         update_values(u_d, dp_x_d, j_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
         update_values(v_d, dp_y_d, i_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-        i_peak_d.gpudata.free()
-        j_peak_d.gpudata.free()
-
         return u_d, v_d
 
     @staticmethod
-    def _log_residual(i_peak, j_peak):
+    def _log_residual(i_peak_d, j_peak_d):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
-        _check_inputs(i_peak, j_peak, array_type=np.ndarray, dtype=DTYPE_f, shape=i_peak.shape, dim=2)
+        _check_inputs(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
 
         try:
-            normalized_residual = sqrt(np.sum(i_peak ** 2 + j_peak ** 2) / i_peak.size) / 0.5
+            normalized_residual = sqrt(int(gpuarray.sum(i_peak_d ** 2 + j_peak_d ** 2).get()) / i_peak_d.size) / 0.5
             logging.info("[DONE]--Normalized residual : {}.\n".format(normalized_residual))
         except OverflowError:
             logging.warning('[DONE]--Overflow in residuals.\n')
@@ -1286,44 +1281,6 @@ def gpu_strain(u_d, v_d, spacing=1):
                grid=(n_blocks, 1))
 
     return strain_d
-
-
-def gpu_round(f_d):
-    """Rounds each element in the gpu array.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        Array to be rounded.
-
-    Returns
-    -------
-    GPUArray
-        Float, same size as f_d. Rounded values of f_d.
-
-    """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-
-    n = DTYPE_i(f_d.size)
-    f_round_d = gpuarray.empty_like(f_d)
-
-    mod_round = SourceModule("""
-    __global__ void round_gpu(float *dest, float *src, int n)
-    {
-        // dest : output argument
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= n) {return;}
-
-        dest[t_idx] = roundf(src[t_idx]);
-    }
-    """)
-    block_size = 32
-    x_blocks = int(n // block_size + 1)
-    round_gpu = mod_round.get_function("round_gpu")
-    round_gpu(f_round_d, f_d, n, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return f_round_d
 
 
 def gpu_smooth(f_d, s=0.5):
@@ -1626,6 +1583,7 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
         Main loop iteration count.
 
     """
+    # TODO cast to float beforehand?
     val_locations_inverse_d = 1 - val_locations_d
 
     # First iteration, just replace with mean velocity.
