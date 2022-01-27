@@ -15,7 +15,7 @@ import numpy.ma as ma
 
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
-# import pycuda.cumath as cumath
+import pycuda.cumath as cumath
 import skcuda.fft as cu_fft
 import skcuda.misc as cu_misc
 import logging
@@ -110,7 +110,7 @@ class GPUCorrelation:
         win_a_zp_d, win_b_zp_d = self._zero_pad(win_a_norm_d, win_b_norm_d)
 
         # correlate Windows
-        self.correlation_data = self._correlate_windows(win_a_zp_d, win_b_zp_d).get()
+        self.correlation_data = self._correlate_windows(win_a_zp_d, win_b_zp_d)
 
         # get first peak of correlation function
         self.peak_row, self.peak_col, self.corr_max1 = self._find_peak(self.correlation_data)
@@ -391,18 +391,18 @@ class GPUCorrelation:
         win_h = self.fft_size
         win_w = self.fft_size
 
-        win_i_fft_d = gpuarray.empty((self.n_windows, win_h, win_w), DTYPE_f)
-        win_fft_d = gpuarray.empty((self.n_windows, win_h, win_w // 2 + 1), np.complex64)
-        search_area_fft_d = gpuarray.empty((self.n_windows, win_h, win_w // 2 + 1), np.complex64)
+        win_i_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w)), DTYPE_f)
+        win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
+        win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
 
         # forward FFTs
         plan_forward = cu_fft.Plan((win_h, win_w), DTYPE_f, np.complex64, self.n_windows)
-        cu_fft.fft(win_a_zp_d, win_fft_d, plan_forward)
-        cu_fft.fft(win_b_zp_d, search_area_fft_d, plan_forward)
+        cu_fft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
+        cu_fft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
 
         # multiply the FFTs
-        win_fft_d = win_fft_d.conj()
-        tmp_d = search_area_fft_d * win_fft_d
+        win_a_fft_d = win_a_fft_d.conj()
+        tmp_d = win_b_fft_d * win_a_fft_d
 
         # inverse transform
         plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, DTYPE_f, self.n_windows)
@@ -411,44 +411,44 @@ class GPUCorrelation:
 
         return corr_d
 
-    def _find_peak(self, corr):
+    def _find_peak(self, corr_d):
         """Find the row and column of the highest peak in correlation function.
 
         Parameters
         ----------
-        corr : ndarray
-            Image of the correlation function.
+        corr_d : GPUArray
+            3D float, image of the correlation function.
 
         Returns
         -------
-        ind : ndarray
-            1D int, flattened index of corr peak.
-        row : ndarray
+        row_peak : GPUArray
             1D int, row position of corr peak.
-        col : array
+        col_peak : GPUArray
             1D int, column position of corr peak.
-
+        max_peak : GPUArray
+            1D int, flattened index of corr peak.
         """
-        # corr_d = gpuarray.to_gpu(corr)
-
-        # TODO account for the padded space
-        corr_reshape = corr.reshape(self.n_windows, self.fft_size ** 2)
+        w = DTYPE_i(self.fft_size / 2)
 
         # Get index and value of peak.
-        max_idx = np.argmax(corr_reshape, axis=1)
-        maximum = corr_reshape[range(self.n_windows), max_idx]
+        corr_reshape_d = corr_d.reshape(int(self.n_windows), int(self.fft_size ** 2))
+        max_idx_df = cu_misc.argmax(corr_reshape_d, axis=1).astype(DTYPE_f)
+        max_peak_d = cu_misc.max(corr_reshape_d, axis=1).astype(DTYPE_f)
 
         # Row and column information of peak.
-        row = max_idx // self.fft_size
-        col = max_idx % self.fft_size
+        # TODO account for the padded space
+        col_peak_d, row_peak_d = cumath.modf((max_idx_df / DTYPE_i(self.fft_size)).astype(DTYPE_f))
+        row_peak_d = row_peak_d.astype(DTYPE_i)
+        col_peak_d = (col_peak_d * DTYPE_i(self.fft_size)).astype(DTYPE_i)
 
-        # Return the center if the correlation peak is zero.
-        w = int(self.fft_size / 2)
-        corr_idx = np.asarray((corr_reshape[range(self.n_windows), max_idx] < 0.1)).nonzero()
-        row[corr_idx] = w
-        col[corr_idx] = w
+        # # # Return the center if the correlation peak is zero.
+        zero_peak_inverse_d = (max_peak_d > 0.01).astype(DTYPE_i)
+        zero_peak_d = ((1 - zero_peak_inverse_d) * w).astype(DTYPE_i)
+        row_peak_d = row_peak_d * zero_peak_inverse_d + zero_peak_d
+        col_peak_d = col_peak_d * zero_peak_inverse_d + zero_peak_d
 
-        return row, col, maximum
+        # return row_peak, col_peak, max_peak
+        return row_peak_d.get(), col_peak_d.get(), max_peak_d.get()
 
     def _find_second_peak(self, width):
         """Find the value of the second-largest peak.
@@ -468,19 +468,19 @@ class GPUCorrelation:
 
         """
         # create a masked view of the self.data array
-        tmp = self.correlation_data.view(ma.MaskedArray)
+        tmp = self.correlation_data.get().view(ma.MaskedArray)
 
         # set (width x width) square sub-matrix around the first correlation peak as masked
         for i in range(-width, width + 1):
             for j in range(-width, width + 1):
-                rot_idx = self.peak_row + i
-                col_idx = self.peak_col + j
+                rot_idx = self.peak_row.get() + i
+                col_idx = self.peak_col.get() + j
                 idx = (rot_idx >= 0) & (rot_idx < self.fft_size) & (col_idx >= 0) & (col_idx < self.fft_size)
                 tmp[idx, rot_idx[idx], col_idx[idx]] = ma.masked
 
         row2, col2, corr_max2 = self._find_peak(tmp)
 
-        return corr_max2
+        return corr_max2.get()
 
     # TODO create gpu kernel doing same thing
     def _subpixel_peak_location(self):
@@ -496,7 +496,7 @@ class GPUCorrelation:
         small = 1e-20
 
         # Cast to float.
-        corr_c = self.correlation_data.astype(DTYPE_f)
+        corr_c = self.correlation_data.get()
         row_c = self.peak_row.astype(DTYPE_f)
         col_c = self.peak_col.astype(DTYPE_f)
 
@@ -1430,7 +1430,7 @@ def gpu_fft_shift(correlation_d):
     block_size = 8
     grid_size = ceil(max(ht, ht) / block_size)
     fft_shift = mod_fft_shift.get_function('fft_shift')
-    fft_shift(correlation_shift_d, correlation_d, window_size_i, DTYPE_i(ht), DTYPE_i(wd), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+    fft_shift(correlation_shift_d, correlation_d, window_size_i, DTYPE_i(ht), DTYPE_i(wd), block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_shift_d
 
