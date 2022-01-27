@@ -34,7 +34,7 @@ _image_size_square = (1024, 2048)
 _u_shift = 8
 _v_shift = -4
 _accuracy_tolerance = 0.1
-_identity_tolerance = 0.01
+_identity_tolerance = 0.005
 _trim_slice = slice(2, -2, 1)
 
 # test parameters
@@ -182,10 +182,6 @@ def test_gpu_ftt_shift():
 
 
 def test_subpixel_approximation():
-    pass
-
-
-def test_gpu_mean():
     pass
 
 
