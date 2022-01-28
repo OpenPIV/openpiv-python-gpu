@@ -20,6 +20,7 @@ import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 import skcuda.fft as cu_fft
+
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
     from skcuda import misc as cu_misc
@@ -55,8 +56,8 @@ class GPUCorrelation:
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, nfft_x=None, nfft_y=None):
-        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, dim=2)
+    def __init__(self, frame_a_d, frame_b_d, nfft_x=None):
+        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
         if nfft_x is None:
             self.nfft_x = 2
         else:
@@ -150,7 +151,7 @@ class GPUCorrelation:
             3D float, all interrogation windows stacked on each other.
 
         """
-        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_b_d.shape, dtype=DTYPE_f, dim=2)
+        _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_b_d.shape, dtype=DTYPE_f, ndim=2)
         ht, wd = self.frame_shape
         spacing = DTYPE_i(self.window_size * (1 - self.overlap_ratio))
         diff_extended = DTYPE_i(spacing - self.size_extended / 2)
@@ -159,7 +160,8 @@ class GPUCorrelation:
         win_b_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
 
         mod_ws = SourceModule("""
-            __global__ void window_slice(float *output, float *input, int ws, int spacing, int diff_extended, int n_col, int wd, int ht)
+            __global__ void window_slice(float *output, float *input, int ws, int spacing, int diff_extended, int n_col,
+                                int wd, int ht)
         {
             // x blocks are windows; y and z blocks are x and y dimensions, respectively
             int idx_i = blockIdx.x;
@@ -180,7 +182,8 @@ class GPUCorrelation:
             output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
         }
 
-            __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f, int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
+            __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
+                                int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
         {
             // f : factor to apply to the shift and strain tensors
             // wd : width (number of columns in the full image)
@@ -233,7 +236,8 @@ class GPUCorrelation:
             int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
             // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-            output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1)) * outside_range;
+            output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
+                              * (x - x1) * (y - y1)) * outside_range;
         }
         """)
         # TODO this may not work anymore
@@ -304,7 +308,8 @@ class GPUCorrelation:
             array_norm[thread_idx] = array[thread_idx] - mean[mean_idx];
         }
         
-            __global__ void smart_normalize(float *array, float *array_norm, float *mean, float *mean_ratio, int iw_size)
+            __global__ void smart_normalize(float *array, float *array_norm, float *mean, float *mean_ratio,
+                                int iw_size)
         {
             // global thread id for 1D grid of 2D blocks
             int thread_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
@@ -455,6 +460,20 @@ class GPUCorrelation:
         # return row_peak, col_peak, max_peak
         return row_peak_d.get(), col_peak_d.get(), max_peak_d.get()
 
+    def _subpixel_peak_location(self):
+        """Find subpixel peak approximation using Gaussian method.
+
+        Returns
+        -------
+        row_sp, col_sp : ndarray
+            2D float, location of peak to subpixel accuracy.
+
+        """
+        row_sp_d, col_sp_d = gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                        self.fft_size_x, self.fft_size_x)
+
+        return row_sp_d, col_sp_d
+
     def _find_second_peak(self, width):
         """Find the value of the second-largest peak.
 
@@ -487,19 +506,6 @@ class GPUCorrelation:
 
         return corr_max2.get()
 
-    def _subpixel_peak_location(self):
-        """Find subpixel peak approximation using Gaussian method.
-
-        Returns
-        -------
-        row_sp, col_sp : ndarray
-            2D float, location of peak to subpixel accuracy.
-
-        """
-        row_sp_d, col_sp_d = gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d, self.fft_size_x, self.fft_size_x)
-
-        return row_sp_d, col_sp_d
-
     def sig2noise_ratio(self, method='peak2peak', width=2):
         """Computes the signal-to-noise ratio.
 
@@ -512,9 +518,8 @@ class GPUCorrelation:
             Method for evaluating the signal to noise ratio value from the correlation map. Can be `peak2peak`,
             `peak2mean` or None if no evaluation should be made.
         width : int, optional
-            Half size of the region around the first
-            correlation peak to ignore for finding the second
-            peak. [default: 2]. Only used if ``sig2noise_method==peak2peak``.
+            Half size of the region around the first correlation peak to ignore for finding the second peak.
+            Only used if ``sig2noise_method == peak2peak``.
 
         Returns
         -------
@@ -533,7 +538,7 @@ class GPUCorrelation:
         # get rid on divide by zero
         corr_max2[corr_max2 == 0.0] = 1e-20
 
-        # get signal to noise ratio
+        # get signal-to-noise ratio
         sig2noise = self.corr_max1 / corr_max2
 
         # get rid of nan values. Set sig2noise to zero
@@ -563,7 +568,8 @@ def gpu_extended_search_area(frame_a, frame_b,
     Support for extended search area of the second window has yet to be implimetned. This module is meant to be used
     with an iterative method to cope with the loss of pairs due to particle movement out of the search area.
 
-    This function is an adaptation of the original extended_search_area_piv function rewritten with PyCuda and CUDA-C to run on an NVIDIA GPU.
+    This function is an adaptation of the original extended_search_area_piv function rewritten with PyCuda and CUDA-C to
+    run on an NVIDIA GPU.
 
     References
     ----------
@@ -592,15 +598,17 @@ def gpu_extended_search_area(frame_a, frame_b,
     Other Parameters
     ----------------
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}
-        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid
+        replaces default if correlation map is negative.
     width : int
-        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
+        Only used if sig2noise_method==peak2peak.
     nfft_x : int
         Size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Example
     --------
-    >>> u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1)
+    u, v = gpu_extended_search_area(frame_a, frame_b, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1)
 
     """
     # Extract the parameters
@@ -654,14 +662,15 @@ def gpu_piv(frame_a, frame_b,
     Windows are shifted symmetrically to reduce bias errors.
     The displacement obtained after each correlation is the residual displacement dc.
     The new displacement is computed by dx = dpx + dcx and dy = dpy + dcy.
-    Validation is done by any combination of signal-to-noise ratio, mean, median
+    Validation is done by any combination of signal-to-noise ratio, mean, median and rms.
     Smoothn can be used between iterations to improve the estimate and replace missing values.
 
     References
     ----------
     Scarano F, Riethmuller ML (1999) Iterative multigrid approach in PIV image processing with discrete window offset.
         Exp Fluids 26:513–523
-    Meunier, P., & Leweke, T. (2003). Analysis and treatment of errors due to high velocity gradients in particle image velocimetry.
+    Meunier, P., & Leweke, T. (2003). Analysis and treatment of errors due to high velocity gradients in particle image
+        velocimetry.
         Experiments in fluids, 35(5), 408-421.
     Garcia, D. (2010). Robust smoothing of gridded data in one and higher dimensions with missing values.
         Computational statistics & data analysis, 54(4), 1167-1178.
@@ -671,7 +680,8 @@ def gpu_piv(frame_a, frame_b,
     frame_a, frame_b : ndarray
         2D int, integers containing grey levels of the first and second frames.
     mask : ndarray or None, optional
-        2D, int, array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+        2D, int, array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is
+        on a 0 value the velocity is set to 0.
     window_size_iters : tuple or int, optional
         Number of iterations performed at each window size
     min_window_size : tuple or int, optional
@@ -687,7 +697,8 @@ def gpu_piv(frame_a, frame_b,
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
-        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
+        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for
+        median validation.
 
     Returns
     -------
@@ -709,21 +720,27 @@ def gpu_piv(frame_a, frame_b,
     smoothing_par : float
         Smoothing parameter to pass to Smoothn to apply to the intermediate velocity fields.
     extend_ratio : float
-        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
+        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
+        used.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}
-        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid
+        replaces default if correlation map is negative.
     return_sig2noise : bool
-        Sets whether to return the signal-to-noise ratio. Not returning the signal-to-noise speeds up computation significantly, which is default behaviour.
+        Sets whether to return the signal-to-noise ratio. Not returning the signal-to-noise speeds up computation
+        significantly, which is default behaviour.
     sig2noise_method : {'peak2peak', 'peak2mean'}
         Method of signal-to-noise-ratio measurement.
     s2n_width : int
-        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
+        Only used if sig2noise_method==peak2peak.
     nfftx : int
         Size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
     Example
     -------
-    >>> x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None, window_size_iters=(1, 2), min_window_size=16, overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2, validation_method='median_velocity', median_tol=2)
+    x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None, window_size_iters=(1, 2), min_window_size=16,
+    overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2, validation_method='median_velocity',
+    median_tol=2)
 
     """
     piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smooth,
@@ -753,7 +770,8 @@ class PIVGPU:
     dt : float, optional
         Time delay separating the two frames.
     mask : ndarray or None, optional
-        2D, float. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is on a 0 value the velocity is set to 0.
+        2D, float. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window
+        is on a 0 value the velocity is set to 0.
     deform : bool, optional
         Whether to deform the windows by the velocity gradient at each iteration.
     smooth : bool, optional
@@ -761,7 +779,8 @@ class PIVGPU:
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
-        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for median validation.
+        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for
+        median validation.
 
     Other Parameters
     ----------------
@@ -772,13 +791,16 @@ class PIVGPU:
     smoothing_par : float
         Smoothing parameter to pass to smoothn to apply to the intermediate velocity fields. Default is 0.5.
     extend_ratio : float
-        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be used.
+        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
+        used.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}
-        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid replaces default if correlation map is negative.
+        Method to estimate subpixel location of the peak. Gaussian is default if correlation map is positive. Centroid
+        replaces default if correlation map is negative.
     sig2noise_method : {'peak2peak', 'peak2mean'}
         Method of signal-to-noise-ratio measurement.
     s2n_width : int
-        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2. Only used if sig2noise_method==peak2peak.
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
+        Only used if sig2noise_method==peak2peak.
     nfft_x : int
         Size of the 2D FFT in x-direction. The default of 2 x windows_a.shape[0] is recommended.
 
@@ -925,7 +947,7 @@ class PIVGPU:
 
             # Get window displacement to subpixel accuracy.
             i_peak_d, j_peak_d = self.corr(self.window_size[k], self.overlap_ratio, extended_size=extended_size,
-                                       shift_d=shift_d, strain_d=strain_d)
+                                           shift_d=shift_d, strain_d=strain_d)
 
             # update the field with new values
             u_d, v_d = self._update_values(i_peak_d, j_peak_d, dp_x_d, dp_y_d, k)
@@ -976,7 +998,7 @@ class PIVGPU:
 
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
-        _check_inputs(frame_a, frame_b, shape=frame_a.shape, dim=2)
+        _check_inputs(frame_a, frame_b, shape=frame_a.shape, ndim=2)
         if self.im_mask is not None:
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self.im_mask)
             frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self.im_mask)
@@ -989,7 +1011,7 @@ class PIVGPU:
     # TODO can simplify this to not require u_previous
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d, k):
         """Return velocity fields with outliers removed."""
-        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, dim=2)
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
         m, n = u_d.shape
 
         if self.val_tols[0] is not None and self.nb_validation_iter > 0:
@@ -1027,7 +1049,7 @@ class PIVGPU:
             if self.extend_ratio is not None:
                 extended_size = self.window_size[k] * self.extend_ratio
         else:
-            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, dim=2)
+            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, ndim=2)
             m, n = dp_x_d.shape
 
             # Compute the shift.
@@ -1043,7 +1065,7 @@ class PIVGPU:
 
     def _get_next_iteration_prediction(self, u_d, v_d, k):
         """Returns the velocity field to begin the next iteration."""
-        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, dim=2)
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
         # Interpolate if dimensions do not agree
         if self.window_size[k + 1] != self.window_size[k]:
             # Interpolate velocity onto next iterations grid. Then use it as the predictor for the next step.
@@ -1079,7 +1101,6 @@ class PIVGPU:
             __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
             {
                 // u_new : output argument
-    
                 int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
                 if (t_idx >= size) {return;}
     
@@ -1186,8 +1207,8 @@ def gpu_mask(frame_d, mask_d):
         2D int, masked frame.
 
     """
-    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=frame_d.shape, dim=2)
-    _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=frame_d.shape, dim=2)
+    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=frame_d.shape, ndim=2)
+    _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=frame_d.shape, ndim=2)
 
     size = DTYPE_f(frame_d.size)
     m, n = frame_d.shape
@@ -1265,7 +1286,8 @@ def gpu_strain(u_d, v_d, spacing=1):
         strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
 
         // last row
-        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
+        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;
+        // u_y
         strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
 
         // main body
@@ -1324,7 +1346,7 @@ def gpu_fft_shift(correlation_d):
         3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=3)
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     n_windows, ht, wd = correlation_d.shape
     window_size_i = DTYPE_i(ht * wd)
 
@@ -1353,7 +1375,8 @@ def gpu_fft_shift(correlation_d):
     block_size = 8
     grid_size = ceil(max(ht, ht) / block_size)
     fft_shift = mod_fft_shift.get_function('fft_shift')
-    fft_shift(correlation_shift_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
+    fft_shift(correlation_shift_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd), window_size_i,
+              block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_shift_d
 
@@ -1376,8 +1399,9 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
         1D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],), dim=1)
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
     n_windows, ht, wd = correlation_d.shape
     window_size_i = DTYPE_i(ht * wd)
 
@@ -1386,7 +1410,8 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
 
     # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
     mod_subpixel_approximation = SourceModule("""
-        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1428,7 +1453,9 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
     block_size = 32
     x_blocks = ceil(n_windows / block_size)
     subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd), DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y), block=(block_size, 1, 1), grid=(x_blocks, 1))
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return row_sp_d, col_sp_d
 
@@ -1457,11 +1484,11 @@ def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d)
         2D float, interpolated field.
 
     """
-    _check_inputs(x0_d, y0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
-    _check_inputs(x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
-    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
-    _check_inputs(f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
-    _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f1_d.shape, dim=2)
+    _check_inputs(x0_d, y0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
+    _check_inputs(x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
+    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    _check_inputs(f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f1_d.shape, ndim=2)
     val_locations_inverse_d = 1 - val_locations_d
 
     f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
@@ -1492,8 +1519,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
         2D float, interpolated field.
 
     """
-    _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=1)
-    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, dim=2)
+    _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
+    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
 
     ht_i = DTYPE_i(y0_d.size)
     wd_i = DTYPE_i(x0_d.size)
@@ -1512,7 +1539,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
 
     # TODO use if statements
     mod_interpolate = SourceModule("""
-        __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x, float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+        __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
+                            float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
     {
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
@@ -1544,7 +1572,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
         float f22 = f0[(y2 * wd + x2)];
 
         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-        f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1) * (y - y1);
+        f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1)
+                    * (y - y1);
     }
     """)
     block_size = 32
@@ -1574,7 +1603,8 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
     u_previous_d, v_previous_d
         2D float, velocities at previous iteration.
     val_locations_d : ndarray
-        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is needed.
+        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is
+        needed.
     u_mean_d, v_mean_d : GPUArray
         3D float, mean velocity surrounding each point.
     n_row, n_col : ndarray
@@ -1615,7 +1645,8 @@ def _gpu_array_index(array_d, indices, dtype):
     array_d : GPUArray
         Float or int, array to be selected from.
     indices : GPUArray
-        1D int, list of indexes that you want to index. If you are indexing more than 1 dimension, then make sure that this array is flattened.
+        1D int, list of indexes that you want to index. If you are indexing more than 1 dimension, then make sure that
+        this array is flattened.
     dtype : dtype
         Either int32 or float 32. determines the datatype of the returned array.
 
@@ -1701,7 +1732,7 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
-def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
+def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
     if array_type is not None:
         assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
@@ -1711,5 +1742,7 @@ def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, dim=None):
         assert all(
             [array.shape == shape for array in arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(
             shape)
-    if dim is not None:
-        assert all([len(array.shape) == dim for array in arrays]), 'Inputs must have same dim ({}).'.format(dim)
+    if ndim is not None:
+        assert all([array.ndim == ndim for array in arrays]), 'Inputs must have same ndim ({}).'.format(ndim)
+    if size is not None:
+        assert all([array.size == size for array in arrays]), 'Inputs must have same size ({}).'.format(size)
