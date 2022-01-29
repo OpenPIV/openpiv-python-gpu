@@ -1,9 +1,11 @@
 """This module contains miscellaneous GPU functions."""
+from math import ceil
 
 import numpy as np
 # Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
+# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
 # Define 32-bit types.
@@ -101,6 +103,34 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     x_blocks = int(size_i // block_size + 1)
     index_update = mod_index_update.get_function('index_update')
     index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+
+def _gpu_remove_nanf(f_d):
+    """Replaces all NaN from array with zeros.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        nd float.
+
+    """
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    size_i = DTYPE_i(f_d.size)
+    mod_replace_nanf = SourceModule("""
+        __global__ void replace_nanf(float *f, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if(t_idx >= size) {return;}
+        float value = f[t_idx];
+
+        // Check for NaNs. The comparison is True for NaNs.
+        if (value != value) {f[t_idx] = 0;}
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(size_i / block_size)
+    index_update = mod_replace_nanf.get_function('replace_nanf')
+    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):

@@ -7,7 +7,7 @@ import numpy as np
 # Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
-import pycuda.cumath as cumath
+# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
 from openpiv.gpu_misc import _check_inputs

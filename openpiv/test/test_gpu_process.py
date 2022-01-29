@@ -15,9 +15,10 @@ from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_validation as gpu_validation
-from openpiv.smoothn import smoothn
+import openpiv.gpu_misc as gpu_misc
+from openpiv.gpu_smoothn import smoothn
 
-pyximport.install(setup_args={"include_dirs": np.get_include()}, language_level=3)
+pyximport.install(setup_args={'include_dirs': np.get_include()}, language_level=3)
 import openpiv.gpu_process_old as gpu_process_old
 
 # GLOBAL VARIABLES
@@ -26,7 +27,7 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 # dirs
-_fixture_dir = "./openpiv/test/fixtures/"
+_fixture_dir = './openpiv/test/fixtures/'
 
 # synthetic image parameters
 _image_size_rectangle = (1024, 1024)
@@ -173,8 +174,43 @@ def test_subpixel_approximation():
     pass
 
 
+def test_mask_peak():
+    correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
+
+    row_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
+    col_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
+
+    correlation_stack_masked_d = gpu_process._gpu_mask_peak(correlation_stack_d, row_peak_d, col_peak_d, 2)
+
+    assert np.all(correlation_stack_masked_d.get()[6, 4:9, 4:9] == 0)
+
+
+def test_mask_rms():
+    correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
+
+    row_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
+    col_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
+
+    correlation_stack_masked_d = gpu_process._gpu_mask_peak(correlation_stack_d, row_peak_d, col_peak_d, 2)
+
+    assert np.all(correlation_stack_masked_d.get()[6, 4:9, 4:9] == 0)
+
+
+def test_gpu_replace_nan():
+    a = np.ones(4, dtype=DTYPE_f)
+    a[1] = np.nan
+    a[2] = np.inf
+    a_d = gpuarray.to_gpu(a)
+
+    b_cpu = np.nan_to_num(a, nan=0, posinf=np.inf)
+    gpu_misc._gpu_remove_nanf(a_d)
+    b_gpu = a_d.get()
+
+    assert np.array_equal(b_cpu, b_gpu)
+
+
 # INTEGRATION TESTS
-@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
+@pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):
     """Quick test of the main piv function."""
     frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
@@ -186,7 +222,7 @@ def test_gpu_piv_fast(image_size):
             'deform': True,
             'smooth': True,
             'nb_validation_iter': 1,
-            'validation_method': "median_velocity",
+            'validation_method': 'median_velocity',
             'trust_1st_iter': False,
             }
 
@@ -196,7 +232,7 @@ def test_gpu_piv_fast(image_size):
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
 
 
-@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
+@pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_zero(image_size):
     """Tests that zero-displacement is returned when the images are empty."""
     frame_a = frame_b = np.zeros(image_size, dtype=np.int32)
@@ -206,9 +242,10 @@ def test_gpu_piv_zero(image_size):
             'overlap_ratio': 0.5,
             'dt': 1,
             'deform': True,
-            'smooth': False,  # this is False so that smoothn doesn't error
+            # This is False so that smoothn doesn't error out.
+            'smooth': False,
             'nb_validation_iter': 1,
-            'validation_method': "median_velocity",
+            'validation_method': 'median_velocity',
             'trust_1st_iter': False,
             }
 
@@ -231,29 +268,32 @@ def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_
             'deform': True,
             'smooth': True,
             'nb_validation_iter': 2,
-            'validation_method': "median_velocity",
+            'validation_method': 'median_velocity',
             'trust_1st_iter': False,
             }
 
     benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
     # benchmark(gpu_process_old.gpu_piv, frame_a, frame_b, **args)
-#
-#
-# def test_sig2noise():
-#     frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-#     args = {'mask': None,
-#             'window_size_iters': (1, 2, 2),
-#             'min_window_size': 8,
-#             'overlap_ratio': 0.5,
-#             'dt': 1,
-#             'deform': True,
-#             'smooth': True,
-#             'nb_validation_iter': 2,
-#             'validation_method': "median_velocity",
-#             'return_sig2noise': True
-#             }
-#
-#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+
+@pytest.mark.parametrize('s2n_method', ('peak2peak', 'peak2mean', 'peak2energy'))
+def test_sig2noise(s2n_method):
+    """Inputs every s2n method to ensure they don't error out."""
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': 'median_velocity',
+            'return_sig2noise': True,
+            'sig2noise_method': s2n_method,
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
@@ -268,7 +308,7 @@ def test_gpu_extended_search_area_fast(image_size):
 
 
 def test_gpu_piv_benchmark_oop(benchmark):
-    """Benchmarks the PIV with the objected-oriented interface."""
+    """Benchmarks the PIV speed with the objected-oriented interface."""
     frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
     args = {'mask': None,
             'window_size_iters': (1, 2, 2),
@@ -278,7 +318,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
             'deform': True,
             'smooth': True,
             'nb_validation_iter': 2,
-            'validation_method': "median_velocity",
+            'validation_method': 'median_velocity',
             'trust_1st_iter': False,
             }
 
@@ -295,7 +335,8 @@ def test_gpu_piv_benchmark_oop(benchmark):
 @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
 @pytest.mark.parametrize('min_window_size', [8, 16])
 @pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
-def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
+def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
+    """This test checks that the output remains the same."""
     # the images are loaded using imageio.
     frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
     frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
@@ -307,7 +348,7 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
             'deform': True,
             'smooth': True,
             'nb_validation_iter': nb_validation_iter,
-            'validation_method': "median_velocity",
+            'validation_method': 'median_velocity',
             'trust_1st_iter': False,
             'smoothing_par': 0.5
             }
