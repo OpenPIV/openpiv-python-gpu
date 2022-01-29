@@ -27,8 +27,8 @@ with warnings.catch_warnings():
     from skcuda import misc as cu_misc
 
 from openpiv.gpu_validation import gpu_validation
-from openpiv.smoothn import smoothn as smoothn
-from openpiv.gpu_lib import _check_inputs
+from openpiv.gpu_smoothn import smoothn as smoothn
+from openpiv.gpu_misc import _check_inputs
 
 # Define 32-bit types.
 DTYPE_i = np.int32

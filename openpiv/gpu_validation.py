@@ -1,10 +1,16 @@
 """This module is for GPU-accelerated validation algorithms."""
 
 import time
+import logging
 
 import numpy as np
+# Create the PyCUDA context.
+import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
+import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
+
+from openpiv.gpu_misc import _check_inputs
 
 # Define 32-bit types
 DTYPE_i = np.int32
