@@ -28,7 +28,7 @@ with warnings.catch_warnings():
 
 from openpiv.gpu_validation import gpu_validation
 from openpiv.gpu_smoothn import smoothn
-from openpiv.gpu_misc import _check_inputs
+from openpiv.gpu_misc import _check_inputs, _gpu_window_index_f
 
 # Define 32-bit types.
 DTYPE_i = np.int32
@@ -485,22 +485,22 @@ class GPUCorrelation:
 
         # Get index and value of peak.
         corr_reshape_d = corr_d.reshape(int(self.n_windows), int(self.fft_size))
-        max_idx_df = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_f)
-        max_peak_d = cumisc.max(corr_reshape_d, axis=1).astype(DTYPE_f)
+        peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
+        peak_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
 
         # Row and column information of peak.
         # TODO account for the padded space in non-square correlations.
-        col_peak_d, row_peak_d = cumath.modf((max_idx_df / DTYPE_i(self.fft_width_x)).astype(DTYPE_f))
+        col_peak_d, row_peak_d = cumath.modf((peak_idx_d.astype(DTYPE_f) / DTYPE_f(self.fft_width_x)))
         row_peak_d = row_peak_d.astype(DTYPE_i)
         col_peak_d = (col_peak_d * DTYPE_i(self.fft_width_x)).astype(DTYPE_i)
 
         # Return the center if the correlation peak is near zero.
-        zero_peak_inverse_d = (max_peak_d > 1e-3).astype(DTYPE_i)
-        zero_peak_d = ((1 - zero_peak_inverse_d) * w).astype(DTYPE_i)
+        zero_peak_inverse_d = (peak_d > 1e-3).astype(DTYPE_i)
+        zero_peak_d = (1 - zero_peak_inverse_d) * w
         row_peak_d = row_peak_d * zero_peak_inverse_d + zero_peak_d
         col_peak_d = col_peak_d * zero_peak_inverse_d + zero_peak_d
 
-        return row_peak_d, col_peak_d, max_peak_d
+        return row_peak_d, col_peak_d, peak_d
 
     def _subpixel_peak_location(self):
         """Find subpixel peak approximation using Gaussian method.
@@ -542,18 +542,6 @@ class GPUCorrelation:
         _, _, corr_max2_d = self._find_peak(correlation_masked_d)
 
         return corr_max2_d
-
-    # def _get_correlation_rms(self, correlation_positive_d):
-    #     """Returns the RMS of the correlation field, excluding all values half the height of the peak."""
-    #     # Remove the correlation values that are half the height of the first peak.
-    #     correlation_noise_d = correlation_positive_d * (correlation_positive_d < 0)
-    #
-    #     return gpu_rms(correlation_noise_d)
-    #
-    # def _get_correlation_energy(self, correlation_positive_d):
-    #     """Find the value of the second-largest peak."""
-    #
-    #     return correlation_positive_d ** 2
 
 
 def gpu_extended_search_area(frame_a, frame_b,

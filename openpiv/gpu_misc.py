@@ -36,7 +36,6 @@ def _gpu_array_index(array_d, indices, dtype):
     assert type(array_d) == gpuarray.GPUArray, 'Input must be GPUArray.'
     assert array_d.dtype == DTYPE_f or array_d.dtype == DTYPE_f, 'Input must have dtype float32 or int32.'
 
-    # send data to the gpu
     return_values_d = gpuarray.zeros(indices.size, dtype=dtype)
 
     mod_array_index = SourceModule("""
@@ -85,7 +84,7 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     Returns
     -------
     GPUArray
-        Float, input array with values updated
+        Float, input array with values updated.
 
     """
     size_i = DTYPE_i(values_d.size)
@@ -105,7 +104,47 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
-def _gpu_remove_nanf(f_d):
+def _gpu_window_index_f(src_d, indices_d):
+    """Returns the values of the peaks from the 2D correlation.
+
+    Parameters
+    ----------
+    src_d : GPUArray
+        2D float, correlation values.
+    indices_d : GPUArray
+        1D int, indexes of the peaks.
+
+    Returns
+    -------
+    GPUArray
+        1D float.
+
+    """
+    _check_inputs(src_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    n_windows, size = src_d.shape
+    _check_inputs(indices_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(n_windows,), ndim=1)
+
+    dest_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
+
+    mod_index_update = SourceModule("""
+    __global__ void window_index_f(float *dest, float *src, int *indices, int size, int n_windows)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= n_windows) {return;}
+
+        dest[t_idx] = src[t_idx * size + indices[t_idx]];
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    index_update = mod_index_update.get_function('window_index_f')
+    index_update(dest_d, src_d, indices_d, DTYPE_i(size), DTYPE_i(n_windows), block=(block_size, 1, 1),
+                 grid=(x_blocks, 1))
+
+    return dest_d
+
+
+def _gpu_remove_nan_f(f_d):
     """Replaces all NaN from array with zeros.
 
     Parameters
@@ -116,8 +155,8 @@ def _gpu_remove_nanf(f_d):
     """
     _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     size_i = DTYPE_i(f_d.size)
-    mod_replace_nanf = SourceModule("""
-        __global__ void replace_nanf(float *f, int size)
+    mod_replace_nan_f = SourceModule("""
+        __global__ void replace_nan_f(float *f, int size)
     {
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if(t_idx >= size) {return;}
@@ -129,7 +168,7 @@ def _gpu_remove_nanf(f_d):
     """)
     block_size = 32
     x_blocks = ceil(size_i / block_size)
-    index_update = mod_replace_nanf.get_function('replace_nanf')
+    index_update = mod_replace_nan_f.get_function('replace_nan_f')
     index_update(f_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
