@@ -17,7 +17,6 @@ matplotlib
 natsort
 networkx
 numpy
-nvidia-ml-py3
 packaging
 parso
 pexpect

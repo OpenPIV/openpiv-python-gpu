@@ -15,25 +15,26 @@ import warnings
 from math import sqrt, ceil
 
 import numpy as np
-import numpy.ma as ma
+import skcuda.fft as cu_fft
+# Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
-import skcuda.fft as cu_fft
-
+from pycuda.compiler import SourceModule
+# scikit-cuda gives an annoying warning everytime it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
     from skcuda import misc as cu_misc
-from pycuda.compiler import SourceModule
 
 from openpiv.gpu_validation import gpu_validation
 from openpiv.smoothn import smoothn as smoothn
+from openpiv.gpu_lib import _check_inputs
 
-# Define 32-bit types
+# Define 32-bit types.
 DTYPE_i = np.int32
 DTYPE_f = np.float32
 
-# initialize the skcuda library
+# Initialize the skcuda library.
 cu_misc.init()
 
 
@@ -103,25 +104,22 @@ class GPUCorrelation:
         self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
         self.n_windows = self.n_rows * self.n_cols
 
-        # Return stack of all IWs
-        win_a_d, win_b_d = self._iw_arrange(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
+        # Return stack of all IWs.
+        win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
 
-        # normalize array by computing the norm of each IW
+        # Normalize array by computing the norm of each IW.
         win_a_norm_d, win_b_norm_d = self._normalize_intensity(win_a_d, win_b_d)
 
-        # zero pad arrays
+        # Zero pad arrays.
         win_a_zp_d, win_b_zp_d = self._zero_pad(win_a_norm_d, win_b_norm_d)
 
-        # correlate Windows
+        # Correlate the windows.
         self.correlation_d = self._correlate_windows(win_a_zp_d, win_b_zp_d)
 
-        # get first peak of correlation function
-        # TODO don't transfer back to CPU.
-        self.row_peak, self.col_peak, self.corr_max1 = self._find_peak(self.correlation_d)
-        self.row_peak_d = gpuarray.to_gpu(self.row_peak)
-        self.col_peak_d = gpuarray.to_gpu(self.col_peak)
+        # Get first peak of correlation.
+        self.row_peak_d, self.col_peak_d, self.corr_max1_d = self._find_peak(self.correlation_d)
 
-        # get the subpixel location
+        # Get the subpixel location.
         row_sp_d, col_sp_d = self._subpixel_peak_location()
 
         # Center the peak displacement.
@@ -130,7 +128,53 @@ class GPUCorrelation:
 
         return i_peak, j_peak
 
-    def _iw_arrange(self, frame_a_d, frame_b_d, shift_d, strain_d):
+    def get_sig2noise(self, method='peak2peak', width=2):
+        """Computes the signal-to-noise ratio using one of three available methods.
+
+        The signal-to-noise ratio is computed from the correlation and is a measure of the quality of the matching
+        between two interrogation windows. Note that this method returns the base-10 logarithm of the sig2noise ratio.
+        The sig2noise field contains +np.Inf values where there is no noise.
+
+        Parameters
+        ----------
+        method : string, optional
+            Method for evaluating the signal-to-noise ratio value from the correlation map. Can be 'peak2peak',
+            'peak2mean', 'peak2energy'.
+        width : int, optional
+            Half size of the region around the first correlation peak to ignore for finding the second peak. Only used
+            if 'sig2noise_method == peak2peak'.
+
+        Returns
+        -------
+        ndarray
+            2D float, the base-10 logarithm of the signal-to-noise ratio from the correlation map for each vector.
+
+        """
+        assert method in ['peak2peak', 'peak2mean', 'peak2energy']
+        assert 0 <= width < int(min(self.fft_size_x, self.fft_size_y) / 2)
+
+        # Set all negative values to zero.
+        correlation_positive_d = self.correlation_d * (self.correlation_d < 0)
+
+        corr_max2_d = self._find_second_peak_height(correlation_positive_d, width=width)
+
+        # # Compute signal-to-noise ratio by the chosen method.
+        # if method == 'peak2mean':
+        #     corr_max2_d = self._get_correlation_rms(correlation_positive_d, width=width)
+        # elif method == 'peak2energy':
+        #     corr_max2_d = self._get_correlation_energy(correlation_positive_d, width=width)
+        # else:
+        #     corr_max2_d = self._find_second_peak_height(correlation_positive_d, width=width)
+
+        # Get signal-to-noise ratio.
+        sig2noise_d = cumath.log10(self.corr_max1_d / corr_max2_d)
+
+        # # Remove NaNs.
+        # sig2noise_d = sig2noise_d * (sig2noise_d == np.NaN)
+
+        return sig2noise_d.reshape(self.n_rows, self.n_cols)
+
+    def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d):
         """Creates a 3D array stack of all the interrogation windows.
 
         This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin
@@ -405,16 +449,16 @@ class GPUCorrelation:
         win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
         win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
 
-        # forward FFTs
+        # Forward FFTs.
         plan_forward = cu_fft.Plan((win_h, win_w), DTYPE_f, np.complex64, self.n_windows)
         cu_fft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
         cu_fft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
 
-        # multiply the FFTs
+        # Multiply the FFTs.
         win_a_fft_d = win_a_fft_d.conj()
         tmp_d = win_b_fft_d * win_a_fft_d
 
-        # inverse transform
+        # Inverse transform.
         plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, DTYPE_f, self.n_windows)
         cu_fft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
         corr_d = gpu_fft_shift(win_i_fft_d)
@@ -446,19 +490,18 @@ class GPUCorrelation:
         max_peak_d = cu_misc.max(corr_reshape_d, axis=1).astype(DTYPE_f)
 
         # Row and column information of peak.
-        # TODO account for the padded space
+        # TODO account for the padded space in non-square correlations.
         col_peak_d, row_peak_d = cumath.modf((max_idx_df / DTYPE_i(self.fft_size_x)).astype(DTYPE_f))
         row_peak_d = row_peak_d.astype(DTYPE_i)
         col_peak_d = (col_peak_d * DTYPE_i(self.fft_size_x)).astype(DTYPE_i)
 
-        # # # Return the center if the correlation peak is zero.
-        zero_peak_inverse_d = (max_peak_d > 0.01).astype(DTYPE_i)
+        # Return the center if the correlation peak is near zero.
+        zero_peak_inverse_d = (max_peak_d > 1e-3).astype(DTYPE_i)
         zero_peak_d = ((1 - zero_peak_inverse_d) * w).astype(DTYPE_i)
         row_peak_d = row_peak_d * zero_peak_inverse_d + zero_peak_d
         col_peak_d = col_peak_d * zero_peak_inverse_d + zero_peak_d
 
-        # return row_peak, col_peak, max_peak
-        return row_peak_d.get(), col_peak_d.get(), max_peak_d.get()
+        return row_peak_d, col_peak_d, max_peak_d
 
     def _subpixel_peak_location(self):
         """Find subpixel peak approximation using Gaussian method.
@@ -474,7 +517,7 @@ class GPUCorrelation:
 
         return row_sp_d, col_sp_d
 
-    def _find_second_peak(self, width):
+    def _find_second_peak_height(self, correlation_positive_d, width):
         """Find the value of the second-largest peak.
 
         The second-largest peak is the height of the peak in the region outside a "width * width" submatrix around
@@ -482,78 +525,36 @@ class GPUCorrelation:
 
         Parameters
         ----------
+        correlation_positive_d : GPUArray.
+            Correlation data with negative values removed.
         width : int
             Half size of the region around the first correlation peak to ignore for finding the second peak.
 
         Returns
         -------
-        corr_max2 : int
-            Value of the second correlation peak.
+        GPUArray
+            Value of the second correlation peak for each interrogation window.
 
         """
-        # create a masked view of the self.data array
-        tmp = self.correlation_d.get().view(ma.MaskedArray)
+        # # Set points around the first peak to zero.
+        # correlation_masked_d = _gpu_mask_peak_(correlation_positive_d, self.row_peak_d, self.col_peak_d, width)
 
-        # set (width x width) square sub-matrix around the first correlation peak as masked
-        for i in range(-width, width + 1):
-            for j in range(-width, width + 1):
-                rot_idx = self.row_peak + i
-                col_idx = self.col_peak + j
-                idx = (rot_idx >= 0) & (rot_idx < self.fft_size_x) & (col_idx >= 0) & (col_idx < self.fft_size_x)
-                tmp[idx, rot_idx[idx], col_idx[idx]] = ma.masked
+        # Get the height of the second peak of correlation.
+        _, _, corr_max2_d = self._find_peak(self.correlation_d)
 
-        row2, col2, corr_max2 = self._find_peak(tmp)
+        return corr_max2_d
 
-        return corr_max2.get()
-
-    def sig2noise_ratio(self, method='peak2peak', width=2):
-        """Computes the signal-to-noise ratio.
-
-        The signal-to-noise ratio is computed from the correlation map with one of two available method. It is a measure
-        of the quality of the matching between two interrogation windows.
-
-        Parameters
-        ----------
-        method : string, optional
-            Method for evaluating the signal to noise ratio value from the correlation map. Can be `peak2peak`,
-            `peak2mean` or None if no evaluation should be made.
-        width : int, optional
-            Half size of the region around the first correlation peak to ignore for finding the second peak.
-            Only used if ``sig2noise_method == peak2peak``.
-
-        Returns
-        -------
-        ndarray
-            2D float, the signal-to-noise ratio from the correlation map for each vector.
-
-        """
-        # compute signal-to-noise ratio by the chosen method
-        if method == 'peak2peak':
-            corr_max2 = self._find_second_peak(width=width)
-        elif method == 'peak2mean':
-            corr_max2 = self.correlation_d.mean()
-        else:
-            raise ValueError('wrong sig2noise_method')
-
-        # get rid on divide by zero
-        corr_max2[corr_max2 == 0.0] = 1e-20
-
-        # get signal-to-noise ratio
-        sig2noise = self.corr_max1 / corr_max2
-
-        # get rid of nan values. Set sig2noise to zero
-        sig2noise[np.isnan(sig2noise)] = 0.0
-
-        # if the image is lacking particles, it will correlate to very low value, but not zero
-        # return zero, since we have no signal.
-        sig2noise[self.corr_max1 < 1e-3] = 0.0
-
-        # if the first peak is on the borders, the correlation map is wrong
-        # return zero, since we have no signal.
-        sig2noise[np.array(self.row_peak == 0) * np.array(self.row_peak == self.correlation_d.shape[1]) * np.array(
-            self.col_peak == 0) * np.array(self.col_peak == self.correlation_d.shape[2])] = 0.0
-
-        return sig2noise.reshape(self.n_rows, self.n_cols)
+    # def _get_correlation_rms(self, correlation_positive_d):
+    #     """Returns the RMS of the correlation field, excluding all values half the height of the peak."""
+    #     # Remove the correlation values that are half the height of the first peak.
+    #     correlation_noise_d = correlation_positive_d * (correlation_positive_d < 0)
+    #
+    #     return gpu_rms(correlation_noise_d)
+    #
+    # def _get_correlation_energy(self, correlation_positive_d):
+    #     """Find the value of the second-largest peak."""
+    #
+    #     return correlation_positive_d ** 2
 
 
 def gpu_extended_search_area(frame_a, frame_b,
@@ -565,11 +566,9 @@ def gpu_extended_search_area(frame_a, frame_b,
                              ):
     """The implementation of the one-step direct correlation with the same size windows.
 
-    Support for extended search area of the second window has yet to be implimetned. This module is meant to be used
-    with an iterative method to cope with the loss of pairs due to particle movement out of the search area.
-
-    This function is an adaptation of the original extended_search_area_piv function rewritten with PyCuda and CUDA-C to
-    run on an NVIDIA GPU.
+    This function is meant to be used with an iterative method to cope with the loss of pairs due to particle movement
+    out of the search area. It is an adaptation of the original extended_search_area_piv function rewritten with PyCuda
+    and CUDA-C to run on an NVIDIA GPU.
 
     References
     ----------
@@ -993,7 +992,7 @@ class PIVGPU:
         if self.sig2noise is not None:
             s2n = self.sig2noise
         else:
-            s2n = self.corr.sig2noise_ratio(method=self.sig2noise_method)
+            s2n = self.corr.get_sig2noise(method=self.sig2noise_method)
         return s2n
 
     def _mask_image(self, frame_a, frame_b):
@@ -1015,7 +1014,7 @@ class PIVGPU:
         m, n = u_d.shape
 
         if self.val_tols[0] is not None and self.nb_validation_iter > 0:
-            self.sig2noise = self.corr.sig2noise_ratio(method=self.sig2noise_method, width=self.s2n_width)
+            self.sig2noise = self.corr.get_sig2noise(method=self.sig2noise_method, width=self.s2n_width)
 
         for i in range(self.nb_validation_iter):
             # Get list of places that need to be validated.
@@ -1259,12 +1258,12 @@ def gpu_strain(u_d, v_d, spacing=1):
     __global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n)
     {
         // strain : output argument
-        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         int size = m * n;
-        if (i >= size) {return;}
+        if (t_idx >= size) {return;}
 
-        int row = i / n;
-        int col = i % n;
+        int row = t_idx / n;
+        int col = t_idx % n;
 
         // x-axis
         // first column
@@ -1637,112 +1636,73 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
     return u_d, v_d
 
 
-def _gpu_array_index(array_d, indices, dtype):
-    """Allows for arbitrary index selecting with numpy arrays
-
-    Parameters
-    ----------
-    array_d : GPUArray
-        Float or int, array to be selected from.
-    indices : GPUArray
-        1D int, list of indexes that you want to index. If you are indexing more than 1 dimension, then make sure that
-        this array is flattened.
-    dtype : dtype
-        Either int32 or float 32. determines the datatype of the returned array.
-
-    Returns
-    -------
-    GPUArray
-        Float or int, values at the specified indexes.
-
-    """
-    assert indices.ndim == 1, "Number of dimensions of indices is wrong. Should be equal to 1"
-    assert type(array_d) == gpuarray.GPUArray, 'Input must be GPUArray.'
-    assert array_d.dtype == DTYPE_f or array_d.dtype == DTYPE_f, 'Input must have dtype float32 or int32.'
-
-    # send data to the gpu
-    return_values_d = gpuarray.zeros(indices.size, dtype=dtype)
-
-    mod_array_index = SourceModule("""
-    __global__ void array_index_float(float *return_values, float *array, int *return_list, int size)
-    {
-        // 1D grid of 1D blocks
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= size){return;}
-
-        return_values[t_idx] = array[return_list[t_idx]];
-    }
-
-    __global__ void array_index_int(float *array, int *return_values, int *return_list, int size)
-    {
-        // 1D grid of 1D blocks
-        int t_idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if(t_idx >= size){return;}
-
-        return_values[t_idx] = (int)array[return_list[t_idx]];
-    }
-    """)
-    block_size = 32
-    r_size = DTYPE_i(indices.size)
-    x_blocks = int(r_size // block_size + 1)
-
-    if dtype == DTYPE_f:
-        array_index = mod_array_index.get_function('array_index_float')
-        array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    elif dtype == DTYPE_i:
-        array_index = mod_array_index.get_function('array_index_int')
-        array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return return_values_d
-
-
-def _gpu_index_update(dest_d, values_d, indices_d):
-    """Allows for arbitrary index selecting with numpy arrays.
-
-    Parameters
-    ----------
-    dest_d : GPUArray
-       nD float, array to be updated with new values.
-    values_d : GPUArray
-        1D float, values to be updated in the destination array.
-    indices_d : GPUArray
-        1D int, indices to update.
-
-    Returns
-    -------
-    GPUArray
-        Float, input array with values updated
-
-    """
-    size_i = DTYPE_i(values_d.size)
-
-    mod_index_update = SourceModule("""
-    __global__ void index_update(float *dest, float *values, int *indices, int size)
-    {
-        // 1D grid of 1D blocks
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= size){return;}
-
-        dest[indices[t_idx]] = values[t_idx];
-    }
-    """)
-    block_size = 32
-    x_blocks = int(size_i // block_size + 1)
-    index_update = mod_index_update.get_function('index_update')
-    index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-
-def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
-    """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
-    if array_type is not None:
-        assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
-    if dtype is not None:
-        assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
-    if shape is not None:
-        assert all(
-            [array.shape == shape for array in arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(
-            shape)
-    if ndim is not None:
-        assert all([array.ndim == ndim for array in arrays]), 'Inputs must have same ndim ({}).'.format(ndim)
-    if size is not None:
-        assert all([array.size == size for array in arrays]), 'Inputs must have same size ({}).'.format(size)
+# def _gpu_mask_peak_(correlation_positive_d, row_peak_d, col_peak_d, width):
+#     """Returns correlation windows with points around peak masked.
+#
+#     Parameters
+#     ----------
+#     correlation_positive_d : GPUArray.
+#         Correlation data with negative values removed.
+#     row_peak_d, col_peak_d
+#         1D int, position of the peaks.
+#     width : int
+#         Half size of the region around the first correlation peak to ignore for finding the second peak.
+#
+#     Returns
+#     -------
+#     GPUArray
+#         Value of the second correlation peak for each interrogation window.
+#     """
+#     _check_inputs(correlation_positive_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+#     _check_inputs(row_peak_d, col_peak_d)
+#     n_windows, ht, wd = correlation_positive_d.shape
+#     assert 0 <= width < int(min(ht, wd) / 2)
+#
+#     correlation_masked_d =
+#
+#     mod_interpolate = SourceModule("""
+#         __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
+#                             float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+#     {
+#         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+#         if (t_idx >= size) {return;}
+#
+#         // Map indices to old mesh coordinates.
+#         int x_idx = t_idx % n;
+#         int y_idx = t_idx / n;
+#         float x = (x_grid[x_idx] - buffer_x) / spacing_x;
+#         float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+#
+#         // Find limits of domain.
+#         int inside_left = x >= 0;
+#         int inside_right = x < wd - 1;
+#         int inside_top = y >= 0;
+#         int inside_bottom = y < ht - 1;
+#         x = x * inside_left * inside_right + (1 - inside_right) * (wd - 1);
+#         y = y * inside_top * inside_bottom + (1 - inside_bottom) * (ht - 1);
+#
+#         // Do bilinear interpolation.
+#         int x1 = floorf(x - (1 - inside_right));
+#         int x2 = x1 + 1;
+#         int y1 = floorf(y - (1 - inside_bottom));
+#         int y2 = y1 + 1;
+#
+#         // Terms of the bilinear interpolation. Multiply by outside_range to avoid index error.
+#         float f11 = f0[(y1 * wd + x1)];
+#         float f21 = f0[(y1 * wd + x2)];
+#         float f12 = f0[(y2 * wd + x1)];
+#         float f22 = f0[(y2 * wd + x2)];
+#
+#         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+#         f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1)
+#                     * (y - y1);
+#     }
+#     """)
+#     block_size = 32
+#     x_blocks = int(size_i // block_size + 1)
+#     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
+#     interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i, DTYPE_i(n),
+#                     size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+#
+#
+#     return correlation_masked_d

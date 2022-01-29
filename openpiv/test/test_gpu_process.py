@@ -151,7 +151,8 @@ def test_gpu_interpolate_validation():
     val_locations, val_locations_d = generate_cpu_gpu_pair((n_row1, n_col1), magnitude=2, dtype=DTYPE_i)
 
     interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
-    f1_val = val_locations * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * (1 - val_locations)  # interp2d returns interpolation results with increasing y
+    # interp2d returns interpolation results with increasing y
+    f1_val = val_locations * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * (1 - val_locations)
 
     f1_val_d = gpu_process.gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d=val_locations_d)
     f1_val_gpu = f1_val_d.get()
@@ -161,10 +162,6 @@ def test_gpu_interpolate_validation():
 
 def test_gpu_ftt_shift():
     correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
-
-    # correlation_stack = correlation_stack * 0
-    # correlation_stack[0, 3, 3] = 1
-    # correlation_stack_d = gpuarray.to_gpu(correlation_stack)
 
     shift_stack_cpu = fftshift(correlation_stack, axes=(1, 2))
     shift_stack_gpu = gpu_process.gpu_fft_shift(correlation_stack_d).get()
@@ -240,11 +237,28 @@ def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_
 
     benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
     # benchmark(gpu_process_old.gpu_piv, frame_a, frame_b, **args)
+#
+#
+# def test_sig2noise():
+#     frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+#     args = {'mask': None,
+#             'window_size_iters': (1, 2, 2),
+#             'min_window_size': 8,
+#             'overlap_ratio': 0.5,
+#             'dt': 1,
+#             'deform': True,
+#             'smooth': True,
+#             'nb_validation_iter': 2,
+#             'validation_method': "median_velocity",
+#             'return_sig2noise': True
+#             }
+#
+#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
 def test_gpu_extended_search_area_fast(image_size):
-    """Quick test of the extanded search area function."""
+    """Quick test of the extended search area function."""
     frame_a_rectangle, frame_b_rectangle = create_pair_shift(image_size, _u_shift, _v_shift)
     u, v = gpu_process.gpu_extended_search_area(
         frame_a_rectangle, frame_b_rectangle, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1
@@ -254,7 +268,7 @@ def test_gpu_extended_search_area_fast(image_size):
 
 
 def test_gpu_piv_benchmark_oop(benchmark):
-    """Benchmarks the PIV """
+    """Benchmarks the PIV with the objected-oriented interface."""
     frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
     args = {'mask': None,
             'window_size_iters': (1, 2, 2),
@@ -320,4 +334,3 @@ def test_gpu_piv_py2(window_size_iters, min_window_size, nb_validation_iter):
     # compare with the previous results
     assert np.allclose(u, u0, atol=_identity_tolerance)
     assert np.allclose(v, v0, atol=_identity_tolerance)
-
