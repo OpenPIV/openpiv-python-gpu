@@ -203,7 +203,7 @@ def test_gpu_replace_nan():
     a_d = gpuarray.to_gpu(a)
 
     b_cpu = np.nan_to_num(a, nan=0, posinf=np.inf)
-    gpu_misc._gpu_remove_nanf(a_d)
+    gpu_misc._gpu_remove_nan_f(a_d)
     b_gpu = a_d.get()
 
     assert np.array_equal(b_cpu, b_gpu)

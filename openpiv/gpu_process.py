@@ -14,7 +14,7 @@ import warnings
 from math import sqrt, ceil
 
 import numpy as np
-import skcuda.fft as cu_fft
+import skcuda.fft as cufft
 # Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
@@ -33,6 +33,7 @@ from openpiv.gpu_misc import _check_inputs, _gpu_window_index_f
 # Define 32-bit types.
 DTYPE_i = np.int32
 DTYPE_f = np.float32
+DTYPE_c = np.complex64
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 cumisc.init()
@@ -165,7 +166,6 @@ class GPUCorrelation:
         if method == 'peak2mean':
             corr_max1_d = self.corr_peak1_d ** 2
             correlation_rms_d = _gpu_mask_rms(correlation_positive_d, self.corr_peak1_d) ** 2
-            # correlation_rms_d = correlation_masked_d
             corr_max2_d = cumisc.sum(correlation_rms_d.reshape(self.n_windows, self.fft_size),
                                      axis=1) / DTYPE_f(self.fft_size)
         elif method == 'peak2energy':
@@ -441,7 +441,7 @@ class GPUCorrelation:
             2D, output of the correlation function.
 
         """
-        win_h = self.fft_width_x
+        win_h = self.fft_width_y
         win_w = self.fft_width_x
 
         win_i_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w)), DTYPE_f)
@@ -449,17 +449,17 @@ class GPUCorrelation:
         win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
 
         # Forward FFTs.
-        plan_forward = cu_fft.Plan((win_h, win_w), DTYPE_f, np.complex64, self.n_windows)
-        cu_fft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
-        cu_fft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
+        plan_forward = cufft.Plan((win_h, win_w), DTYPE_f, np.complex64, batch=self.n_windows)
+        cufft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
+        cufft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
 
         # Multiply the FFTs.
         win_a_fft_d = win_a_fft_d.conj()
         tmp_d = win_b_fft_d * win_a_fft_d
 
         # Inverse transform.
-        plan_inverse = cu_fft.Plan((win_h, win_w), np.complex64, DTYPE_f, self.n_windows)
-        cu_fft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
+        plan_inverse = cufft.Plan((win_h, win_w), np.complex64, DTYPE_f, batch=self.n_windows)
+        cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
         corr_d = gpu_fft_shift(win_i_fft_d)
 
         return corr_d

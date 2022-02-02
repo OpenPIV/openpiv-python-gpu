@@ -31,7 +31,8 @@ class MPGPU(Process):
     func : function
         OpenPIV algorithm that is multiprocessed
     items : iterable
-        *lists of partitions of items to process. *list is comprised of arguments to be passed to func (e.g. frame_a, frame_b).
+        *lists of partitions of items to process. *list is comprised of arguments to be passed to func (e.g. frame_a,
+        frame_b).
     gpu_id : int
         which GPU to use for processing
     index : int
@@ -149,7 +150,7 @@ def parallelize(
             # create a list of partitions for each of the input items
             sublist = [[]] * num_args
             for j in range(num_args):
-                sublist[j] = items[j][start_index : start_index + partition_size]
+                sublist[j] = items[j][start_index:start_index + partition_size]
         else:
             sublist = None
 
@@ -193,7 +194,7 @@ def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
     """
     # set the CUDA device
     cpu_name = current_process().name
-    k = (int(cpu_name[cpu_name.find("-") + 1 :]) - 1) % num_gpus
+    k = (int(cpu_name[cpu_name.find("-") + 1:]) - 1) % num_gpus
     os.environ["CUDA_DEVICE"] = str(k)
     time1 = time.time()
 
@@ -213,7 +214,6 @@ def gpu_func(frame_a, frame_b, kwargs):
 
     # GPU process
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        x, y, u, v, mask, s2n = gpu_process.gpu_piv_def(frame_a, frame_b, **kwargs)
+        x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **kwargs)
 
     return x, y, u, v, mask, s2n
