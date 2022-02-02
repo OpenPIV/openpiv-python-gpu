@@ -1,13 +1,26 @@
 import logging
+import warnings
+from math import sqrt, pi, ceil
 
 import numpy as np
 import numpy.linalg as linalg
-# import numpy.ma as ma
 import scipy.optimize.lbfgsb as lbfgsb
 from scipy.fftpack.realtransforms import dct, idct
-# import pycuda.autoinit
-# import pycuda.gpuarray as gpuarray
-# from pycuda.compiler import SourceModule
+import skcuda.fft as cufft
+import pycuda.autoinit
+import pycuda.gpuarray as gpuarray
+import pycuda.cumath as cumath
+from pycuda.compiler import SourceModule
+
+# scikit-cuda gives an annoying warning everytime it's imported.
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', UserWarning)
+    from skcuda import misc as cumisc
+
+cumisc.init()
+DTYPE_i = np.int32
+DTYPE_f = np.float32
+DTYPE_c = np.complex64
 
 
 def smoothn(
@@ -82,6 +95,7 @@ def smoothn(
 
     """
     # verbose = kwargs['verbose'] if 'verbose' in kwargs.items() else False
+    # TODO need to revive the masking since it is useful.
     # if type(y) == ma.core.MaskedArray:  # masked array
     #     is_masked = True
     #     mask = y.mask
@@ -300,6 +314,7 @@ def smoothn(
 
             gamma = 1.0 / (1 + (s * np.abs(lambda_)) ** smooth_order)
 
+            # TODO this is done twice?
             z = rf * dct_nd(gamma * dct_y, f=idct) + (1 - rf) * z
             # if no weighted/missing data => tol=0 (no iteration)
             tol = is_weighted * linalg.norm(z0 - z) / linalg.norm(z)
@@ -332,8 +347,8 @@ def smoothn(
         elif np.abs(np.log10(s) - np.log10(s_max_bnd)) < errp:
             warn('smoothn:SUpperBound\ns = {.3f} : the lower bound for s has been reached. Put s as an input variable '
                  'if required.'.format(s))
-        # warn('MATLAB:smoothn:MaxIter\nMaximum number of iterations ({:d}) has been exceeded. Increase max_iter '
-        #      'option or decrease tol_z value.'.format(max_iter))
+        # warn('smoothn:MaxIter\nMaximum number of iterations ({:d}) has been exceeded. Increase max_iter option or'
+        #      'decrease tol_z value.'.format(max_iter))
     return z, s, w_tot
 
 
@@ -354,8 +369,8 @@ def gcv(p, lambda_, aow, dct_y, is_finite, w_tot, y, nof, noe, smooth_order):
         rss = linalg.norm(dct_y * (gamma - 1.0)) ** 2
     else:
         # take account of the weights to calculate rss:
-        yhat = dct_nd(gamma * dct_y, f=idct)
-        rss = linalg.norm(np.sqrt(w_tot[is_finite]) * (y[is_finite] - yhat[is_finite])) ** 2
+        y_hat = dct_nd(gamma * dct_y, f=idct)
+        rss = linalg.norm(np.sqrt(w_tot[is_finite]) * (y[is_finite] - y_hat[is_finite])) ** 2
     # ---
     tr_h = np.sum(gamma)
     gcv_score = rss / np.float(nof) / (1.0 - tr_h / np.float(noe)) ** 2
@@ -393,8 +408,134 @@ def dct_nd(data, f=dct):
         return f(f(data, norm="ortho", type=2).T, norm="ortho", type=2).T
     elif nd == 3:
         return f(
-            f(f(data, norm="ortho", type=2, axis=0), norm="ortho", type=2, axis=1),
-            norm="ortho",
-            type=2,
-            axis=2,
-        )
+            f(f(data, norm="ortho", type=2, axis=0), norm="ortho", type=2, axis=1), norm="ortho", type=2, axis=2)
+
+
+def gpu_forward_fft(data_d, norm='backward'):
+    assert data_d.dtype == DTYPE_f
+    if data_d.ndim == 1:
+        data_d = data_d.reshape(1, data_d.size)
+    m, n = data_d.shape
+    assert n >= 2
+    scale = norm == 'forward'
+    forward_fft_d = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
+
+    plan_forward = cufft.Plan((n,), DTYPE_f, DTYPE_c, batch=m)
+    cufft.fft(data_d, forward_fft_d, plan_forward, scale=scale)
+
+    if norm == 'ortho':
+        forward_fft_d = forward_fft_d * (1 / sqrt(n))
+
+    return forward_fft_d
+
+
+def gpu_inverse_fft(fft_data_d, inverse_length=None, norm='backward'):
+    assert fft_data_d.dtype == DTYPE_c
+    if fft_data_d.ndim == 1:
+        fft_data_d = fft_data_d.reshape(1, fft_data_d.size)
+    m, n = fft_data_d.shape
+    assert n >= 2
+    scale = norm == 'backward'
+    if inverse_length is None:
+        inverse_length = (n - 1) * 2
+
+    inverse_fft_d = gpuarray.empty((m, inverse_length), dtype=DTYPE_f)
+
+    plan_inverse = cufft.Plan((inverse_length,), DTYPE_c, DTYPE_f, batch=m)
+    cufft.ifft(fft_data_d, inverse_fft_d, plan_inverse, scale=scale)
+
+    if norm == 'ortho':
+        inverse_fft_d = inverse_fft_d * (1 / sqrt(inverse_length))
+
+    return inverse_fft_d
+
+
+def gpu_forward_dct(data_d, norm='backward'):
+    assert data_d.dtype == DTYPE_f
+    if data_d.ndim == 1:
+        data_d = data_d.reshape(1, data_d.size)
+    m, n = data_d.shape
+    scale = norm == 'forward'
+    assert n >= 2
+
+    # could extend the fft output rather than zero-pad (Mahkoul)
+    data_zp_d = gpuarray.zeros((m, 2 * n), dtype=DTYPE_f)
+    data_zp_d[:, :n] = data_d
+
+    output_d = gpuarray.empty((m, n + 1), dtype=DTYPE_c)
+    w_d = 2 * cumath.exp(-1j * pi * gpuarray.arange(n, dtype=DTYPE_f) / (2 * n))
+
+    plan_forward = cufft.Plan(2 * n, DTYPE_f, DTYPE_c, batch=m)
+    cufft.fft(data_zp_d, output_d, plan_forward, scale=scale)
+
+    forward_dct_d = cumisc.multiply(output_d[:, :n].copy(), w_d).real
+
+    if norm == 'ortho':
+        a_d = gpuarray.zeros((n,), dtype=DTYPE_f) + (1 / sqrt(2 * n))
+        a_d[0] = np.array(1 / sqrt(4 * n), dtype=DTYPE_f)
+        forward_dct_d = cumisc.multiply(forward_dct_d, a_d)
+
+    return forward_dct_d
+
+
+def gpu_inverse_dct(dct_data_d, norm='backward'):
+    assert dct_data_d.dtype == DTYPE_f
+    if dct_data_d.ndim == 1:
+        dct_data_d = dct_data_d.reshape(1, dct_data_d.size)
+    m, n = dct_data_d.shape
+    assert n >= 2
+    scale = norm == 'backward'
+    frequency_width = n // 2
+    size_i_flip = DTYPE_i(m * frequency_width)
+    size_i = DTYPE_i(m * n)
+
+    idct_output_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    inverse_dct_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    w_d = 0.5 * cumath.exp(1j * pi * gpuarray.arange(frequency_width + 1, dtype=DTYPE_f) / (2 * n))
+    fft_data_flip = gpuarray.zeros((m, frequency_width + 1), dtype=DTYPE_f)
+
+    mod_dct = SourceModule("""
+    __global__ void fft_flip(float *dest, float *src, int wd, int fl, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+        int row = t_idx / fl;
+        int col = t_idx % fl + 1;
+
+        dest[row * (fl + 1) + col] = src[row * wd + wd - col];
+    }
+        __global__ void dct_sift(float *dest, float *src, int wd, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+        int row = t_idx / wd;
+        int col = t_idx % wd;
+
+        if (col % 2 == 0) {dest[row * wd + col] = src[row * wd + col / 2];}
+        else {dest[row * wd + col] = src[row * wd + wd - 1 - col / 2];}
+    }
+    """)
+    block_size = 32
+    x_blocks_flip = ceil(size_i_flip / block_size)
+    x_blocks = ceil(size_i / block_size)
+    fft_flip = mod_dct.get_function('fft_flip')
+    dct_sift = mod_dct.get_function('dct_sift')
+
+    fft_flip(fft_data_flip, dct_data_d, DTYPE_i(n), DTYPE_i(frequency_width), size_i_flip, block=(block_size, 1, 1),
+             grid=(x_blocks_flip, 1))
+
+    idct_input_d = cumisc.multiply(dct_data_d[:, :frequency_width + 1].copy() - 1j * fft_data_flip, w_d)
+
+    plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
+    cufft.ifft(idct_input_d, idct_output_d, plan_inverse, scale=scale)
+
+    dct_sift(inverse_dct_d, idct_output_d, DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    if norm == 'forward':
+        inverse_dct_d = inverse_dct_d * 2
+    if norm == 'ortho':
+        x_0 = cumisc.multiply(dct_data_d[:, 0].copy().reshape(m, 1), gpuarray.ones_like(inverse_dct_d, dtype=DTYPE_f))
+
+        inverse_dct_d = (inverse_dct_d * 2 - x_0) / sqrt(2 * n) + x_0 / sqrt(n)
+
+    return inverse_dct_d
