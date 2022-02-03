@@ -48,6 +48,8 @@ class GPUCorrelation:
         2D int, image pair.
     nfft_x : int or None, optional
         Window size multiplier for fft.
+    subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
+        Method to approximate the subpixel location of the peaks.
 
     Methods
     -------
@@ -58,8 +60,12 @@ class GPUCorrelation:
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, nfft_x=None):
+    def __init__(self, frame_a_d, frame_b_d, nfft_x=None, subpixel_method='gaussian'):
         _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
+        # TODO input checks
+        self.frame_a_d = frame_a_d
+        self.frame_b_d = frame_b_d
+        self.frame_shape = DTYPE_i(frame_a_d.shape)
         # TODO fix this definition.
         if nfft_x is None:
             self.nfft_x = 2
@@ -67,9 +73,13 @@ class GPUCorrelation:
             assert (self.nfft_x & (self.nfft_x - 1)) == 0, 'nfft must be power of 2'
             self.nfft_x = nfft_x
         self.nfft_y = self.nfft_x
-        self.frame_a_d = frame_a_d
-        self.frame_b_d = frame_b_d
-        self.frame_shape = DTYPE_i(frame_a_d.shape)
+        allowed_methods = {'gaussian', 'centroid', 'parabolic'}
+        try:
+            assert subpixel_method in allowed_methods
+            self.subpixel_method = subpixel_method
+        except AssertionError:
+            raise ValueError('subpixel_method is invalid. Must be one of {}. ({} was input.)'.format(
+                allowed_methods, subpixel_method)) from None
 
     def __call__(self, window_size, overlap_ratio, extended_size=None, shift_d=None, strain_d=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -123,7 +133,7 @@ class GPUCorrelation:
         self.row_peak_d, self.col_peak_d, self.corr_peak1_d = self._find_peak(self.correlation_d)
 
         # Get the subpixel location.
-        row_sp_d, col_sp_d = self._subpixel_peak_location()
+        row_sp_d, col_sp_d = self._locate_subpixel_peak()
 
         # Center the peak displacement.
         i_peak = row_sp_d - DTYPE_f(self.fft_width_y / 2)
@@ -445,11 +455,11 @@ class GPUCorrelation:
         win_w = self.fft_width_x
 
         win_i_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w)), DTYPE_f)
-        win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
-        win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), np.complex64)
+        win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
+        win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
 
         # Forward FFTs.
-        plan_forward = cufft.Plan((win_h, win_w), DTYPE_f, np.complex64, batch=self.n_windows)
+        plan_forward = cufft.Plan((win_h, win_w), DTYPE_f, DTYPE_c, batch=self.n_windows)
         cufft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
         cufft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
 
@@ -458,7 +468,7 @@ class GPUCorrelation:
         tmp_d = win_b_fft_d * win_a_fft_d
 
         # Inverse transform.
-        plan_inverse = cufft.Plan((win_h, win_w), np.complex64, DTYPE_f, batch=self.n_windows)
+        plan_inverse = cufft.Plan((win_h, win_w), DTYPE_c, DTYPE_f, batch=self.n_windows)
         cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
         corr_d = gpu_fft_shift(win_i_fft_d)
 
@@ -488,6 +498,7 @@ class GPUCorrelation:
         peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
         peak_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
 
+        # TODO these array operations are a serious hit to performance.
         # Row and column information of peak.
         # TODO account for the padded space in non-square correlations.
         col_peak_d, row_peak_d = cumath.modf((peak_idx_d.astype(DTYPE_f) / DTYPE_f(self.fft_width_x)))
@@ -502,16 +513,23 @@ class GPUCorrelation:
 
         return row_peak_d, col_peak_d, peak_d
 
-    def _subpixel_peak_location(self):
+    def _locate_subpixel_peak(self):
         """Find subpixel peak approximation using Gaussian method.
 
         Returns
         -------
-        row_sp, col_sp : ndarray
-            2D float, location of peak to subpixel accuracy.
+        row_sp, col_sp : GPUArray
+            1D float, location of peak to subpixel accuracy for each window.
 
         """
-        row_sp_d, col_sp_d = gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d,
+        if self.subpixel_method == 'gaussian':
+            row_sp_d, col_sp_d = gpu_subpixel_gaussian(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                       self.fft_width_x, self.fft_width_x)
+        elif self.subpixel_method == 'centroid':
+            row_sp_d, col_sp_d = gpu_subpixel_centroid(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                       self.fft_width_x, self.fft_width_x)
+        else:
+            row_sp_d, col_sp_d = gpu_subpixel_parabolic(self.correlation_d, self.row_peak_d, self.col_peak_d,
                                                         self.fft_width_x, self.fft_width_x)
 
         return row_sp_d, col_sp_d
@@ -851,7 +869,7 @@ class PIVGPU:
         if 'rms_velocity' in val_methods:
             self.val_tols[3] = kwargs['rms_tol'] if 'rms_tol' in kwargs else 2
 
-        # Other parameters.
+        # Init other parameters.
         self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
@@ -859,6 +877,7 @@ class PIVGPU:
         self.nfft_x = kwargs['nfft_x'] if 'nfft_x' in kwargs else None
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
         self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
+        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else 'gaussian'
         self.corr = None
         self.sig2noise = None
 
@@ -922,7 +941,7 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # Create the correlation object.
-        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfft_x)
+        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfft_x, self.subpixel_method)
 
         # MAIN LOOP
         for k in range(self.nb_iter_max):
@@ -1315,17 +1334,16 @@ def gpu_smooth(f_d, s=0.5):
 
 
 def gpu_fft_shift(correlation_d):
-    """Shifts the fft to the center of the correlation windows.
+    """Returns the shifted spectrum of stacked fft output.
 
     Parameters
     ----------
     correlation_d : GPUArray
-        3D float, data from the window correlations.
+        3D float (n_windows, ht, wd), data from fft.
 
     Returns
     -------
     GPUArray
-        3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
 
     """
     _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -1362,8 +1380,8 @@ def gpu_fft_shift(correlation_d):
     return correlation_shift_d
 
 
-def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
-    """Shifts the fft to the center of the correlation windows.
+def gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using gaussian approximation.
 
     Parameters
     ----------
@@ -1377,7 +1395,7 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
     Returns
     -------
     row_sp_d, col_sp_d : GPUArray
-        1D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
+        1D float, row and column positions of the subpixel peak.
 
     """
     _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -1390,6 +1408,8 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
     # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
+    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
+    # TODO add machinery to do parabolic approximation if correlation is negative.
     mod_subpixel_approximation = SourceModule("""
         __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                             int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
@@ -1428,6 +1448,164 @@ def gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, fft_size_x
         // Compute the subpixel value.
         row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
         col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return row_sp_d, col_sp_d
+
+
+def gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using centroid approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
+    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
+    mod_subpixel_approximation = SourceModule("""
+        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        int row_tmp = row;
+        int col_tmp = col;
+
+        if (row_tmp < 1) {row_tmp = 1;}
+        if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
+        if (col_tmp < 1) {col_tmp = 1;}
+        if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
+
+        // Get the neighbouring correlation values.
+        float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
+        float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
+        float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
+        float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
+        float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
+
+        // Convert negative values to zero
+        int non_zero = c > 0;
+        if (c <= 0) {c = small;}
+        if (cl <= 0) {cl = small;}
+        if (cr <= 0) {cr = small;}
+        if (cd <= 0) {cd = small;}
+        if (cu <= 0) {cu = small;}
+
+        // Compute the subpixel value.
+        row_sp[w_idx] = (row - 1) * cd + row * c + (row + 1) * cu) / (cd + c + cu + small);
+        col_sp[w_idx] = (col - 1) * cl + col * c + (col + 1) * cr) / (cl + c + cr + small);
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return row_sp_d, col_sp_d
+
+
+def gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using parabolic approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
+    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
+    mod_subpixel_approximation = SourceModule("""
+        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        int row_tmp = row;
+        int col_tmp = col;
+
+        if (row_tmp < 1) {row_tmp = 1;}
+        if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
+        if (col_tmp < 1) {col_tmp = 1;}
+        if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
+
+        // Get the neighbouring correlation values.
+        float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
+        float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
+        float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
+        float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
+        float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
+
+        // Convert negative values to zero
+        int non_zero = c > 0;
+        if (c <= 0) {c = small;}
+        if (cl <= 0) {cl = small;}
+        if (cr <= 0) {cr = small;}
+        if (cd <= 0) {cd = small;}
+        if (cu <= 0) {cu = small;}
+
+        // Compute the subpixel value.
+        row_sp[w_idx] = row + (cd - cu) / (2 * cd - 4 * c + 2 * cu + small)) * non_zero;
+        col_sp[w_idx] = col + (cl - cr) / (2 * cl - 4 * c + 2 * cr + small)) * non_zero;
     }
     """)
     block_size = 32

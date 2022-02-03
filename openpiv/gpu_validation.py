@@ -18,6 +18,7 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 
+# TODO cleanup this function
 def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None,
                    rms_tol=None):
     """Returns an array indicating which indices need to be validated.
@@ -415,7 +416,7 @@ def gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row,
 
     return u_fluc_d, v_fluc_d
 
-
+# TODO remove syncthreads
 def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
 
@@ -574,7 +575,7 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
 
     return u_median_d, v_median_d
 
-
+# TODO remove syncthreads
 def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col):
     """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around each point in a velocity field.
 

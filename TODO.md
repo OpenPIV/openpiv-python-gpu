@@ -4,11 +4,14 @@
 - [x] very high overlap ratios throw an error
 - [x] bias error in non-translating window
 - [x] square window shapes sometimes error
-- [ ] extended search area doesn't work for 2048 x 4096 image sizes
 - [ ] completely blank frames cause smoothn to error
 - [x] smoothing parameter doesn't default to 0.5
 - [x] validation being done on first iteration even when trust_first_iter is True
 - [x] smoothing is not being applied to functions
+
+# Errors
+- [ ] out-of-memory is unhandled
+- [ ] 
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials
@@ -66,6 +69,7 @@
 - [ ] allow non-power-of-2 window sizes
 - [ ] center-on-field functionality
 - [ ] GPU kernel to do validation replacement
+- [ ] Other subpixel methods
 
 ## Object-oriented features
 - [x] return the mask
