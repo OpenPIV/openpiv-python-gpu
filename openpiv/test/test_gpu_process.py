@@ -31,7 +31,7 @@ _fixture_dir = './openpiv/test/fixtures/'
 
 # synthetic image parameters
 _image_size_rectangle = (1024, 1024)
-_image_size_square = (1024, 2048)
+_image_size_square = (1024, 512)
 _u_shift = 8
 _v_shift = -4
 _accuracy_tolerance = 0.1

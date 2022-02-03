@@ -416,6 +416,7 @@ def gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row,
 
     return u_fluc_d, v_fluc_d
 
+
 # TODO remove syncthreads
 def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
@@ -506,13 +507,8 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
                 B[j++] = np[w_idx * 9 + i];
             }
         }
-
-        __syncthreads();
-
         // sort the array
         sort(A, B);
-
-        __syncthreads();
 
         // count the neighbouring points
         int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
@@ -520,8 +516,6 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
         // return the median
         if (N % 2 == 0) {u_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
         else {u_median[w_idx] = A[N / 2];}
-
-        __syncthreads();
     }
 
     __global__ void v_median_vel(float *v_median, float *n, int *np, int n_row, int n_col)
@@ -530,8 +524,6 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
         // np : neighbours present
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= n_col * n_row) {return;}
-        
-        __syncthreads();
 
         // loop through neighbours to populate an array to sort
         int i;
@@ -546,13 +538,8 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
                 B[j++] = np[w_idx * 9 + i];
             }
         }
-
-        __syncthreads();
-
         // sort the array
         sort(A, B);
-        
-        __syncthreads();
 
         // count the neighbouring points
         int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
@@ -560,8 +547,6 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
         // return the median
         if (N % 2 == 0) {v_median[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
         else {v_median[w_idx] = A[N / 2];}
-
-        __syncthreads();
     }
     """)
     block_size = 32
@@ -574,6 +559,7 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
                  grid=(x_blocks, 1))
 
     return u_median_d, v_median_d
+
 
 # TODO remove syncthreads
 def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col):
@@ -669,13 +655,8 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
                 B[j++] = np[w_idx * 9 + i];
             }
         }
-
-        __syncthreads();
-
         // sort the array
         sort(A, B);
-
-        __syncthreads();
 
         // count the neighbouring points
         int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
@@ -684,7 +665,6 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
         if (N % 2 == 0) {u_median_fluc[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
         else {u_median_fluc[w_idx] = A[N / 2];}
 
-        __syncthreads();
     }
 
     __global__ void v_fluc_k(float *v_median_fluc, float *v_median, float *n, int *np, int n_row, int n_col)
@@ -709,13 +689,8 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
                 B[j++] = np[w_idx * 9 + i];
             }
         }
-
-        __syncthreads();
-
         // sort the array
         sort(A, B);
-
-        __syncthreads();
 
         // count the neighbouring points
         int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
@@ -723,8 +698,6 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
         // return the median
         if (N % 2 == 0) {v_median_fluc[w_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
         else {v_median_fluc[w_idx] = A[N / 2];}
-
-        __syncthreads();
     }
     """)
     block_size = 32

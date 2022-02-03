@@ -66,7 +66,7 @@ class GPUCorrelation:
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
         self.frame_shape = DTYPE_i(frame_a_d.shape)
-        # TODO fix this definition.
+        # TODO fix this definition. Default values should be 2 in arguments.
         if nfft_x is None:
             self.nfft_x = 2
         else:
@@ -305,7 +305,6 @@ class GPUCorrelation:
                               * (x - x1) * (y - y1)) * outside_range;
         }
         """)
-        # TODO this may not work anymore
         block_size = 8
         grid_size = int(self.size_extended / block_size)
 
@@ -523,14 +522,14 @@ class GPUCorrelation:
 
         """
         if self.subpixel_method == 'gaussian':
-            row_sp_d, col_sp_d = gpu_subpixel_gaussian(self.correlation_d, self.row_peak_d, self.col_peak_d,
-                                                       self.fft_width_x, self.fft_width_x)
-        elif self.subpixel_method == 'centroid':
-            row_sp_d, col_sp_d = gpu_subpixel_centroid(self.correlation_d, self.row_peak_d, self.col_peak_d,
-                                                       self.fft_width_x, self.fft_width_x)
-        else:
-            row_sp_d, col_sp_d = gpu_subpixel_parabolic(self.correlation_d, self.row_peak_d, self.col_peak_d,
+            row_sp_d, col_sp_d = _gpu_subpixel_gaussian(self.correlation_d, self.row_peak_d, self.col_peak_d,
                                                         self.fft_width_x, self.fft_width_x)
+        elif self.subpixel_method == 'centroid':
+            row_sp_d, col_sp_d = _gpu_subpixel_centroid(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                        self.fft_width_x, self.fft_width_x)
+        else:
+            row_sp_d, col_sp_d = _gpu_subpixel_parabolic(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                         self.fft_width_x, self.fft_width_x)
 
         return row_sp_d, col_sp_d
 
@@ -889,8 +888,9 @@ class PIVGPU:
         # Init n_col and n_row.
         self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
+        # TODO get field shape from corr object.
         for k in range(nb_iter_max):
-            self.n_row[k], self.n_col[k] = get_field_shape(frame_shape, self.window_size[k], overlap_ratio)
+            self.n_row[k], self.n_col[k] = DTYPE_i(get_field_shape(frame_shape, self.window_size[k], overlap_ratio))
 
         # Initialize x, y and mask.
         # TODO use a setter to construct these objects
@@ -1158,9 +1158,9 @@ def get_field_shape(image_size, window_size, overlap_ratio):
     assert window_size % 8 == 0, "Window size must be a multiple of 8."
     assert 0 <= overlap_ratio < 1, 'overlap_ratio must be a float between 0 and 1.'
 
-    spacing = DTYPE_i(window_size * (1 - overlap_ratio))
-    m = DTYPE_i((image_size[0] - spacing) // spacing)
-    n = DTYPE_i((image_size[1] - spacing) // spacing)
+    spacing = int(window_size * (1 - overlap_ratio))
+    m = int((image_size[0] - spacing) // spacing)
+    n = int((image_size[1] - spacing) // spacing)
     return m, n
 
 
@@ -1380,7 +1380,169 @@ def gpu_fft_shift(correlation_d):
     return correlation_shift_d
 
 
-def gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+# def _window_slice(frame_d, window_size, overlap_ratio):
+#     """Creates a 3D array stack of all the interrogation windows.
+#
+#     Parameters
+#     -----------
+#     frame_d : GPUArray
+#         2D int, image.
+#
+#     Returns
+#     -------
+#     GPUArray
+#         3D float, interrogation windows stacked on each other.
+#
+#     """
+#     _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+#     ht, wd = frame_d.shape
+#     m, n = get_field_shape((ht, wd), window_size, overlap_ratio)
+#     n_windows = m * n
+#     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
+#     diff_extended = DTYPE_i(spacing - size / 2)
+#
+#     win_d = gpuarray.zeros((n_windows, size, size), dtype=DTYPE_f)
+#
+#     # TODO outside_range is inefficient
+#     mod_ws = SourceModule("""
+#         __global__ void window_slice(float *output, float *input, int ws, int spacing, int diff_extended, int n_col,
+#                             int wd, int ht)
+#     {
+#         // x blocks are windows; y and z blocks are x and y dimensions, respectively
+#         int idx_i = blockIdx.x;
+#         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+#         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+#
+#         // do the mapping
+#         int x = (idx_i % n_col) * spacing + diff_extended + idx_x;
+#         int y = (idx_i / n_col) * spacing + diff_extended + idx_y;
+#
+#         // find limits of domain
+#         int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
+#
+#         // indices of new array to map to
+#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+#
+#         // apply the mapping
+#         output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
+#     }
+#     """)
+#     # TODO this may not work anymore
+#     block_size = 8
+#     grid_size = int(size / block_size)
+#     window_slice_deform = mod_ws.get_function('window_slice')
+#     window_slice_deform(win_d, frame_d, size, spacing, diff_extended, n_cols, wd, ht, block=(block_size, block_size, 1),
+#                         grid=(int(n_windows), grid_size, grid_size))
+#
+#     return win_d
+#
+#
+# def _window_slice_deform(frame_d, window_size, overlap_ratio, shift_d, strain_d):
+#     """Creates a 3D array stack of all the interrogation windows using shift and strain.
+#
+#     Parameters
+#     -----------
+#     frame_d : GPUArray
+#         2D int, image.
+#     shift_d : GPUArray
+#         3D float, shift of the second window.
+#     strain_d : GPUArray
+#         3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
+#
+#     Returns
+#     -------
+#     GPUArray
+#         3D float, all interrogation windows stacked on each other.
+#
+#     """
+#     _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+#     ht, wd = frame_d.shape
+#     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
+#     diff_extended = DTYPE_i(spacing - size / 2)
+#
+#     win_d = gpuarray.zeros((n_windows, size, size), dtype=DTYPE_f)
+#
+#     # TODO outside_range is inefficient
+#     mod_ws = SourceModule("""
+#         __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
+#                             int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
+#     {
+#         // f : factor to apply to the shift and strain tensors
+#         // wd : width (number of columns in the full image)
+#         // h : height (number of rows in the full image)
+#
+#         // x blocks are windows; y and z blocks are x and y dimensions, respectively
+#         int idx_i = blockIdx.x;  // window index
+#         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+#         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+#
+#         // Loop through each interrogation window and apply the shift and deformation.
+#         // get the shift values
+#         float dx = shift[idx_i] * f;
+#         float dy = shift[num_window + idx_i] * f;
+#
+#         // get the strain tensor values
+#         float u_x = strain[idx_i] * f;
+#         float u_y = strain[num_window + idx_i] * f;
+#         float v_x = strain[2 * num_window + idx_i] * f;
+#         float v_y = strain[3 * num_window + idx_i] * f;
+#
+#         // compute the window vector
+#         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+#         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
+#
+#         // apply deformation operation
+#         float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+#         float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
+#
+#         // do the mapping
+#         float x = (idx_i % n_col) * spacing + diff_extended + x_shift;
+#         float y = (idx_i / n_col) * spacing + diff_extended + y_shift;
+#
+#         // do bilinear interpolation
+#         int x1 = floorf(x);
+#         int x2 = x1 + 1;
+#         int y1 = floorf(y);
+#         int y2 = y1 + 1;
+#
+#         // find limits of domain
+#         int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+#
+#         // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
+#         float f11 = input[(y1 * wd + x1) * outside_range];
+#         float f21 = input[(y1 * wd + x2) * outside_range];
+#         float f12 = input[(y2 * wd + x1) * outside_range];
+#         float f22 = input[(y2 * wd + x2) * outside_range];
+#
+#         // indices of image to map to
+#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+#
+#         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+#         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
+#                           * (x - x1) * (y - y1)) * outside_range;
+#     }
+#     """)
+#     # TODO this may not work anymore
+#     block_size = 8
+#     grid_size = int(size / block_size)
+#
+#     # Use translating windows.
+#     if shift_d is not None:
+#         # Factors to apply the symmetric shift.
+#         shift_factor = DTYPE_f(-0.5)
+#
+#         if strain_d is None:
+#             strain_d = gpuarray.zeros((4, n_rows, n_cols), dtype=DTYPE_f)
+#
+#         window_slice_deform = mod_ws.get_function('window_slice_deform')
+#         window_slice_deform(win_d, frame_d, shift_d, strain_d, shift_factor, size, spacing, diff_extended, n_cols,
+#                             n_windows, wd, ht, block=(block_size, block_size, 1),
+#                             grid=(int(n_windows), grid_size, grid_size))
+#
+#     return win_d
+
+
+def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
     """Returns the subpixel position of the peaks using gaussian approximation.
 
     Parameters
@@ -1460,7 +1622,7 @@ def gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft
     return row_sp_d, col_sp_d
 
 
-def gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
     """Returns the subpixel position of the peaks using centroid approximation.
 
     Parameters
@@ -1539,7 +1701,7 @@ def gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft
     return row_sp_d, col_sp_d
 
 
-def gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
     """Returns the subpixel position of the peaks using parabolic approximation.
 
     Parameters
