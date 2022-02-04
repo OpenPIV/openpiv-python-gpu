@@ -729,20 +729,32 @@ class PIVGPU:
                  **kwargs):
         # TODO check all inputs.
         if hasattr(frame_shape, 'shape'):
-            ht, wd = frame_shape.shape
+            self.frame_shape = frame_shape.shape
         else:
-            ht, wd = frame_shape
+            self.frame_shape = frame_shape
         ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
         num_ws = len(ws_iters)
         self.overlap_ratio = overlap_ratio
         self.dt = dt
         self.deform = deform
         self.smooth = smooth
-        self.nb_iter_max = nb_iter_max = sum(ws_iters)
+        self.nb_iter_max = sum(ws_iters)
         self.nb_validation_iter = nb_validation_iter
+        self.spacing = None
+        self.n_row = None
+        self.n_col = None
+        self.x_final = None
+        self.y_final = None
+        self.x_d = None
+        self.y_d = None
+        self.field_mask_d = None
+        self.mask_final = None
 
         if mask is not None:
-            assert mask.shape == (ht, wd), 'Mask is not same shape as image.'
+            try:
+                assert mask.shape == self.frame_shape
+            except AssertionError:
+                raise ValueError('Mask is not same shape as image.') from None
 
         # Set window sizes.
         self.window_size = np.asarray(
@@ -774,39 +786,8 @@ class PIVGPU:
         self.corr = None
         self.sig2noise = None
 
-        # Init spacing.
-        self.spacing = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        for k in range(nb_iter_max):
-            self.spacing[k] = self.window_size[k] - int(self.window_size[k] * overlap_ratio)
-
-        # Init n_col and n_row.
-        self.n_row = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
-        # TODO get field shape from corr object.
-        for k in range(nb_iter_max):
-            self.n_row[k], self.n_col[k] = DTYPE_i(get_field_shape(frame_shape, self.window_size[k], self.spacing[k]))
-
-        # Initialize x, y and mask.
-        # TODO use a setter to construct these objects
-        self.x_d = []
-        self.y_d = []
-        self.field_mask_d = []
-        for k in range(nb_iter_max):
-            x, y = get_field_coords((self.n_row[k], self.n_col[k]), self.window_size[k], overlap_ratio)
-            self.x_d.append(gpuarray.to_gpu(x))
-            self.y_d.append(gpuarray.to_gpu(y))
-
-            # create the mask arrays for each iteration
-            if mask is not None:
-                field_mask = mask[y.astype(DTYPE_i), x.astype(DTYPE_i)].astype(DTYPE_i)
-            else:
-                field_mask = np.ones((self.n_row[k], self.n_col[k]), dtype=DTYPE_i)
-            self.field_mask_d.append(gpuarray.to_gpu(field_mask))
-
-            if k == nb_iter_max - 1:
-                self.x_final = x
-                self.y_final = y
-                self.mask_final = field_mask
+        # Init derived parameters - mesh geometry and masks at each iteration.
+        self.set_geometry(mask)
 
     def __call__(self, frame_a, frame_b):
         """Processes an image pair.
@@ -893,6 +874,36 @@ class PIVGPU:
             s2n = self.corr.get_sig2noise(method=self.sig2noise_method)
         return s2n
 
+    def set_geometry(self, mask=None):
+        """Creates the parameters for the mesh geometry and mask at each iteration."""
+        self.spacing = np.zeros(self.nb_iter_max, dtype=DTYPE_i)
+        self.n_row = np.zeros(self.nb_iter_max, dtype=DTYPE_i)
+        self.n_col = np.zeros(self.nb_iter_max, dtype=DTYPE_i)
+        self.x_d = []
+        self.y_d = []
+        self.field_mask_d = []
+        for k in range(self.nb_iter_max):
+            # Init field geometry.
+            self.spacing[k] = self.window_size[k] - int(self.window_size[k] * self.overlap_ratio)
+            self.n_row[k], self.n_col[k] = get_field_shape(self.frame_shape, self.window_size[k], self.spacing[k])
+
+            # Initialize x, y and mask.
+            x, y = get_field_coords((self.n_row[k], self.n_col[k]), self.window_size[k], self.overlap_ratio)
+            self.x_d.append(gpuarray.to_gpu(x[0, :]))
+            self.y_d.append(gpuarray.to_gpu(y[:, 0]))
+
+            # TODO SRP violation
+            if mask is not None:
+                field_mask = mask[y.astype(DTYPE_i), x.astype(DTYPE_i)].astype(DTYPE_i)
+            else:
+                field_mask = np.ones((self.n_row[k], self.n_col[k]), dtype=DTYPE_i)
+            self.field_mask_d.append(gpuarray.to_gpu(field_mask))
+
+            if k == self.nb_iter_max - 1:
+                self.x_final = x
+                self.y_final = y
+                self.mask_final = field_mask
+
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
         _check_inputs(frame_a, frame_b, shape=frame_a.shape, ndim=2)
@@ -966,10 +977,8 @@ class PIVGPU:
         # Interpolate if dimensions do not agree
         if self.window_size[k + 1] != self.window_size[k]:
             # Interpolate velocity onto next iterations grid. Then use it as the predictor for the next step.
-            u_d = gpu_interpolate(self.x_d[k][0, :], self.y_d[k][:, 0], self.x_d[k + 1][0, :], self.y_d[k + 1][:, 0],
-                                  u_d)
-            v_d = gpu_interpolate(self.x_d[k][0, :], self.y_d[k][:, 0], self.x_d[k + 1][0, :], self.y_d[k + 1][:, 0],
-                                  v_d)
+            u_d = gpu_interpolate(self.x_d[k], self.y_d[k], self.x_d[k + 1], self.y_d[k + 1], u_d)
+            v_d = gpu_interpolate(self.x_d[k], self.y_d[k], self.x_d[k + 1], self.y_d[k + 1], v_d)
 
         if self.smooth:
             dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
@@ -1848,9 +1857,9 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
     # Case if different dimensions: interpolation using previous iteration.
     elif k > 0 and (n_row[k] != n_row[k - 1] or n_col[k] != n_col[k - 1]):
         # TODO can avoid slicing here
-        u_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], u_previous_d, u_d,
+        u_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, u_previous_d, u_d,
                                       val_locations_d=val_locations_d)
-        v_d = gpu_interpolate_replace(x0_d[0, :], y0_d[:, 0], x1_d[0, :], y1_d[:, 0], v_previous_d, v_d,
+        v_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, v_previous_d, v_d,
                                       val_locations_d=val_locations_d)
 
     # Case if same dimensions.
