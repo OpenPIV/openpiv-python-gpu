@@ -114,7 +114,8 @@ class GPUCorrelation:
         self.fft_width_x = DTYPE_i(self.size_extended * self.nfft_x)
         self.fft_width_y = DTYPE_i(self.size_extended * self.nfft_y)
         self.fft_size = self.fft_width_x * self.fft_width_y
-        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.overlap_ratio))
+        self.spacing = int(self.window_size - (self.window_size * self.overlap_ratio))
+        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.spacing))
         self.n_windows = self.n_rows * self.n_cols
 
         # Return stack of all IWs.
@@ -195,7 +196,7 @@ class GPUCorrelation:
 
         return sig2noise_d.reshape(self.n_rows, self.n_cols)
 
-    def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d):
+    def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d=None):
         """Creates a 3D array stack of all the interrogation windows.
 
         This is necessary to do the FFTs all at once on the GPU. This populates interrogation windows from the origin
@@ -207,7 +208,7 @@ class GPUCorrelation:
             2D int, image pair.
         shift_d : GPUArray
             3D float, shift of the second window.
-        strain_d : GPUArray
+        strain_d : GPUArray or None
             3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
 
         Returns
@@ -217,124 +218,17 @@ class GPUCorrelation:
 
         """
         _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_b_d.shape, dtype=DTYPE_f, ndim=2)
-        ht, wd = self.frame_shape
-        spacing = DTYPE_i(self.window_size * (1 - self.overlap_ratio))
-        diff_extended = DTYPE_i(spacing - self.size_extended / 2)
+        spacing = DTYPE_i(self.window_size - (self.window_size * self.overlap_ratio))
+        buffer = int(spacing - self.size_extended / 2)
 
-        win_a_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
-        win_b_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
-
-        mod_ws = SourceModule("""
-            __global__ void window_slice(float *output, float *input, int ws, int spacing, int diff_extended, int n_col,
-                                int wd, int ht)
-        {
-            // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int idx_i = blockIdx.x;
-            int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-            int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-            
-            // do the mapping
-            int x = (idx_i % n_col) * spacing + diff_extended + idx_x;
-            int y = (idx_i / n_col) * spacing + diff_extended + idx_y;
-            
-            // find limits of domain
-            int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
-
-            // indices of new array to map to
-            int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-            
-            // apply the mapping
-            output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
-        }
-
-            __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
-                                int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
-        {
-            // f : factor to apply to the shift and strain tensors
-            // wd : width (number of columns in the full image)
-            // h : height (number of rows in the full image)
-
-            // x blocks are windows; y and z blocks are x and y dimensions, respectively
-            int idx_i = blockIdx.x;  // window index
-            int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-            int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-
-            // Loop through each interrogation window and apply the shift and deformation.
-            // get the shift values
-            float dx = shift[idx_i] * f;
-            float dy = shift[num_window + idx_i] * f;
-
-            // get the strain tensor values
-            float u_x = strain[idx_i] * f;
-            float u_y = strain[num_window + idx_i] * f;
-            float v_x = strain[2 * num_window + idx_i] * f;
-            float v_y = strain[3 * num_window + idx_i] * f;
-
-            // compute the window vector
-            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
-
-            // apply deformation operation
-            float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-            float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
-
-            // do the mapping
-            float x = (idx_i % n_col) * spacing + diff_extended + x_shift;
-            float y = (idx_i / n_col) * spacing + diff_extended + y_shift;
-
-            // do bilinear interpolation
-            int x1 = floorf(x);
-            int x2 = x1 + 1;
-            int y1 = floorf(y);
-            int y2 = y1 + 1;
-
-            // find limits of domain
-            int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-
-            // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
-            float f11 = input[(y1 * wd + x1) * outside_range];
-            float f21 = input[(y1 * wd + x2) * outside_range];
-            float f12 = input[(y2 * wd + x1) * outside_range];
-            float f22 = input[(y2 * wd + x2) * outside_range];
-
-            // indices of image to map to
-            int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-
-            // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-            output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-                              * (x - x1) * (y - y1)) * outside_range;
-        }
-        """)
-        block_size = 8
-        grid_size = int(self.size_extended / block_size)
-
-        # TODO refactor into smaller functions
         # Use translating windows.
         if shift_d is not None:
-            # Factors to apply the symmetric shift.
-            shift_factor_a = DTYPE_f(-0.5)
-            shift_factor_b = DTYPE_f(0.5)
-
-            if strain_d is None:
-                strain_d = gpuarray.zeros((4, self.n_rows, self.n_cols), dtype=DTYPE_f)
-
-            window_slice_deform = mod_ws.get_function('window_slice_deform')
-            window_slice_deform(win_a_d, frame_a_d, shift_d, strain_d, shift_factor_a, self.size_extended, spacing,
-                                diff_extended,
-                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
-                                grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(win_b_d, frame_b_d, shift_d, strain_d, shift_factor_b, self.size_extended, spacing,
-                                diff_extended,
-                                self.n_cols, self.n_windows, wd, ht, block=(block_size, block_size, 1),
-                                grid=(int(self.n_windows), grid_size, grid_size))
-
+            win_a_d = _window_slice_deform(frame_a_d, self.size_extended, spacing, buffer, -0.5, shift_d, strain_d)
+            win_b_d = _window_slice_deform(frame_b_d, self.size_extended, spacing, buffer, 0.5, shift_d, strain_d)
         # Use non-translating windows.
         else:
-            window_slice_deform = mod_ws.get_function('window_slice')
-            window_slice_deform(win_a_d, frame_a_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
-                                block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-            window_slice_deform(win_b_d, frame_b_d, self.size_extended, spacing, diff_extended, self.n_cols, wd, ht,
-                                block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
+            win_a_d = _window_slice(frame_a_d, self.size_extended, spacing, buffer)
+            win_b_d = _window_slice(frame_b_d, self.size_extended, spacing, buffer)
 
         return win_a_d, win_b_d
 
@@ -890,7 +784,7 @@ class PIVGPU:
         self.n_col = np.zeros(nb_iter_max, dtype=DTYPE_i)
         # TODO get field shape from corr object.
         for k in range(nb_iter_max):
-            self.n_row[k], self.n_col[k] = DTYPE_i(get_field_shape(frame_shape, self.window_size[k], overlap_ratio))
+            self.n_row[k], self.n_col[k] = DTYPE_i(get_field_shape(frame_shape, self.window_size[k], self.spacing[k]))
 
         # Initialize x, y and mask.
         # TODO use a setter to construct these objects
@@ -1133,7 +1027,7 @@ class PIVGPU:
         return normalized_residual
 
 
-def get_field_shape(image_size, window_size, overlap_ratio):
+def get_field_shape(image_size, window_size, spacing):
     """Returns the shape of the resulting velocity field.
 
     Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
@@ -1145,8 +1039,8 @@ def get_field_shape(image_size, window_size, overlap_ratio):
         (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
     window_size : int
         Size of the interrogation windows.
-    overlap_ratio : float
-        Ratio by which two adjacent interrogation windows overlap.
+    spacing : int
+        Spacing between vectors in the field.
 
     Returns
     -------
@@ -1156,9 +1050,8 @@ def get_field_shape(image_size, window_size, overlap_ratio):
     """
     assert window_size >= 8, "Window size is too small."
     assert window_size % 8 == 0, "Window size must be a multiple of 8."
-    assert 0 <= overlap_ratio < 1, 'overlap_ratio must be a float between 0 and 1.'
+    assert int(spacing) == spacing, 'overlap_ratio must be an int.'
 
-    spacing = int(window_size * (1 - overlap_ratio))
     m = int((image_size[0] - spacing) // spacing)
     n = int((image_size[1] - spacing) // spacing)
     return m, n
@@ -1380,166 +1273,172 @@ def gpu_fft_shift(correlation_d):
     return correlation_shift_d
 
 
-# def _window_slice(frame_d, window_size, overlap_ratio):
-#     """Creates a 3D array stack of all the interrogation windows.
-#
-#     Parameters
-#     -----------
-#     frame_d : GPUArray
-#         2D int, image.
-#
-#     Returns
-#     -------
-#     GPUArray
-#         3D float, interrogation windows stacked on each other.
-#
-#     """
-#     _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-#     ht, wd = frame_d.shape
-#     m, n = get_field_shape((ht, wd), window_size, overlap_ratio)
-#     n_windows = m * n
-#     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
-#     diff_extended = DTYPE_i(spacing - size / 2)
-#
-#     win_d = gpuarray.zeros((n_windows, size, size), dtype=DTYPE_f)
-#
-#     # TODO outside_range is inefficient
-#     mod_ws = SourceModule("""
-#         __global__ void window_slice(float *output, float *input, int ws, int spacing, int diff_extended, int n_col,
-#                             int wd, int ht)
-#     {
-#         // x blocks are windows; y and z blocks are x and y dimensions, respectively
-#         int idx_i = blockIdx.x;
-#         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-#         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-#
-#         // do the mapping
-#         int x = (idx_i % n_col) * spacing + diff_extended + idx_x;
-#         int y = (idx_i / n_col) * spacing + diff_extended + idx_y;
-#
-#         // find limits of domain
-#         int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
-#
-#         // indices of new array to map to
-#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-#
-#         // apply the mapping
-#         output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
-#     }
-#     """)
-#     # TODO this may not work anymore
-#     block_size = 8
-#     grid_size = int(size / block_size)
-#     window_slice_deform = mod_ws.get_function('window_slice')
-#     window_slice_deform(win_d, frame_d, size, spacing, diff_extended, n_cols, wd, ht, block=(block_size, block_size, 1),
-#                         grid=(int(n_windows), grid_size, grid_size))
-#
-#     return win_d
-#
-#
-# def _window_slice_deform(frame_d, window_size, overlap_ratio, shift_d, strain_d):
-#     """Creates a 3D array stack of all the interrogation windows using shift and strain.
-#
-#     Parameters
-#     -----------
-#     frame_d : GPUArray
-#         2D int, image.
-#     shift_d : GPUArray
-#         3D float, shift of the second window.
-#     strain_d : GPUArray
-#         3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
-#
-#     Returns
-#     -------
-#     GPUArray
-#         3D float, all interrogation windows stacked on each other.
-#
-#     """
-#     _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-#     ht, wd = frame_d.shape
-#     spacing = DTYPE_i(window_size * (1 - overlap_ratio))
-#     diff_extended = DTYPE_i(spacing - size / 2)
-#
-#     win_d = gpuarray.zeros((n_windows, size, size), dtype=DTYPE_f)
-#
-#     # TODO outside_range is inefficient
-#     mod_ws = SourceModule("""
-#         __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
-#                             int ws, int spacing, int diff_extended, int n_col, int num_window, int wd, int ht)
-#     {
-#         // f : factor to apply to the shift and strain tensors
-#         // wd : width (number of columns in the full image)
-#         // h : height (number of rows in the full image)
-#
-#         // x blocks are windows; y and z blocks are x and y dimensions, respectively
-#         int idx_i = blockIdx.x;  // window index
-#         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-#         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-#
-#         // Loop through each interrogation window and apply the shift and deformation.
-#         // get the shift values
-#         float dx = shift[idx_i] * f;
-#         float dy = shift[num_window + idx_i] * f;
-#
-#         // get the strain tensor values
-#         float u_x = strain[idx_i] * f;
-#         float u_y = strain[num_window + idx_i] * f;
-#         float v_x = strain[2 * num_window + idx_i] * f;
-#         float v_y = strain[3 * num_window + idx_i] * f;
-#
-#         // compute the window vector
-#         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-#         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
-#
-#         // apply deformation operation
-#         float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-#         float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
-#
-#         // do the mapping
-#         float x = (idx_i % n_col) * spacing + diff_extended + x_shift;
-#         float y = (idx_i / n_col) * spacing + diff_extended + y_shift;
-#
-#         // do bilinear interpolation
-#         int x1 = floorf(x);
-#         int x2 = x1 + 1;
-#         int y1 = floorf(y);
-#         int y2 = y1 + 1;
-#
-#         // find limits of domain
-#         int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-#
-#         // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
-#         float f11 = input[(y1 * wd + x1) * outside_range];
-#         float f21 = input[(y1 * wd + x2) * outside_range];
-#         float f12 = input[(y2 * wd + x1) * outside_range];
-#         float f22 = input[(y2 * wd + x2) * outside_range];
-#
-#         // indices of image to map to
-#         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-#
-#         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-#         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-#                           * (x - x1) * (y - y1)) * outside_range;
-#     }
-#     """)
-#     # TODO this may not work anymore
-#     block_size = 8
-#     grid_size = int(size / block_size)
-#
-#     # Use translating windows.
-#     if shift_d is not None:
-#         # Factors to apply the symmetric shift.
-#         shift_factor = DTYPE_f(-0.5)
-#
-#         if strain_d is None:
-#             strain_d = gpuarray.zeros((4, n_rows, n_cols), dtype=DTYPE_f)
-#
-#         window_slice_deform = mod_ws.get_function('window_slice_deform')
-#         window_slice_deform(win_d, frame_d, shift_d, strain_d, shift_factor, size, spacing, diff_extended, n_cols,
-#                             n_windows, wd, ht, block=(block_size, block_size, 1),
-#                             grid=(int(n_windows), grid_size, grid_size))
-#
-#     return win_d
+def _window_slice(frame_d, window_size, spacing, buffer):
+    """Creates a 3D array stack of all the interrogation windows.
+
+    Parameters
+    -----------
+    frame_d : GPUArray
+        2D int, frame to create windows from.
+    window_size :
+
+    spacing :
+
+    buffer :
+
+
+    Returns
+    -------
+    GPUArray
+        3D float, interrogation windows stacked on each other.
+
+    """
+    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    ht, wd = frame_d.shape
+    m, n = get_field_shape((ht, wd), window_size, spacing)
+    n_windows = m * n
+
+    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
+
+    mod_ws = SourceModule("""
+        __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer, int n, int wd,
+                            int ht)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively
+        int idx_i = blockIdx.x;
+        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+
+        // do the mapping
+        int x = (idx_i % n) * spacing + buffer + idx_x;
+        int y = (idx_i / n) * spacing + buffer + idx_y;
+
+        // find limits of domain
+        int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
+
+        // indices of new array to map to
+        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+        // apply the mapping
+        output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
+    }
+    """)
+    # TODO this may not work anymore
+    block_size = 8
+    grid_size = int(window_size / block_size)
+    window_slice_deform = mod_ws.get_function('window_slice')
+    window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n),
+                        DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
+                        grid=(int(n_windows), grid_size, grid_size))
+
+    return win_d
+
+
+def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, shift_d, strain_d=None):
+    """Creates a 3D array stack of all the interrogation windows using shift and strain.
+
+    Parameters
+    -----------
+    frame_d : GPUArray
+        2D int, frame to create windows from.
+    window_size :
+
+    spacing :
+
+    buffer :
+
+    shift_factor : float
+
+    shift_d : GPUArray
+        3D float, shift of the second window.
+    strain_d : GPUArray or None
+        3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
+
+    Returns
+    -------
+    GPUArray
+        3D float, all interrogation windows stacked on each other.
+
+    """
+    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    ht, wd = frame_d.shape
+    m, n = get_field_shape((ht, wd), window_size, spacing)
+    n_windows = m * n
+
+    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
+
+    if strain_d is None:
+        strain_d = gpuarray.zeros((4, m, n), dtype=DTYPE_f)
+
+    # TODO outside_range is inefficient
+    mod_ws = SourceModule("""
+        __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
+                            int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
+    {
+        // f : factor to apply to the shift and strain tensors
+        // wd : width (number of columns in the full image)
+        // h : height (number of rows in the full image)
+
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively
+        int idx_i = blockIdx.x;  // window index
+        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+
+        // Loop through each interrogation window and apply the shift and deformation.
+        // get the shift values
+        float dx = shift[idx_i] * f;
+        float dy = shift[n_windows + idx_i] * f;
+
+        // get the strain tensor values
+        float u_x = strain[idx_i] * f;
+        float u_y = strain[n_windows + idx_i] * f;
+        float v_x = strain[2 * n_windows + idx_i] * f;
+        float v_y = strain[3 * n_windows + idx_i] * f;
+
+        // compute the window vector
+        float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+        float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
+
+        // apply deformation operation
+        float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
+        float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
+
+        // do the mapping
+        float x = (idx_i % n) * spacing + buffer + x_shift;
+        float y = (idx_i / n) * spacing + buffer + y_shift;
+
+        // do bilinear interpolation
+        int x1 = floorf(x);
+        int x2 = x1 + 1;
+        int y1 = floorf(y);
+        int y2 = y1 + 1;
+
+        // find limits of domain
+        int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+
+        // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
+        float f11 = input[(y1 * wd + x1) * outside_range];
+        float f21 = input[(y1 * wd + x2) * outside_range];
+        float f12 = input[(y2 * wd + x1) * outside_range];
+        float f22 = input[(y2 * wd + x2) * outside_range];
+
+        // indices of image to map to
+        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+        // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+        output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
+                          * (x - x1) * (y - y1)) * outside_range;
+    }
+    """)
+    # TODO this may not work anymore -- may not be power of 2.
+    block_size = 8
+    grid_size = int(window_size / block_size)
+    window_slice_deform = mod_ws.get_function('window_slice_deform')
+    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), DTYPE_i(window_size),
+                        DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
+                        block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+
+    return win_d
 
 
 def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):

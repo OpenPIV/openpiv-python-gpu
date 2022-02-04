@@ -35,7 +35,7 @@ _image_size_square = (1024, 512)
 _u_shift = 8
 _v_shift = -4
 _accuracy_tolerance = 0.1
-_identity_tolerance = 0.005
+_identity_tolerance = 0.001
 _trim_slice = slice(2, -2, 1)
 
 # test parameters
@@ -113,10 +113,12 @@ def test_gpu_smooth():
 
 def test_gpu_interpolate():
     ws0 = 16
+    spacing0 = 8
     ws1 = 8
-    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, 0.5)
+    spacing1 = 4
+    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
     x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
-    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, 0.5)
+    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
     x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
 
     f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
@@ -136,10 +138,12 @@ def test_gpu_interpolate():
 
 def test_gpu_interpolate_validation():
     ws0 = 16
+    spacing0 = 8
     ws1 = 8
-    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, 0.5)
+    spacing1 = 4
+    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
     x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
-    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, 0.5)
+    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
     x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
 
     f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
