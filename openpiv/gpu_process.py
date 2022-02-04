@@ -1711,7 +1711,7 @@ def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d)
     f1_d : GPUArray
         2D float, field to be validated
     val_locations_d : GPUArray
-        Locations of the valid vectors is to be done.
+        2D int or float, locations where validation of the vectors is to be done.
 
     Returns
     -------
@@ -1723,13 +1723,16 @@ def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d)
     _check_inputs(x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
     _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     _check_inputs(f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f1_d.shape, ndim=2)
+    _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, shape=f1_d.shape, ndim=2)
+    if val_locations_d.dtype != DTYPE_f:
+        val_locations_d = val_locations_d.astype(DTYPE_f)
+
     val_locations_inverse_d = 1 - val_locations_d
 
     f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
 
     # Replace vectors be at validation locations.
-    f1_val_d = (f1_d * val_locations_d).astype(DTYPE_f) + (f1_val_d * val_locations_inverse_d).astype(DTYPE_f)
+    f1_val_d = f1_d * val_locations_d + f1_val_d * val_locations_inverse_d
 
     return f1_val_d
 
@@ -1852,13 +1855,14 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
         2D float, velocity fields with replaced vectors.
 
     """
-    # TODO cast to float beforehand?
+    # val_locations_inverse_d = 1 - val_locations_d
+    val_locations_d = val_locations_d.astype(DTYPE_f)
     val_locations_inverse_d = 1 - val_locations_d
 
     # First iteration, just replace with mean velocity.
     if k == 0:
-        u_d = (val_locations_inverse_d * u_mean_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
-        v_d = (val_locations_inverse_d * v_mean_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+        u_d = val_locations_inverse_d * u_mean_d + val_locations_d * u_d
+        v_d = val_locations_inverse_d * v_mean_d + val_locations_d * v_d
 
     # Case if different dimensions: interpolation using previous iteration.
     elif k > 0 and field_shape[k] != field_shape[k - 1]:
@@ -1866,10 +1870,9 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
         v_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, v_previous_d, v_d, val_locations_d=val_locations_d)
 
     # Case if same dimensions.
-    # TODO cast to float beforehand?
     elif k > 0 and field_shape[k] == field_shape[k - 1]:
-        u_d = (val_locations_inverse_d * u_previous_d).astype(DTYPE_f) + (val_locations_d * u_d).astype(DTYPE_f)
-        v_d = (val_locations_inverse_d * v_previous_d).astype(DTYPE_f) + (val_locations_d * v_d).astype(DTYPE_f)
+        u_d = val_locations_inverse_d * u_previous_d + val_locations_d * u_d
+        v_d = val_locations_inverse_d * v_previous_d + val_locations_d * v_d
 
     return u_d, v_d
 
