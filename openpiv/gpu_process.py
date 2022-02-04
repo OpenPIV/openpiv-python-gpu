@@ -880,14 +880,14 @@ class PIVGPU:
             The masked domain indicated with boolean values--1 for mask.
 
         """
-        self.spacing = np.zeros(self.nb_iter_max, dtype=DTYPE_i)
+        self.spacing = []
         self.field_shape = []
         self.x_d = []
         self.y_d = []
         self.field_mask_d = []
         for k in range(self.nb_iter_max):
             # Init field geometry.
-            self.spacing[k] = self.window_size[k] - int(self.window_size[k] * self.overlap_ratio)
+            self.spacing.append(self.window_size[k] - int(self.window_size[k] * self.overlap_ratio))
             self.field_shape.append(get_field_shape(self.frame_shape, self.window_size[k], self.spacing[k]))
 
             # Init x, y.
