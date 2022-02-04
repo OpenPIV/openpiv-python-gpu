@@ -741,12 +741,9 @@ class PIVGPU:
         self.nb_iter_max = sum(ws_iters)
         self.nb_validation_iter = nb_validation_iter
         self.spacing = None
-        self.n_row = None
-        self.n_col = None
-        self.x_final = None
-        self.y_final = None
-        self.x_d = None
-        self.y_d = None
+        self.n_row = self.n_col = None
+        self.x_final = self.y_final = None
+        self.x_d = self.y_d = None
         self.field_mask_d = None
         self.mask_final = None
 
@@ -1313,22 +1310,22 @@ def _window_slice(frame_d, window_size, spacing, buffer):
         __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer, int n, int wd,
                             int ht)
     {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int idx_i = blockIdx.x;
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
 
-        // do the mapping
+        // Do the mapping.
         int x = (idx_i % n) * spacing + buffer + idx_x;
         int y = (idx_i / n) * spacing + buffer + idx_y;
 
-        // find limits of domain
+        // Find limits of domain.
         int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
 
-        // indices of new array to map to
+        // Indices of new array to map to.
         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
-        // apply the mapping
+        // Apply the mapping.
         output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
     }
     """)
@@ -1376,10 +1373,10 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
 
     win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
 
+    # TODO is this efficient?
     if strain_d is None:
         strain_d = gpuarray.zeros((4, m, n), dtype=DTYPE_f)
 
-    # TODO outside_range is inefficient
     mod_ws = SourceModule("""
         __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
                             int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
@@ -1388,7 +1385,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         // wd : width (number of columns in the full image)
         // h : height (number of rows in the full image)
 
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int idx_i = blockIdx.x;  // window index
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
@@ -1398,45 +1395,48 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         float dx = shift[idx_i] * f;
         float dy = shift[n_windows + idx_i] * f;
 
-        // get the strain tensor values
+        // Get the strain tensor values.
         float u_x = strain[idx_i] * f;
         float u_y = strain[n_windows + idx_i] * f;
         float v_x = strain[2 * n_windows + idx_i] * f;
         float v_y = strain[3 * n_windows + idx_i] * f;
 
-        // compute the window vector
+        // Compute the window vector
         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
 
-        // apply deformation operation
+        // Apply deformation operation.
         float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
         float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
 
-        // do the mapping
+        // Do the mapping
         float x = (idx_i % n) * spacing + buffer + x_shift;
         float y = (idx_i / n) * spacing + buffer + y_shift;
 
-        // do bilinear interpolation
+        // Do bilinear interpolation.
         int x1 = floorf(x);
         int x2 = x1 + 1;
         int y1 = floorf(y);
         int y2 = y1 + 1;
 
-        // find limits of domain
-        int outside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-
-        // terms of the bilinear interpolation. multiply by outside_range to avoid index error.
-        float f11 = input[(y1 * wd + x1) * outside_range];
-        float f21 = input[(y1 * wd + x2) * outside_range];
-        float f12 = input[(y2 * wd + x1) * outside_range];
-        float f22 = input[(y2 * wd + x2) * outside_range];
-
-        // indices of image to map to
+        // Indices of image to map to.
         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+        // Find limits of domain.
+        int inside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+
+        if (inside_range) {
+        // Terms of the bilinear interpolation.
+        float f11 = input[(y1 * wd + x1)];
+        float f21 = input[(y1 * wd + x2)];
+        float f12 = input[(y2 * wd + x1)];
+        float f22 = input[(y2 * wd + x2)];
 
         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-                          * (x - x1) * (y - y1)) * outside_range;
+                          * (x - x1) * (y - y1));
+        }
+        else {output[w_range] = 0;}
     }
     """)
     # TODO this may not work anymore -- may not be power of 2.
@@ -1488,25 +1488,25 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= n_windows) {return;}
         float small = 1e-20;
-        
+
         // Compute the index mapping.
         int row = row_p[w_idx];
         int col = col_p[w_idx];
         int row_tmp = row;
         int col_tmp = col;
-        
+
         if (row_tmp < 1) {row_tmp = 1;}
         if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
         if (col_tmp < 1) {col_tmp = 1;}
         if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
-        
+
         // Get the neighbouring correlation values.
         float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
         float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
         float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
         float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
         float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
-        
+
         // Convert negative values to zero
         int non_zero = c > 0;
         if (c <= 0) {c = small;}
@@ -1514,7 +1514,7 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
         if (cr <= 0) {cr = small;}
         if (cd <= 0) {cd = small;}
         if (cu <= 0) {cu = small;}
-        
+
         // Compute the subpixel value.
         row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
         col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
