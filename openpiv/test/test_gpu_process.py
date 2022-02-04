@@ -213,6 +213,21 @@ def test_gpu_replace_nan():
     assert np.array_equal(b_cpu, b_gpu)
 
 
+def test_gpu_scalar_mod():
+    f = np.arange(10, dtype=DTYPE_i)
+    f_d = gpuarray.to_gpu(f)
+    m = 2
+
+    i_cpu = f // m
+    r_cpu = f % m
+    i_d, r_d = gpu_process.gpu_scalar_mod_i(f_d, m)
+    i_gpu = i_d.get()
+    r_gpu = r_d.get()
+
+    assert np.array_equal(i_cpu, i_gpu)
+    assert np.array_equal(r_cpu, r_gpu)
+
+
 # INTEGRATION TESTS
 @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):

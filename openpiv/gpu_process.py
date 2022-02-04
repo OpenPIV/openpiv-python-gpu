@@ -392,11 +392,8 @@ class GPUCorrelation:
         peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
         peak_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
 
-        # TODO these array operations are a serious hit to performance.
         # Row and column information of peak.
-        col_peak_d, row_peak_d = cumath.modf((peak_idx_d.astype(DTYPE_f) / DTYPE_f(self.fft_width_x)))
-        row_peak_d = row_peak_d.astype(DTYPE_i)
-        col_peak_d = (col_peak_d * DTYPE_i(self.fft_width_x)).astype(DTYPE_i)
+        row_peak_d, col_peak_d = gpu_scalar_mod_i(peak_idx_d, self.fft_width_x)
 
         # Return the center if the correlation peak is near zero.
         zero_peak_inverse_d = (peak_d > 1e-3).astype(DTYPE_i)
@@ -979,7 +976,6 @@ class PIVGPU:
         """Updates the velocity values after each iteration."""
         _check_inputs(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
         if dp_x_d == dp_y_d is None:
-            # TODO need variable self.field_shape
             dp_x_d = gpuarray.zeros(self.field_shape[k], dtype=DTYPE_f)
             dp_y_d = gpuarray.zeros(self.field_shape[k], dtype=DTYPE_f)
         else:
@@ -1061,8 +1057,8 @@ def get_field_shape(image_size, window_size, spacing):
         Shape of the resulting flow field.
 
     """
-    assert window_size >= 8, "Window size is too small."
-    assert window_size % 8 == 0, "Window size must be a multiple of 8."
+    assert window_size >= 8, 'Window size is too small.'
+    assert window_size % 8 == 0, 'Window size must be a multiple of 8.'
     assert int(spacing) == spacing, 'overlap_ratio must be an int.'
 
     m = int((image_size[0] - spacing) // spacing)
@@ -1088,8 +1084,8 @@ def get_field_coords(field_shape, window_size, overlap_ratio):
         2D float, pixel coordinates of the resulting flow field
 
     """
-    assert window_size >= 8, "Window size is too small."
-    assert window_size % 8 == 0, "Window size must be a multiple of 8."
+    assert window_size >= 8, 'Window size is too small.'
+    assert window_size % 8 == 0, 'Window size must be a multiple of 8.'
     assert 0 <= overlap_ratio < 1, 'overlap_ratio should be a float between 0 and 1.'
     m, n = field_shape
 
@@ -1135,7 +1131,7 @@ def gpu_mask(frame_d, mask_d):
         """)
     block_size = 32
     x_blocks = int(n * m // block_size + 1)
-    mask_frame_gpu = mod_mask.get_function("mask_frame_gpu")
+    mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
     mask_frame_gpu(frame_masked_d, frame_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return frame_masked_d
@@ -1212,31 +1208,49 @@ def gpu_strain(u_d, v_d, spacing=1):
     return strain_d
 
 
-def gpu_smooth(f_d, s=0.5):
-    """Smooths a scalar field stored as a GPUArray.
+def gpu_scalar_mod_i(f_d, m):
+    """Returns the integer and remainder of division of a PyCUDA array by a scalar int.
 
     Parameters
     ----------
     f_d : GPUArray
-        Field to be smoothed.
-    s : float, optional
-        Smoothing parameter in smoothn.
+        Int, input to be decomposed.
+    m : int
+        Modulus.
 
     Returns
     -------
-    GPUArray
-        Float, same size as f_d. Smoothed field.
+    i_d, r_d : GPUArray
+        Int, integer part of the decomposition.
+    r_d : GPUArray
+        Int, remainder part of the decomposition.
 
     """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-    assert len(f_d.shape), 'Inputs must be 2D.'
-    assert s > 0, 'Smoothing parameter must be greater than 0.'
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
+    assert 0 < m == int(m)
+    size_i = DTYPE_i(f_d.size)
 
-    f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
+    i_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
+    r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
 
-    return f_smooth_d
+    mod_scalar_mod = SourceModule("""
+        __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
+        {
+            // i, r : output arguments
+            int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (t_idx >= size) {return;}
+            
+            int f_value = f[t_idx];
+            i[t_idx] = f_value / m;
+            r[t_idx] = f_value % m;
+        }
+        """)
+    block_size = 32
+    x_blocks = ceil(size_i / block_size)
+    mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
+    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return i_d, r_d
 
 
 def gpu_fft_shift(correlation_d):
@@ -1284,6 +1298,33 @@ def gpu_fft_shift(correlation_d):
               block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_shift_d
+
+
+def gpu_smooth(f_d, s=0.5):
+    """Smooths a scalar field stored as a GPUArray.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        Field to be smoothed.
+    s : float, optional
+        Smoothing parameter in smoothn.
+
+    Returns
+    -------
+    GPUArray
+        Float, same size as f_d. Smoothed field.
+
+    """
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+    assert len(f_d.shape), 'Inputs must be 2D.'
+    assert s > 0, 'Smoothing parameter must be greater than 0.'
+
+    f = f_d.get()
+    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
+
+    return f_smooth_d
 
 
 def _window_slice(frame_d, window_size, spacing, buffer):
