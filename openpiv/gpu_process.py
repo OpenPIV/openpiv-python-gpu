@@ -941,7 +941,6 @@ class PIVGPU:
 
         return extended_size, shift_d, strain_d
 
-    # TODO can simplify this to not require u_previous
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d, k):
         """Return velocity fields with outliers removed."""
         _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
@@ -1483,8 +1482,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
                           * (x - x1) * (y - y1));
-        }
-        else {output[w_range] = 0;}
+        } else {output[w_range] = 0;}
     }
     """)
     # TODO this may not work anymore -- may not be power of 2.
@@ -1800,7 +1798,6 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     """
     _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
     _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-
     ht_i = DTYPE_i(y0_d.size)
     wd_i = DTYPE_i(x0_d.size)
     n = x1_d.size
@@ -1809,14 +1806,12 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
 
     f1_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    # TODO is this most efficient implementation?
     # Calculate the relationship between the two grid coordinates.
     buffer_x_f = DTYPE_f((x0_d[0]).get())
     buffer_y_f = DTYPE_f((y0_d[0]).get())
     spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 
-    # TODO use if statements
     mod_interpolate = SourceModule("""
         __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
                             float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
@@ -1831,20 +1826,18 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
         float y = (y_grid[y_idx] - buffer_y) / spacing_y;
         
         // Find limits of domain.
-        int inside_left = x >= 0;
-        int inside_right = x < wd - 1;
-        int inside_top = y >= 0;
-        int inside_bottom = y < ht - 1;
-        x = x * inside_left * inside_right + (1 - inside_right) * (wd - 1);
-        y = y * inside_top * inside_bottom + (1 - inside_bottom) * (ht - 1);
+        if (x < 0) {x = 0;
+        } else if (x > wd - 1) {x = wd - 1;}
+        if (y < 0) {y = 0;
+        } else if (y > ht - 1) {y = ht - 1;}
         
         // Do bilinear interpolation.
-        int x1 = floorf(x - (1 - inside_right));
+        int x1 = floorf(x);
         int x2 = x1 + 1;
-        int y1 = floorf(y - (1 - inside_bottom));
+        int y1 = floorf(y);
         int y2 = y1 + 1;
 
-        // Terms of the bilinear interpolation. Multiply by outside_range to avoid index error.
+        // Terms of the bilinear interpolation.
         float f11 = f0[(y1 * wd + x1)];
         float f21 = f0[(y1 * wd + x2)];
         float f12 = f0[(y2 * wd + x1)];
