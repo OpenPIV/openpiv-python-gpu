@@ -6,6 +6,7 @@ easier. Note that all data must 32-bit at most to be stored on GPUs. Numpy types
 compatibility with GPU. Scalars should be python int type in general to work as function arguments. C-type scalars or
 arrays that are arguments to GPU kernels should be identified with ending in either _i or _f. The block argument to GPU
 kernels should have size of at least 32 to avoid wasting GPU resources. E.g. (32, 1, 1), (8, 8, 1), etc.
+
 """
 
 import time
@@ -37,6 +38,8 @@ DTYPE_c = np.complex64
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 cumisc.init()
+
+# TODO find elegant way to pass correct dtypes
 
 
 class GPUCorrelation:
@@ -1423,13 +1426,13 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
 
     win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
 
-    # TODO is this efficient?
-    if strain_d is None:
-        strain_d = gpuarray.zeros((4, m, n), dtype=DTYPE_f)
+    do_deform = DTYPE_i(strain_d is not None)
+    if not do_deform:
+        strain_d = DTYPE_i(0)
 
     mod_ws = SourceModule("""
         __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
-                            int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
+                            int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
     {
         // f : factor to apply to the shift and strain tensors
         // wd : width (number of columns in the full image)
@@ -1441,28 +1444,38 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
         if (idx_x >= wd || idx_y >= ht) {return;}
 
-        // Loop through each interrogation window and apply the shift and deformation.
-        // get the shift values
-        float dx = shift[idx_i] * f;
-        float dy = shift[n_windows + idx_i] * f;
+        // Get the shift values.
+        float shift_x = shift[idx_i];
+        float shift_y = shift[n_windows + idx_i];
+        float dx;
+        float dy;
 
+        if (do_deform) {
         // Get the strain tensor values.
-        float u_x = strain[idx_i] * f;
-        float u_y = strain[n_windows + idx_i] * f;
-        float v_x = strain[2 * n_windows + idx_i] * f;
-        float v_y = strain[3 * n_windows + idx_i] * f;
+        float u_x = strain[idx_i];
+        float u_y = strain[n_windows + idx_i];
+        float v_x = strain[2 * n_windows + idx_i];
+        float v_y = strain[3 * n_windows + idx_i];
 
-        // Compute the window vector
+        // Compute the window vector.
         float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
         float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
 
-        // Apply deformation operation.
-        float x_shift = idx_x + dx + r_x * u_x + r_y * u_y;  // r * du + dx
-        float y_shift = idx_y + dy + r_x * v_x + r_y * v_y;  // r * dv + dy
+        // Compute the deform.
+        float deform_x = r_x * u_x + r_y * u_y;
+        float deform_y = r_x * v_x + r_y * v_y;
+
+        // Apply shift and deformation operations.
+        dx = idx_x + (shift_x + deform_x) * f;  // r * du + dx
+        dy = idx_y + (shift_y + deform_y) * f;  // r * dv + dy
+        } else {
+        dx = idx_x + shift_x * f;
+        dy = idx_y + shift_y * f;
+        }
 
         // Do the mapping
-        float x = (idx_i % n) * spacing + buffer + x_shift;
-        float y = (idx_i / n) * spacing + buffer + y_shift;
+        float x = (idx_i % n) * spacing + buffer + dx;
+        float y = (idx_i / n) * spacing + buffer + dy;
 
         // Do bilinear interpolation.
         int x1 = floorf(x);
@@ -1492,7 +1505,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
     block_size = 8
     grid_size = ceil(window_size / block_size)
     window_slice_deform = mod_ws.get_function('window_slice_deform')
-    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), DTYPE_i(window_size),
+    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), do_deform, DTYPE_i(window_size),
                         DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
                         block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
 
@@ -1861,7 +1874,7 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
 
 
 # TODO this shouldn't depend on k, or else there should be a public version which doesn't
-# TODO do multiple replacement methods actually improve results?
+# TODO do multiple replacement methods actually improve results? The replacement should be given as argument here.
 def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
                          v_mean_d, field_shape, k):
     """Replace spurious vectors by the mean or median of the surrounding points.

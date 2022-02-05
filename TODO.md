@@ -41,6 +41,7 @@
 - [x] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 - [x] reduce the number of temporary gpu arrays created
 - [x] make consistent the strain and shift array arguments in the correlation function
+- [ ] flatten the 3D kernel indexing to 2D
 
 ## Features
 - [x] dismantle the F-structure so that others can more easily contribute
