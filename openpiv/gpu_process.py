@@ -1333,12 +1333,12 @@ def _window_slice(frame_d, window_size, spacing, buffer):
     -----------
     frame_d : GPUArray
         2D int, frame to create windows from.
-    window_size :
-
-    spacing :
-
-    buffer :
-
+    window_size : int
+        Side dimension of the square interrogation windows
+    spacing : int
+        Spacing between vectors of the velocity field.
+    buffer : int
+        Spacing from left/top vectors to edge of frame.
 
     Returns
     -------
@@ -1361,24 +1361,26 @@ def _window_slice(frame_d, window_size, spacing, buffer):
         int idx_i = blockIdx.x;
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if (idx_x >= wd || idx_y >= ht) {return;}
 
         // Do the mapping.
         int x = (idx_i % n) * spacing + buffer + idx_x;
         int y = (idx_i / n) * spacing + buffer + idx_y;
 
-        // Find limits of domain.
-        int outside_range = (x >= 0 && x < wd && y >= 0 && y < ht);
-
         // Indices of new array to map to.
         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
+        // Find limits of domain.
+        int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
+
+        if (inside_domain) {
         // Apply the mapping.
-        output[w_range] = input[(y * wd + x) * outside_range] * outside_range;
+        output[w_range] = input[(y * wd + x)];
+        } else {output[w_range] = 0;}
     }
     """)
-    # TODO this may not work anymore
     block_size = 8
-    grid_size = int(window_size / block_size)
+    grid_size = ceil(window_size / block_size)
     window_slice_deform = mod_ws.get_function('window_slice')
     window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n),
                         DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
@@ -1394,14 +1396,15 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
     -----------
     frame_d : GPUArray
         2D int, frame to create windows from.
-    window_size :
-
-    spacing :
-
-    buffer :
-
+    window_size : int
+        Side dimension of the square interrogation windows
+    spacing : int
+        Spacing between vectors of the velocity field.
+    buffer : int
+        Spacing from left/top vectors to edge of frame.
     shift_factor : float
-
+        Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
+        stationary. This is applied to the deformation in an analogous way.
     shift_d : GPUArray
         3D float, shift of the second window.
     strain_d : GPUArray or None
@@ -1436,6 +1439,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         int idx_i = blockIdx.x;  // window index
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if (idx_x >= wd || idx_y >= ht) {return;}
 
         // Loop through each interrogation window and apply the shift and deformation.
         // get the shift values
@@ -1470,24 +1474,23 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
         // Find limits of domain.
-        int inside_range = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+        int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
 
-        if (inside_range) {
+        if (inside_domain) {
         // Terms of the bilinear interpolation.
         float f11 = input[(y1 * wd + x1)];
         float f21 = input[(y1 * wd + x2)];
         float f12 = input[(y2 * wd + x1)];
         float f22 = input[(y2 * wd + x2)];
 
-        // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+        // Apply the mapping.
         output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
                           * (x - x1) * (y - y1));
         } else {output[w_range] = 0;}
     }
     """)
-    # TODO this may not work anymore -- may not be power of 2.
     block_size = 8
-    grid_size = int(window_size / block_size)
+    grid_size = ceil(window_size / block_size)
     window_slice_deform = mod_ws.get_function('window_slice_deform')
     window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), DTYPE_i(window_size),
                         DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
