@@ -1365,7 +1365,7 @@ def _window_slice(frame_d, window_size, spacing, buffer):
         int idx_i = blockIdx.x;
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= wd || idx_y >= ht) {return;}
+        if (idx_x >= ws || idx_y >= ws) {return;}
 
         // Do the mapping.
         int x = (idx_i % n) * spacing + buffer + idx_x;
@@ -1429,7 +1429,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
 
     do_deform = DTYPE_i(strain_d is not None)
     if not do_deform:
-        strain_d = DTYPE_i(0)
+        strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
 
     mod_ws = SourceModule("""
         __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
@@ -1437,13 +1437,12 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
     {
         // f : factor to apply to the shift and strain tensors
         // wd : width (number of columns in the full image)
-        // h : height (number of rows in the full image)
-
+        // ht : height (number of rows in the full image)
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;  // window index
+        int idx_i = blockIdx.x;
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= wd || idx_y >= ht) {return;}
+        if (idx_x >= ws || idx_y >= ws) {return;}
 
         // Get the shift values.
         float shift_x = shift[idx_i];
@@ -1463,12 +1462,12 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
             float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
     
             // Compute the deform.
-            float deform_x = r_x * u_x + r_y * u_y;
-            float deform_y = r_x * v_x + r_y * v_y;
+            float deform_x = r_x * u_x + r_y * u_y; // du_dr = dx_dr * du_dx + dy_dr * du_dy
+            float deform_y = r_x * v_x + r_y * v_y; // dv_dr = dx_dr * dv_dx + dy_dr * dv_dy
     
             // Apply shift and deformation operations.
-            dx = idx_x + (shift_x + deform_x) * f;  // r * du + dx
-            dy = idx_y + (shift_y + deform_y) * f;  // r * dv + dy
+            dx = idx_x + (shift_x + deform_x) * f;  // dx = (r * du_dr + u) * dt
+            dy = idx_y + (shift_y + deform_y) * f;  // dy = (r * dv_dr + v) * dt
         } else {
             dx = idx_x + shift_x * f;
             dy = idx_y + shift_y * f;
