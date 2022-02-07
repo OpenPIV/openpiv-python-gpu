@@ -40,6 +40,7 @@ DTYPE_c = np.complex64
 cumisc.init()
 
 # TODO find elegant way to pass correct dtypes
+# TODO dont allocate additonal thread blocks if not necessary
 
 
 class GPUCorrelation:
@@ -65,7 +66,7 @@ class GPUCorrelation:
 
     def __init__(self, frame_a_d, frame_b_d, nfft_x=None, subpixel_method='gaussian'):
         _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
-        # TODO input checks
+        # TODO input checks -- need to be python types
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
         self.frame_shape = DTYPE_i(frame_a_d.shape)
@@ -113,9 +114,9 @@ class GPUCorrelation:
         self.overlap_ratio = overlap_ratio
         # TODO remove unnecessary type casts--Python structures should have python types.
         # TODO extended size must be power of 2?
-        self.size_extended = DTYPE_i(extended_size) if extended_size is not None else DTYPE_i(window_size)
-        self.fft_width_x = DTYPE_i(self.size_extended * self.nfft_x)
-        self.fft_width_y = DTYPE_i(self.size_extended * self.nfft_y)
+        self.size_extended = extended_size if extended_size is not None else window_size
+        self.fft_width_x = self.size_extended * self.nfft_x
+        self.fft_width_y = self.size_extended * self.nfft_y
         self.fft_size = self.fft_width_x * self.fft_width_y
         self.spacing = int(self.window_size - (self.window_size * self.overlap_ratio))
         self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.spacing))
@@ -297,10 +298,10 @@ class GPUCorrelation:
         size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
         size1_a = DTYPE_i(self.size_extended - size0_a)
         size0_b = DTYPE_i(0)
-        size1_b = self.size_extended
+        size1_b = DTYPE_i(self.size_extended)
 
-        win_a_zp_d = gpuarray.zeros([self.n_windows, self.fft_width_x, self.fft_width_x], dtype=DTYPE_f)
-        win_b_zp_d = gpuarray.zeros([self.n_windows, self.fft_width_x, self.fft_width_x], dtype=DTYPE_f)
+        win_a_zp_d = gpuarray.zeros((self.n_windows, self.fft_width_x, self.fft_width_x), dtype=DTYPE_f)
+        win_b_zp_d = gpuarray.zeros((self.n_windows, self.fft_width_x, self.fft_width_x), dtype=DTYPE_f)
 
         mod_zp = SourceModule("""
             __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int s0, int s1)
@@ -324,9 +325,9 @@ class GPUCorrelation:
         block_size = 8
         grid_size = int(self.size_extended / block_size)
         zero_pad = mod_zp.get_function('zero_pad')
-        zero_pad(win_a_zp_d, win_a_norm_d, self.fft_width_x, self.size_extended, size0_a, size1_a,
+        zero_pad(win_a_zp_d, win_a_norm_d, DTYPE_i(self.fft_width_x), DTYPE_i(self.size_extended), size0_a, size1_a,
                  block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-        zero_pad(win_b_zp_d, win_b_norm_d, self.fft_width_x, self.size_extended, size0_b, size1_b,
+        zero_pad(win_b_zp_d, win_b_norm_d, DTYPE_i(self.fft_width_x), DTYPE_i(self.size_extended), size0_b, size1_b,
                  block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
 
         return win_a_zp_d, win_b_zp_d
@@ -754,9 +755,8 @@ class PIVGPU:
                 raise ValueError('Mask is not same shape as image.') from None
 
         # Set window sizes.
-        self.window_size = np.asarray(
-            [np.power(2, num_ws - i - 1) * min_window_size for i in range(num_ws) for _ in range(ws_iters[i])],
-            dtype=DTYPE_i)
+        self.window_size = [(2 ** (num_ws - i - 1)) * min_window_size for i in range(num_ws)
+                            for _ in range(ws_iters[i])]
 
         # TODO These are terrible for understanding. Try a dictionary instead.
         # Validation method.
@@ -1173,31 +1173,32 @@ def gpu_strain(u_d, v_d, spacing=1):
 
         // x-axis
         // first column
-        if (col == 0) {strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
-        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
-
+        if (col == 0) {
+            strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
+            strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
         // last column
-        } else if (col == n - 1) {strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
-        strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
-
+        } else if (col == n - 1) {
+            strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
+            strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
         // main body
-        } else {strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
-        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
+        } else {
+            strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
+            strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
         }
 
         // y-axis
         // first row
-        if (row == 0) {strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
-        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
-
+        if (row == 0) {
+            strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
+            strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
         // last row
-        } else if (row == m - 1) {strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;
-        // u_y
-        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
-
+        } else if (row == m - 1) {
+            strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
+            strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
         // main body
-        } else {strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
-        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
+        } else {
+            strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
+            strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
         }
     }
     """)
@@ -1451,26 +1452,26 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         float dy;
 
         if (do_deform) {
-        // Get the strain tensor values.
-        float u_x = strain[idx_i];
-        float u_y = strain[n_windows + idx_i];
-        float v_x = strain[2 * n_windows + idx_i];
-        float v_y = strain[3 * n_windows + idx_i];
-
-        // Compute the window vector.
-        float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-        float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
-
-        // Compute the deform.
-        float deform_x = r_x * u_x + r_y * u_y;
-        float deform_y = r_x * v_x + r_y * v_y;
-
-        // Apply shift and deformation operations.
-        dx = idx_x + (shift_x + deform_x) * f;  // r * du + dx
-        dy = idx_y + (shift_y + deform_y) * f;  // r * dv + dy
+            // Get the strain tensor values.
+            float u_x = strain[idx_i];
+            float u_y = strain[n_windows + idx_i];
+            float v_x = strain[2 * n_windows + idx_i];
+            float v_y = strain[3 * n_windows + idx_i];
+    
+            // Compute the window vector.
+            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
+    
+            // Compute the deform.
+            float deform_x = r_x * u_x + r_y * u_y;
+            float deform_y = r_x * v_x + r_y * v_y;
+    
+            // Apply shift and deformation operations.
+            dx = idx_x + (shift_x + deform_x) * f;  // r * du + dx
+            dy = idx_y + (shift_y + deform_y) * f;  // r * dv + dy
         } else {
-        dx = idx_x + shift_x * f;
-        dy = idx_y + shift_y * f;
+            dx = idx_x + shift_x * f;
+            dy = idx_y + shift_y * f;
         }
 
         // Do the mapping
@@ -1581,13 +1582,71 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
         row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
         col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
     }
+    
+        __global__ void subpixel_approximation1(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        float c = corr[ws * w_idx + wd * row + col];
+        int non_zero = c > 0;
+        
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            if (cd <= 0) {cd = small;}
+            if (cu <= 0) {cu = small;}
+            // 0.5 factor here
+            row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
+        }
+        
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            if (cl <= 0) {cl = small;}
+            if (cr <= 0) {cr = small;}
+            col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
+        }
+    }
     """)
     block_size = 32
     x_blocks = ceil(n_windows / block_size)
     subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    # subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation1')
     subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
                            DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
                            block=(block_size, 1, 1), grid=(x_blocks, 1))
+    """
+        float c = corr[ws * w_idx + wd * row + col];
+        int non_zero = c > 0;
+        
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            if (cd <= 0) {cd = small;}
+            if (cu <= 0) {cu = small;}
+            // 0.5 factor here
+            row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
+        }
+        
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            if (cl <= 0) {cl = small;}
+            if (cr <= 0) {cr = small;}
+            col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
+        }
+    """
 
     return row_sp_d, col_sp_d
 
