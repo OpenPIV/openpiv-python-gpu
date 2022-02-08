@@ -331,17 +331,6 @@ def test_subpixel_peak(subpixel_method):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
-@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
-def test_gpu_extended_search_area_fast(image_size):
-    """Quick test of the extended search area function."""
-    frame_a_rectangle, frame_b_rectangle = create_pair_shift(image_size, _u_shift, _v_shift)
-    u, v = gpu_process.gpu_extended_search_area(
-        frame_a_rectangle, frame_b_rectangle, window_size=16, overlap_ratio=0.5, search_area_size=32, dt=1
-    )
-    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance * 2
-    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance * 2
-
-
 def test_gpu_piv_benchmark_oop(benchmark):
     """Benchmarks the PIV speed with the objected-oriented interface."""
     frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
