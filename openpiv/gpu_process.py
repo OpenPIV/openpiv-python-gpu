@@ -44,6 +44,7 @@ cumisc.init()
 
 
 # TODO should be no GPU kernels in here
+# TODO save memory in extended search area
 class GPUCorrelation:
     """A class representing the cross correlation function.
 
@@ -118,6 +119,7 @@ class GPUCorrelation:
         self.size_extended = extended_size if extended_size is not None else window_size
         self.fft_width_x = self.size_extended * self.nfft_x
         self.fft_width_y = self.size_extended * self.nfft_y
+        self.fft_shape = (self.fft_width_y, self.fft_width_x)
         self.fft_size = self.fft_width_x * self.fft_width_y
         self.spacing = int(self.window_size - (self.window_size * self.overlap_ratio))
         self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.spacing))
@@ -131,7 +133,12 @@ class GPUCorrelation:
         win_b_norm_d = _gpu_normalize_intensity(win_b_d)
 
         # Zero pad arrays.
-        win_a_zp_d, win_b_zp_d = self._zero_pad(win_a_norm_d, win_b_norm_d)
+        size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
+        size1_a = DTYPE_i(self.size_extended - size0_a)
+        size0_b = DTYPE_i(0)
+        size1_b = DTYPE_i(self.size_extended)
+        win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, (size0_a, size1_a))
+        win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape, (size0_b, size1_b))
 
         # Correlate the windows.
         self.correlation_d = self._correlate_windows(win_a_zp_d, win_b_zp_d)
@@ -238,60 +245,6 @@ class GPUCorrelation:
 
         return win_a_d, win_b_d
 
-    def _zero_pad(self, win_a_norm_d, win_b_norm_d):
-        """Function that zero-pads an 3D stack of arrays for use with the scikit-cuda FFT function.
-
-        If extended size is passed, then the second window is padded to match the extended size.
-
-        Parameters
-        ----------
-        win_a_norm_d, win_b_norm_d : GPUArray
-            3D float, arrays to be zero padded.
-
-        Returns
-        -------
-        win_a_zp_d, win_b_zp_d : GPUArray
-            3D float, windows which have been zero-padded.
-
-        """
-        # compute the window extension
-        size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
-        size1_a = DTYPE_i(self.size_extended - size0_a)
-        size0_b = DTYPE_i(0)
-        size1_b = DTYPE_i(self.size_extended)
-
-        win_a_zp_d = gpuarray.zeros((self.n_windows, self.fft_width_x, self.fft_width_x), dtype=DTYPE_f)
-        win_b_zp_d = gpuarray.zeros((self.n_windows, self.fft_width_x, self.fft_width_x), dtype=DTYPE_f)
-
-        mod_zp = SourceModule("""
-            __global__ void zero_pad(float *array_zp, float *array, int fft_size, int window_size, int s0, int s1)
-            {
-                // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
-                int ind_i = blockIdx.x;
-                int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
-                int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-                
-                // don't copy if out of range
-                if (ind_x < s0 || ind_x >= s1 || ind_y < s0 || ind_y >= s1) {return;}
-
-                // get range of values to map
-                int arr_range = ind_i * window_size * window_size + window_size * ind_y + ind_x;
-                int zp_range = ind_i * fft_size * fft_size + fft_size * ind_y + ind_x;
-
-                // apply the map
-                array_zp[zp_range] = array[arr_range];
-            }
-        """)
-        block_size = 8
-        grid_size = int(self.size_extended / block_size)
-        zero_pad = mod_zp.get_function('zero_pad')
-        zero_pad(win_a_zp_d, win_a_norm_d, DTYPE_i(self.fft_width_x), DTYPE_i(self.size_extended), size0_a, size1_a,
-                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-        zero_pad(win_b_zp_d, win_b_norm_d, DTYPE_i(self.fft_width_x), DTYPE_i(self.size_extended), size0_b, size1_b,
-                 block=(block_size, block_size, 1), grid=(int(self.n_windows), grid_size, grid_size))
-
-        return win_a_zp_d, win_b_zp_d
-
     def _correlate_windows(self, win_a_zp_d, win_b_zp_d):
         """Compute correlation function between two interrogation windows.
 
@@ -311,6 +264,7 @@ class GPUCorrelation:
         win_h = self.fft_width_y
         win_w = self.fft_width_x
 
+        # TODO wrap this implementation
         win_i_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w)), DTYPE_f)
         win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
         win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
@@ -949,15 +903,15 @@ class PIVGPU:
         v_d = gpuarray.empty_like(dp_y_d, dtype=DTYPE_f)
 
         mod_update = SourceModule("""
-            __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
-            {
-                // u_new : output argument
-                int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-                if (t_idx >= size) {return;}
-    
-                f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
-            }
-            """)
+        __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
+        {
+            // u_new : output argument
+            int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (t_idx >= size) {return;}
+
+            f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
+        }
+        """)
         block_size = 32
         x_blocks = int(i_peak_d.size // block_size + 1)
         update_values = mod_update.get_function("update_values")
@@ -1083,15 +1037,15 @@ def gpu_mask(frame_d, mask_d):
     frame_masked_d = gpuarray.empty_like(frame_d, dtype=DTYPE_f)
 
     mod_mask = SourceModule("""
-        __global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
-        {
-            // frame_masked : output argument
-            int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (t_idx >= size) {return;}
+    __global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
+    {
+        // frame_masked : output argument
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
 
-            frame_masked[t_idx] = frame[t_idx] * mask[t_idx];
-        }
-        """)
+        frame_masked[t_idx] = frame[t_idx] * mask[t_idx];
+    }
+    """)
     block_size = 32
     x_blocks = int(n * m // block_size + 1)
     mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
@@ -1198,17 +1152,17 @@ def gpu_scalar_mod_i(f_d, m):
     r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
 
     mod_scalar_mod = SourceModule("""
-        __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
-        {
-            // i, r : output arguments
-            int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (t_idx >= size) {return;}
-            
-            int f_value = f[t_idx];
-            i[t_idx] = f_value / m;
-            r[t_idx] = f_value % m;
-        }
-        """)
+    __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
+    {
+        // i, r : output arguments
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+
+        int f_value = f[t_idx];
+        i[t_idx] = f_value / m;
+        r[t_idx] = f_value % m;
+    }
+    """)
     block_size = 32
     x_blocks = ceil(size_i / block_size)
     mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
@@ -1237,7 +1191,7 @@ def gpu_fft_shift(correlation_d):
     correlation_shift_d = gpuarray.empty_like(correlation_d)
 
     mod_fft_shift = SourceModule("""
-        __global__ void fft_shift(float *destination, float *source, int ht, int wd, int ws)
+    __global__ void fft_shift(float *destination, float *source, int ht, int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int idx_i = blockIdx.x;
@@ -1289,404 +1243,6 @@ def gpu_smooth(f_d, s=0.5):
     f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
 
     return f_smooth_d
-
-
-def _window_slice(frame_d, window_size, spacing, buffer):
-    """Creates a 3D array stack of all the interrogation windows.
-
-    Parameters
-    -----------
-    frame_d : GPUArray
-        2D int, frame to create windows from.
-    window_size : int
-        Side dimension of the square interrogation windows
-    spacing : int
-        Spacing between vectors of the velocity field.
-    buffer : int
-        Spacing from left/top vectors to edge of frame.
-
-    Returns
-    -------
-    GPUArray
-        3D float, interrogation windows stacked on each other.
-
-    """
-    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    ht, wd = frame_d.shape
-    m, n = get_field_shape((ht, wd), window_size, spacing)
-    n_windows = m * n
-
-    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
-
-    mod_ws = SourceModule("""
-        __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer, int n, int wd,
-                            int ht)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= ws || idx_y >= ws) {return;}
-
-        // Do the mapping.
-        int x = (idx_i % n) * spacing + buffer + idx_x;
-        int y = (idx_i / n) * spacing + buffer + idx_y;
-
-        // Indices of new array to map to.
-        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-
-        // Find limits of domain.
-        int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
-
-        if (inside_domain) {
-        // Apply the mapping.
-        output[w_range] = input[(y * wd + x)];
-        } else {output[w_range] = 0;}
-    }
-    """)
-    block_size = 8
-    grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_ws.get_function('window_slice')
-    window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n),
-                        DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
-                        grid=(int(n_windows), grid_size, grid_size))
-
-    return win_d
-
-
-def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, shift_d, strain_d=None):
-    """Creates a 3D array stack of all the interrogation windows using shift and strain.
-
-    Parameters
-    -----------
-    frame_d : GPUArray
-        2D int, frame to create windows from.
-    window_size : int
-        Side dimension of the square interrogation windows
-    spacing : int
-        Spacing between vectors of the velocity field.
-    buffer : int
-        Spacing from left/top vectors to edge of frame.
-    shift_factor : float
-        Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
-        stationary. This is applied to the deformation in an analogous way.
-    shift_d : GPUArray
-        3D float, shift of the second window.
-    strain_d : GPUArray or None
-        3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
-
-    Returns
-    -------
-    GPUArray
-        3D float, all interrogation windows stacked on each other.
-
-    """
-    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    ht, wd = frame_d.shape
-    m, n = get_field_shape((ht, wd), window_size, spacing)
-    n_windows = m * n
-
-    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
-
-    do_deform = DTYPE_i(strain_d is not None)
-    if not do_deform:
-        strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
-
-    mod_ws = SourceModule("""
-        __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
-                            int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
-    {
-        // f : factor to apply to the shift and strain tensors
-        // wd : width (number of columns in the full image)
-        // ht : height (number of rows in the full image)
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= ws || idx_y >= ws) {return;}
-
-        // Get the shift values.
-        float shift_x = shift[idx_i];
-        float shift_y = shift[n_windows + idx_i];
-        float dx;
-        float dy;
-
-        if (do_deform) {
-            // Get the strain tensor values.
-            float u_x = strain[idx_i];
-            float u_y = strain[n_windows + idx_i];
-            float v_x = strain[2 * n_windows + idx_i];
-            float v_y = strain[3 * n_windows + idx_i];
-    
-            // Compute the window vector.
-            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
-    
-            // Compute the deform.
-            float deform_x = r_x * u_x + r_y * u_y; // du_dr = dx_dr * du_dx + dy_dr * du_dy
-            float deform_y = r_x * v_x + r_y * v_y; // dv_dr = dx_dr * dv_dx + dy_dr * dv_dy
-    
-            // Apply shift and deformation operations.
-            dx = idx_x + (shift_x + deform_x) * f;  // dx = (r * du_dr + u) * dt
-            dy = idx_y + (shift_y + deform_y) * f;  // dy = (r * dv_dr + v) * dt
-        } else {
-            dx = idx_x + shift_x * f;
-            dy = idx_y + shift_y * f;
-        }
-
-        // Do the mapping
-        float x = (idx_i % n) * spacing + buffer + dx;
-        float y = (idx_i / n) * spacing + buffer + dy;
-
-        // Do bilinear interpolation.
-        int x1 = floorf(x);
-        int x2 = x1 + 1;
-        int y1 = floorf(y);
-        int y2 = y1 + 1;
-
-        // Indices of image to map to.
-        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-
-        // Find limits of domain.
-        int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-
-        if (inside_domain) {
-        // Terms of the bilinear interpolation.
-        float f11 = input[(y1 * wd + x1)];
-        float f21 = input[(y1 * wd + x2)];
-        float f12 = input[(y2 * wd + x1)];
-        float f22 = input[(y2 * wd + x2)];
-
-        // Apply the mapping.
-        output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-                          * (x - x1) * (y - y1));
-        } else {output[w_range] = 0;}
-    }
-    """)
-    block_size = 8
-    grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_ws.get_function('window_slice_deform')
-    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), do_deform, DTYPE_i(window_size),
-                        DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
-                        block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
-
-    return win_d
-
-
-def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
-    """Returns the subpixel position of the peaks using gaussian approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-    fft_size_x, fft_size_y : int
-        Size of the fft domain.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        float small = 1e-20;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-        int non_zero = c > 0;
-        
-        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd > 0 && cu > 0 && non_zero) {
-                cd = logf(cd);
-                cu = logf(cu);
-                row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * logf(c) + cu + small);
-            } else {row_sp[w_idx] = row;}
-        }
-        
-        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl > 0 && cr > 0 && non_zero) {
-                cl = logf(cl);
-                cr = logf(cr);
-                col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * logf(c) + cr + small);
-            } else {col_sp[w_idx] = col;}
-        }
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
-                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return row_sp_d, col_sp_d
-
-
-def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
-    """Returns the subpixel position of the peaks using parabolic approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-    fft_size_x, fft_size_y : int
-        Size of the fft domain.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        float small = 1e-20;
-    
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-    
-        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * c + cu + small);
-        }
-    
-        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * c + cr + small);
-        }
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
-                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return row_sp_d, col_sp_d
-
-
-def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
-    """Returns the subpixel position of the peaks using centroid approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-    fft_size_x, fft_size_y : int
-        Size of the fft domain.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
-        {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        float small = 1e-20;
-    
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-        int non_zero = c > 0;
-    
-        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd > 0 && cu > 0 && non_zero) {
-                cd = logf(cd);
-                cu = logf(cu);
-                row_sp[w_idx] = row + 0.5 * (cu - cd) / (cd + c + cu + small);
-            } else {row_sp[w_idx] = row;}
-        }
-    
-        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl > 0 && cr > 0 && non_zero) {
-                cl = logf(cl);
-                cr = logf(cr);
-                col_sp[w_idx] = col + 0.5 * (cr - cl) / (cl + c + cr + small);
-            } else {col_sp[w_idx] = col;}
-        }
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
-                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-    return row_sp_d, col_sp_d
 
 
 def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
@@ -1768,8 +1324,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 
     mod_interpolate = SourceModule("""
-        __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
-                            float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+    __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
+                        float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
     {
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
@@ -1779,13 +1335,13 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
         int y_idx = t_idx / n;
         float x = (x_grid[x_idx] - buffer_x) / spacing_x;
         float y = (y_grid[y_idx] - buffer_y) / spacing_y;
-        
+
         // Find limits of domain.
         if (x < 0) {x = 0;
         } else if (x > wd - 1) {x = wd - 1;}
         if (y < 0) {y = 0;
         } else if (y > ht - 1) {y = ht - 1;}
-        
+
         // Do bilinear interpolation.
         int x1 = floorf(x);
         int x2 = x1 + 1;
@@ -1812,6 +1368,187 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     return f1_d
 
 
+def _window_slice(frame_d, window_size, spacing, buffer):
+    """Creates a 3D array stack of all the interrogation windows.
+
+    Parameters
+    -----------
+    frame_d : GPUArray
+        2D int, frame to create windows from.
+    window_size : int
+        Side dimension of the square interrogation windows
+    spacing : int
+        Spacing between vectors of the velocity field.
+    buffer : int
+        Spacing from left/top vectors to edge of frame.
+
+    Returns
+    -------
+    GPUArray
+        3D float, interrogation windows stacked on each other.
+
+    """
+    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    ht, wd = frame_d.shape
+    m, n = get_field_shape((ht, wd), window_size, spacing)
+    n_windows = m * n
+
+    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
+
+    mod_ws = SourceModule("""
+    __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer, int n, int wd, int ht)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int idx_i = blockIdx.x;
+        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if (idx_x >= ws || idx_y >= ws) {return;}
+
+        // Do the mapping.
+        int x = (idx_i % n) * spacing + buffer + idx_x;
+        int y = (idx_i / n) * spacing + buffer + idx_y;
+
+        // Indices of new array to map to.
+        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+        // Find limits of domain.
+        int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
+
+        if (inside_domain) {
+        // Apply the mapping.
+        output[w_range] = input[(y * wd + x)];
+        } else {output[w_range] = 0;}
+    }
+    """)
+    block_size = 8
+    grid_size = ceil(window_size / block_size)
+    window_slice_deform = mod_ws.get_function('window_slice')
+    window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n),
+                        DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
+                        grid=(int(n_windows), grid_size, grid_size))
+
+    return win_d
+
+
+def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, shift_d, strain_d=None):
+    """Creates a 3D array stack of all the interrogation windows using shift and strain.
+
+    Parameters
+    -----------
+    frame_d : GPUArray
+        2D int, frame to create windows from.
+    window_size : int
+        Side dimension of the square interrogation windows
+    spacing : int
+        Spacing between vectors of the velocity field.
+    buffer : int
+        Spacing from left/top vectors to edge of frame.
+    shift_factor : float
+        Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
+        stationary. This is applied to the deformation in an analogous way.
+    shift_d : GPUArray
+        3D float, shift of the second window.
+    strain_d : GPUArray or None
+        3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
+
+    Returns
+    -------
+    GPUArray
+        3D float, all interrogation windows stacked on each other.
+
+    """
+    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    ht, wd = frame_d.shape
+    m, n = get_field_shape((ht, wd), window_size, spacing)
+    n_windows = m * n
+
+    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
+
+    do_deform = DTYPE_i(strain_d is not None)
+    if not do_deform:
+        strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
+
+    mod_ws = SourceModule("""
+    __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
+                        int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
+    {
+        // f : factor to apply to the shift and strain tensors
+        // wd : width (number of columns in the full image)
+        // ht : height (number of rows in the full image)
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int idx_i = blockIdx.x;
+        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if (idx_x >= ws || idx_y >= ws) {return;}
+
+        // Get the shift values.
+        float shift_x = shift[idx_i];
+        float shift_y = shift[n_windows + idx_i];
+        float dx;
+        float dy;
+
+        if (do_deform) {
+            // Get the strain tensor values.
+            float u_x = strain[idx_i];
+            float u_y = strain[n_windows + idx_i];
+            float v_x = strain[2 * n_windows + idx_i];
+            float v_y = strain[3 * n_windows + idx_i];
+    
+            // Compute the window vector.
+            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
+            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
+    
+            // Compute the deform.
+            float deform_x = r_x * u_x + r_y * u_y; // du_dr = dx_dr * du_dx + dy_dr * du_dy
+            float deform_y = r_x * v_x + r_y * v_y; // dv_dr = dx_dr * dv_dx + dy_dr * dv_dy
+    
+            // Apply shift and deformation operations.
+            dx = idx_x + (shift_x + deform_x) * f;  // dx = (r * du_dr + u) * dt
+            dy = idx_y + (shift_y + deform_y) * f;  // dy = (r * dv_dr + v) * dt
+        } else {
+            dx = idx_x + shift_x * f;
+            dy = idx_y + shift_y * f;
+        }
+
+        // Do the mapping
+        float x = (idx_i % n) * spacing + buffer + dx;
+        float y = (idx_i / n) * spacing + buffer + dy;
+
+        // Do bilinear interpolation.
+        int x1 = floorf(x);
+        int x2 = x1 + 1;
+        int y1 = floorf(y);
+        int y2 = y1 + 1;
+
+        // Indices of image to map to.
+        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+        // Find limits of domain.
+        int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+
+        if (inside_domain) {
+        // Terms of the bilinear interpolation.
+        float f11 = input[(y1 * wd + x1)];
+        float f21 = input[(y1 * wd + x2)];
+        float f12 = input[(y2 * wd + x1)];
+        float f22 = input[(y2 * wd + x2)];
+
+        // Apply the mapping.
+        output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
+                          * (x - x1) * (y - y1));
+        } else {output[w_range] = 0;}
+    }
+    """)
+    block_size = 8
+    grid_size = ceil(window_size / block_size)
+    window_slice_deform = mod_ws.get_function('window_slice_deform')
+    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), do_deform, DTYPE_i(window_size),
+                        DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
+                        block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+
+    return win_d
+
+
 def _gpu_normalize_intensity(win_d):
     """Remove the mean from each IW of a 3D stack of interrogation windows.
 
@@ -1826,6 +1563,7 @@ def _gpu_normalize_intensity(win_d):
         3D float, normalized intensities in the windows.
 
     """
+    _check_inputs(win_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     n_windows, ht, wd = win_d.shape
     iw_size_i = DTYPE_i(ht * wd)
     size_i = DTYPE_i(win_d.size)
@@ -1835,7 +1573,7 @@ def _gpu_normalize_intensity(win_d):
     mean_a_d = cumisc.mean(win_d.reshape(n_windows, int(iw_size_i)), axis=1)
 
     mod_norm = SourceModule("""
-        __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size, int size)
+    __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size, int size)
     {
         // global thread id for 1D grid of 2D blocks
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1853,6 +1591,273 @@ def _gpu_normalize_intensity(win_d):
     normalize(win_d, win_norm_d, mean_a_d, iw_size_i, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return win_norm_d
+
+
+def _gpu_zero_pad(win_d, fft_shape, data_limits):
+    """Function that zero-pads an 3D stack of arrays for use with the scikit-cuda FFT function.
+
+    Parameters
+    ----------
+    win_d : GPUArray
+        3D float, arrays to be zero padded.
+    fft_shape : tuple
+        Int (ht, wd), shape to zero pad the date to.
+    data_limits : tuple
+        Int (s0, s1) lower and upper bounds of the data indexes to copy to the zero-padded arrays.
+
+    Returns
+    -------
+    GPUArray
+        3D float, windows which have been zero-padded.
+
+    """
+    _check_inputs(win_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    n_windows, wd, ht = win_d.shape
+    size0, size1 = DTYPE_i(data_limits)
+    fft_ht_i, fft_wd_i = DTYPE_i(fft_shape)
+
+    win_zp_d = gpuarray.zeros((n_windows, *fft_shape), dtype=DTYPE_f)
+
+    mod_zp = SourceModule("""
+    __global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, int ht, int wd, int s0, int s1)
+    {
+        // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
+        int ind_i = blockIdx.x;
+        int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
+        int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+        if (ind_x < s0 || ind_x >= s1 || ind_y < s0 || ind_y >= s1) {return;}
+
+        // get range of values to map
+        int data_range = ind_i * ht * wd + wd * ind_y + ind_x;
+        int zp_range = ind_i * fft_ht * fft_wd + fft_wd * ind_y + ind_x;
+
+        // apply the map
+        array_zp[zp_range] = array[data_range];
+    }
+    """)
+    block_size = 8
+    grid_size = ceil(max(wd, ht) / block_size)
+    zero_pad = mod_zp.get_function('zero_pad')
+    zero_pad(win_zp_d, win_d, fft_ht_i, fft_wd_i, DTYPE_i(ht), DTYPE_i(wd), size0, size1,
+             block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
+
+    return win_zp_d
+
+
+def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using gaussian approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    mod_subpixel_approximation = SourceModule("""
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                        int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        float c = corr[ws * w_idx + wd * row + col];
+        int non_zero = c > 0;
+
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            if (cd > 0 && cu > 0 && non_zero) {
+                cd = logf(cd);
+                cu = logf(cu);
+                row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * logf(c) + cu + small);
+            } else {row_sp[w_idx] = row;}
+        }
+
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            if (cl > 0 && cr > 0 && non_zero) {
+                cl = logf(cl);
+                cr = logf(cr);
+                col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * logf(c) + cr + small);
+            } else {col_sp[w_idx] = col;}
+        }
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return row_sp_d, col_sp_d
+
+
+def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using parabolic approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    mod_subpixel_approximation = SourceModule("""
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int ht,
+                        int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        float c = corr[ws * w_idx + wd * row + col];
+
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * c + cu + small);
+        }
+
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * c + cr + small);
+        }
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return row_sp_d, col_sp_d
+
+
+def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using centroid approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    mod_subpixel_approximation = SourceModule("""
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                        int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+    {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        float c = corr[ws * w_idx + wd * row + col];
+        int non_zero = c > 0;
+
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            if (cd > 0 && cu > 0 && non_zero) {
+                cd = logf(cd);
+                cu = logf(cu);
+                row_sp[w_idx] = row + 0.5 * (cu - cd) / (cd + c + cu + small);
+            } else {row_sp[w_idx] = row;}
+        }
+
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            if (cl > 0 && cr > 0 && non_zero) {
+                cl = logf(cl);
+                cr = logf(cr);
+                col_sp[w_idx] = col + 0.5 * (cr - cl) / (cl + c + cr + small);
+            } else {col_sp[w_idx] = col;}
+        }
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return row_sp_d, col_sp_d
 
 
 def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
@@ -1885,19 +1890,18 @@ def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
     correlation_masked_d = correlation_positive_d.copy()
 
     mod_mask_peak = SourceModule("""
-        __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int ht, int wd, int mask_dim,
-                            int size)
+    __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int ht, int wd, int mask_dim, int size)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int idx_i = blockIdx.x;
         int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
         int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
         if (idx_x >= mask_dim || idx_y >= mask_dim) {return;}
-        
+
         // Get the mapping.
         int row = row_p[idx_i] - mask_w + idx_y;
         int col = col_p[idx_i] - mask_w + idx_x;
-        
+
         // Return if outside edge of window.
         if (row >= ht || col >= wd) {return;}
 
@@ -1938,7 +1942,7 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
     correlation_masked_d = correlation_positive_d.copy()
 
     mod_correlation_rms = SourceModule("""
-        __global__ void correlation_rms(float *corr, float *corr_p, int ht, int wd, int size)
+    __global__ void correlation_rms(float *corr, float *corr_p, int ht, int wd, int size)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int idx_i = blockIdx.x;
