@@ -127,7 +127,8 @@ class GPUCorrelation:
         win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
 
         # Normalize array by computing the norm of each IW.
-        win_a_norm_d, win_b_norm_d = self._normalize_intensity(win_a_d, win_b_d)
+        win_a_norm_d = _gpu_normalize_intensity(win_a_d)
+        win_b_norm_d = _gpu_normalize_intensity(win_b_d)
 
         # Zero pad arrays.
         win_a_zp_d, win_b_zp_d = self._zero_pad(win_a_norm_d, win_b_norm_d)
@@ -236,50 +237,6 @@ class GPUCorrelation:
             win_b_d = _window_slice(frame_b_d, self.size_extended, spacing, buffer)
 
         return win_a_d, win_b_d
-
-    # TODO  should call this twice
-    # TODO should not be a class method
-    def _normalize_intensity(self, win_a_d, win_b_d):
-        """Remove the mean from each IW of a 3D stack of IWs.
-
-        Parameters
-        ----------
-        win_a_d, win_b_d : GPUArray
-            3D float, stack of first IWs.
-
-        Returns
-        -------
-        win_a_norm_d, win_b_norm_d : GPUArray
-            3D float, normalized intensities in the windows.
-
-        """
-        iw_size = DTYPE_i(self.size_extended * self.size_extended)
-
-        win_a_norm_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
-        win_b_norm_d = gpuarray.zeros((self.n_windows, self.size_extended, self.size_extended), dtype=DTYPE_f)
-
-        mean_a_d = cumisc.mean(win_a_d.reshape(self.n_windows, iw_size), axis=1)
-        mean_b_d = cumisc.mean(win_b_d.reshape(self.n_windows, iw_size), axis=1)
-
-        mod_norm = SourceModule("""
-            __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size)
-        {
-            // global thread id for 1D grid of 2D blocks
-            int t_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
-
-            // indices for mean matrix
-            int mean_idx = t_idx / iw_size;
-
-            array_norm[t_idx] = array[t_idx] - mean[mean_idx];
-        }
-        """)
-        block_size = 8
-        grid_size = int(win_a_d.size / block_size ** 2)
-        normalize = mod_norm.get_function('normalize')
-        normalize(win_a_d, win_a_norm_d, mean_a_d, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
-        normalize(win_b_d, win_b_norm_d, mean_b_d, iw_size, block=(block_size, block_size, 1), grid=(grid_size, 1))
-
-        return win_a_norm_d, win_b_norm_d
 
     def _zero_pad(self, win_a_norm_d, win_b_norm_d):
         """Function that zero-pads an 3D stack of arrays for use with the scikit-cuda FFT function.
@@ -967,6 +924,7 @@ class PIVGPU:
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, total_vectors, n_val / (m * n)))
 
+                # TODO make this a class method so the replacement logic remains here.
                 u_d, v_d = _gpu_replace_vectors(self.x_d[k], self.y_d[k], self.x_d[k - 1], self.y_d[k - 1], u_d, v_d,
                                                 u_previous_d, v_previous_d, val_locations_d, u_mean_d,
                                                 v_mean_d, self.field_shape, k)
@@ -1854,58 +1812,47 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     return f1_d
 
 
-# TODO this shouldn't depend on k, or else there should be a public version which doesn't
-# TODO do multiple replacement methods actually improve results? The replacement should be given as argument here.
-def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
-                         v_mean_d, field_shape, k):
-    """Replace spurious vectors by the mean or median of the surrounding points.
+def _gpu_normalize_intensity(win_d):
+    """Remove the mean from each IW of a 3D stack of interrogation windows.
 
     Parameters
     ----------
-    x0_d, y0_d : GPUArray
-        3D float, grid coordinates of previous iteration.
-    x1_d, y1_d : GPUArray
-        3D float, grid coordinates of current iteration.
-    u_d, v_d : GPUArray
-        2D float, velocities at current iteration.
-    u_previous_d, v_previous_d
-        2D float, velocities at previous iteration.
-    val_locations_d : ndarray
-        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is
-        needed.
-    u_mean_d, v_mean_d : GPUArray
-        3D float, mean velocity surrounding each point.
-    field_shape : iterable
-        tuple of ints, number of rows and columns in each main loop iteration.
-    k : int
-        Main loop iteration count.
+    win_d : GPUArray
+        3D float, stack of first IWs.
 
     Returns
     -------
-    u_d, v_d : GPUArray
-        2D float, velocity fields with replaced vectors.
+    GPUArray
+        3D float, normalized intensities in the windows.
 
     """
-    # val_locations_inverse_d = 1 - val_locations_d
-    val_locations_d = val_locations_d.astype(DTYPE_f)
-    val_locations_inverse_d = 1 - val_locations_d
+    n_windows, ht, wd = win_d.shape
+    iw_size_i = DTYPE_i(ht * wd)
+    size_i = DTYPE_i(win_d.size)
 
-    # First iteration, just replace with mean velocity.
-    if k == 0:
-        u_d = val_locations_inverse_d * u_mean_d + val_locations_d * u_d
-        v_d = val_locations_inverse_d * v_mean_d + val_locations_d * v_d
+    win_norm_d = gpuarray.zeros((n_windows, ht, wd), dtype=DTYPE_f)
 
-    # Case if different dimensions: interpolation using previous iteration.
-    elif k > 0 and field_shape[k] != field_shape[k - 1]:
-        u_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, u_previous_d, u_d, val_locations_d=val_locations_d)
-        v_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, v_previous_d, v_d, val_locations_d=val_locations_d)
+    mean_a_d = cumisc.mean(win_d.reshape(n_windows, int(iw_size_i)), axis=1)
 
-    # Case if same dimensions.
-    elif k > 0 and field_shape[k] == field_shape[k - 1]:
-        u_d = val_locations_inverse_d * u_previous_d + val_locations_d * u_d
-        v_d = val_locations_inverse_d * v_previous_d + val_locations_d * v_d
+    mod_norm = SourceModule("""
+        __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size, int size)
+    {
+        // global thread id for 1D grid of 2D blocks
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
 
-    return u_d, v_d
+        // indices for mean matrix
+        int w_idx = t_idx / iw_size;
+
+        array_norm[t_idx] = array[t_idx] - mean[w_idx];
+    }
+    """)
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    normalize = mod_norm.get_function('normalize')
+    normalize(win_d, win_norm_d, mean_a_d, iw_size_i, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+
+    return win_norm_d
 
 
 def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
@@ -2011,3 +1958,55 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
               grid=(n_windows, grid_size, grid_size))
 
     return correlation_masked_d
+
+
+def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
+                         v_mean_d, field_shape, k):
+    """Replace spurious vectors by the mean or median of the surrounding points.
+
+    Parameters
+    ----------
+    x0_d, y0_d : GPUArray
+        3D float, grid coordinates of previous iteration.
+    x1_d, y1_d : GPUArray
+        3D float, grid coordinates of current iteration.
+    u_d, v_d : GPUArray
+        2D float, velocities at current iteration.
+    u_previous_d, v_previous_d
+        2D float, velocities at previous iteration.
+    val_locations_d : ndarray
+        2D int, indicates which values must be validated. 1 indicates no validation needed, 0 indicates validation is
+        needed.
+    u_mean_d, v_mean_d : GPUArray
+        3D float, mean velocity surrounding each point.
+    field_shape : iterable
+        tuple of ints, number of rows and columns in each main loop iteration.
+    k : int
+        Main loop iteration count.
+
+    Returns
+    -------
+    u_d, v_d : GPUArray
+        2D float, velocity fields with replaced vectors.
+
+    """
+    # val_locations_inverse_d = 1 - val_locations_d
+    val_locations_d = val_locations_d.astype(DTYPE_f)
+    val_locations_inverse_d = 1 - val_locations_d
+
+    # First iteration, just replace with mean velocity.
+    if k == 0:
+        u_d = val_locations_inverse_d * u_mean_d + val_locations_d * u_d
+        v_d = val_locations_inverse_d * v_mean_d + val_locations_d * v_d
+
+    # Case if different dimensions: interpolation using previous iteration.
+    elif k > 0 and field_shape[k] != field_shape[k - 1]:
+        u_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, u_previous_d, u_d, val_locations_d=val_locations_d)
+        v_d = gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, v_previous_d, v_d, val_locations_d=val_locations_d)
+
+    # Case if same dimensions.
+    elif k > 0 and field_shape[k] == field_shape[k - 1]:
+        u_d = val_locations_inverse_d * u_previous_d + val_locations_d * u_d
+        v_d = val_locations_inverse_d * v_previous_d + val_locations_d * v_d
+
+    return u_d, v_d

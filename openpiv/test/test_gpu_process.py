@@ -174,10 +174,6 @@ def test_gpu_ftt_shift():
     assert np.allclose(shift_stack_cpu, shift_stack_gpu, 0.01)
 
 
-def test_subpixel_approximation():
-    pass
-
-
 def test_mask_peak():
     correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
 
@@ -315,6 +311,26 @@ def test_sig2noise(s2n_method):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
+@pytest.mark.parametrize('subpixel_method', ('gaussian', 'centroid', 'parabolic'))
+def test_subpixel_peak(subpixel_method):
+    """Inputs every s2n method to ensure they don't error out."""
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': 'median_velocity',
+            'return_sig2noise': True,
+            'subpixel_method': subpixel_method,
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+
 @pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
 def test_gpu_extended_search_area_fast(image_size):
     """Quick test of the extended search area function."""
@@ -379,10 +395,10 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
     # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
 
-    # save the results to a numpy file.
-    if not os.path.isdir(_fixture_dir):
-        os.mkdir(_fixture_dir)
-    np.savez(file_str, u=u, v=v)
+    # # save the results to a numpy file.
+    # if not os.path.isdir(_fixture_dir):
+    #     os.mkdir(_fixture_dir)
+    # np.savez(file_str, u=u, v=v)
 
     # load the results for comparison
     with np.load(file_str + '.npz') as data:
