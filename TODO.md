@@ -56,21 +56,24 @@
 - [ ] Use CuPy or scikit-cuda to implement the cosine transform used in smoothn
 - [ ] validate next to masked points
 - [ ] fix edge treatment to have fewer errors
-  - [ ] validation of edges
-  - [ ] validation of points next to mask
+  - [x] validation of edges
+  - [x] validation of points next to mask
   - [ ] interpolation onto edges
 - [x] replace vectors with median rather than median of surrounding points to not be affected by outliers
   - [ ] make this an option
-- [ ] pass either a frame or a frame size as the first argument to the GPUPIV init method
+- [x] pass either a frame or a frame size as the first argument to the GPUPIV init method
   - [ ] remove this requirement in lieu of dynamic allocation of array sizes
 - [ ] add more sophisticated object-oriented features to set algorithm parameters in gpu_piv()
-- [ ] accept either floats or ints as frame inputs
+- [x] accept either floats or ints as frame inputs
 - [ ] allow non-integer x, y, overlap
 - [ ] allow non-isotropic x, y, overlap
 - [ ] allow non-power-of-2 window sizes
 - [ ] center-on-field functionality
 - [ ] GPU kernel to do validation replacement
 - [ ] Other subpixel methods
+  - [x] Centroid
+  - [x] Parabolic
+  - [ ] Linear
 
 ## Object-oriented features
 - [x] return the mask

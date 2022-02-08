@@ -29,7 +29,7 @@ with warnings.catch_warnings():
 
 from openpiv.gpu_validation import gpu_validation
 from openpiv.gpu_smoothn import smoothn
-from openpiv.gpu_misc import _check_inputs, _gpu_window_index_f
+from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i
 
 # Define 32-bit types.
 DTYPE_i = np.int32
@@ -43,7 +43,6 @@ cumisc.init()
 # TODO dont allocate additional thread blocks if not necessary
 
 
-# TODO should be no GPU kernels in here
 # TODO save memory in extended search area
 class GPUCorrelation:
     """A class representing the cross correlation function.
@@ -128,20 +127,8 @@ class GPUCorrelation:
         # Return stack of all IWs.
         win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
 
-        # Normalize array by computing the norm of each IW.
-        win_a_norm_d = _gpu_normalize_intensity(win_a_d)
-        win_b_norm_d = _gpu_normalize_intensity(win_b_d)
-
-        # Zero pad arrays.
-        size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
-        size1_a = DTYPE_i(self.size_extended - size0_a)
-        size0_b = DTYPE_i(0)
-        size1_b = DTYPE_i(self.size_extended)
-        win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, (size0_a, size1_a))
-        win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape, (size0_b, size1_b))
-
         # Correlate the windows.
-        self.correlation_d = self._correlate_windows(win_a_zp_d, win_b_zp_d)
+        self.correlation_d = self._correlate_windows(win_a_d, win_b_d)
 
         # Get first peak of correlation.
         self.row_peak_d, self.col_peak_d, self.corr_peak1_d = self._find_peak(self.correlation_d)
@@ -245,45 +232,36 @@ class GPUCorrelation:
 
         return win_a_d, win_b_d
 
-    def _correlate_windows(self, win_a_zp_d, win_b_zp_d):
-        """Compute correlation function between two interrogation windows.
-
-        The correlation function can be computed by using the correlation theorem to speed up the computation.
+    def _correlate_windows(self, win_a_d, win_b_d):
+        """Computes the cross-correlation of the window stacks with zero-padding.
 
         Parameters
         ----------
-        win_a_zp_d, win_b_zp_d : GPUArray
-            3D float, zero-padded correlation windows.
+        win_a_d, win_b_d : GPUArray
+            3D float, stacked window data.
 
         Returns
         -------
         GPUArray
-            2D, output of the correlation function.
+            3D, outputs of the correlation function.
 
         """
-        win_h = self.fft_width_y
-        win_w = self.fft_width_x
+        _check_inputs(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
 
-        # TODO wrap this implementation
-        win_i_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w)), DTYPE_f)
-        win_a_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
-        win_b_fft_d = gpuarray.empty((int(self.n_windows), int(win_h), int(win_w // 2 + 1)), DTYPE_c)
+        # Normalize array by computing the norm of each IW.
+        win_a_norm_d = _gpu_normalize_intensity(win_a_d)
+        win_b_norm_d = _gpu_normalize_intensity(win_b_d)
 
-        # Forward FFTs.
-        plan_forward = cufft.Plan((win_h, win_w), DTYPE_f, DTYPE_c, batch=self.n_windows)
-        cufft.fft(win_a_zp_d, win_a_fft_d, plan_forward)
-        cufft.fft(win_b_zp_d, win_b_fft_d, plan_forward)
+        # Zero pad arrays.
+        size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
+        size1_a = DTYPE_i(self.size_extended - size0_a)
+        size0_b = DTYPE_i(0)
+        size1_b = DTYPE_i(self.size_extended)
+        win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, (size0_a, size1_a))
+        win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape, (size0_b, size1_b))
 
-        # Multiply the FFTs.
-        win_a_fft_d = win_a_fft_d.conj()
-        tmp_d = win_b_fft_d * win_a_fft_d
-
-        # Inverse transform.
-        plan_inverse = cufft.Plan((win_h, win_w), DTYPE_c, DTYPE_f, batch=self.n_windows)
-        cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
-        corr_d = gpu_fft_shift(win_i_fft_d)
-
-        return corr_d
+        corr_d = gpu_cross_correlate(win_a_zp_d, win_b_zp_d)
+        return gpu_fft_shift(corr_d)
 
     def _find_peak(self, corr_d):
         """Find the row and column of the highest peak in correlation function.
@@ -370,6 +348,7 @@ class GPUCorrelation:
         return corr_max2_d
 
 
+# TODO delete this
 def gpu_extended_search_area(frame_a, frame_b,
                              window_size,
                              overlap_ratio,
@@ -1031,9 +1010,8 @@ def gpu_mask(frame_d, mask_d):
     """
     _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=frame_d.shape, ndim=2)
     _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=frame_d.shape, ndim=2)
+    size_i = DTYPE_i(frame_d.size)
 
-    size = DTYPE_f(frame_d.size)
-    m, n = frame_d.shape
     frame_masked_d = gpuarray.empty_like(frame_d, dtype=DTYPE_f)
 
     mod_mask = SourceModule("""
@@ -1047,9 +1025,9 @@ def gpu_mask(frame_d, mask_d):
     }
     """)
     block_size = 32
-    x_blocks = int(n * m // block_size + 1)
+    x_blocks = ceil(size_i / block_size)
     mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
-    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return frame_masked_d
 
@@ -1126,49 +1104,43 @@ def gpu_strain(u_d, v_d, spacing=1):
     return strain_d
 
 
-def gpu_scalar_mod_i(f_d, m):
-    """Returns the integer and remainder of division of a PyCUDA array by a scalar int.
+def gpu_cross_correlate(win_a_d, win_b_d):
+    """Returns cross-correlation between two stacks of interrogation windows.
+
+    The correlation function is computed by using the correlation theorem to speed up the computation.
 
     Parameters
     ----------
-    f_d : GPUArray
-        Int, input to be decomposed.
-    m : int
-        Modulus.
+    win_a_d, win_b_d : GPUArray
+        3D float, stacked window data.
 
     Returns
     -------
-    i_d, r_d : GPUArray
-        Int, integer part of the decomposition.
-    r_d : GPUArray
-        Int, remainder part of the decomposition.
+    GPUArray
+        3D, outputs of the cross-correlation function.
 
     """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
-    assert 0 < m == int(m)
-    size_i = DTYPE_i(f_d.size)
+    _check_inputs(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
+    n_windows, fft_ht, fft_wd = win_a_d.shape
 
-    i_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
-    r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
+    win_i_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd), DTYPE_f)
+    win_a_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
+    win_b_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
 
-    mod_scalar_mod = SourceModule("""
-    __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
-    {
-        // i, r : output arguments
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
+    # Forward FFTs.
+    plan_forward = cufft.Plan((fft_ht, fft_wd), DTYPE_f, DTYPE_c, batch=n_windows)
+    cufft.fft(win_a_d, win_a_fft_d, plan_forward)
+    cufft.fft(win_b_d, win_b_fft_d, plan_forward)
 
-        int f_value = f[t_idx];
-        i[t_idx] = f_value / m;
-        r[t_idx] = f_value % m;
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(size_i / block_size)
-    mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
-    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    # Multiply the FFTs.
+    win_a_fft_d = win_a_fft_d.conj()
+    tmp_d = win_b_fft_d * win_a_fft_d
 
-    return i_d, r_d
+    # Inverse transform.
+    plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
+    cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
+
+    return win_i_fft_d
 
 
 def gpu_fft_shift(correlation_d):
@@ -1360,7 +1332,7 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     }
     """)
     block_size = 32
-    x_blocks = int(size_i // block_size + 1)
+    x_blocks = ceil(size_i / block_size)
     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
     interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i, DTYPE_i(n),
                     size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
@@ -1642,6 +1614,46 @@ def _gpu_zero_pad(win_d, fft_shape, data_limits):
              block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return win_zp_d
+
+
+def _gpu_window_index_f(src_d, indices_d):
+    """Returns the values of the peaks from the 2D correlation.
+
+    Parameters
+    ----------
+    src_d : GPUArray
+        2D float, correlation values.
+    indices_d : GPUArray
+        1D int, indexes of the peaks.
+
+    Returns
+    -------
+    GPUArray
+        1D float.
+
+    """
+    _check_inputs(src_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    n_windows, size = src_d.shape
+    _check_inputs(indices_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(n_windows,), ndim=1)
+
+    dest_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
+
+    mod_index_update = SourceModule("""
+    __global__ void window_index_f(float *dest, float *src, int *indices, int size, int n_windows)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= n_windows) {return;}
+
+        dest[t_idx] = src[t_idx * size + indices[t_idx]];
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    index_update = mod_index_update.get_function('window_index_f')
+    index_update(dest_d, src_d, indices_d, DTYPE_i(size), DTYPE_i(n_windows), block=(block_size, 1, 1),
+                 grid=(x_blocks, 1))
+
+    return dest_d
 
 
 def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):

@@ -11,6 +11,107 @@ from pycuda.compiler import SourceModule
 # Define 32-bit types.
 DTYPE_i = np.int32
 DTYPE_f = np.float32
+DTYPE_c = np.complex64
+
+
+def gpu_smooth(f_d, s=0.5):
+    """Smooths a scalar field stored as a GPUArray.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        Field to be smoothed.
+    s : float, optional
+        Smoothing parameter in smoothn.
+
+    Returns
+    -------
+    GPUArray
+        Float, same size as f_d. Smoothed field.
+
+    """
+    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
+    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
+    assert len(f_d.shape), 'Inputs must be 2D.'
+    assert s > 0, 'Smoothing parameter must be greater than 0.'
+
+    f = f_d.get()
+    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
+
+    return f_smooth_d
+
+
+def gpu_scalar_mod_i(f_d, m):
+    """Returns the integer and remainder of division of a PyCUDA array by a scalar int.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        nd int, input to be decomposed.
+    m : int
+        Modulus.
+
+    Returns
+    -------
+    i_d, r_d : GPUArray
+        Int, integer part of the decomposition.
+    r_d : GPUArray
+        Int, remainder part of the decomposition.
+
+    """
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
+    assert 0 < m == int(m)
+    size_i = DTYPE_i(f_d.size)
+
+    i_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
+    r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
+
+    mod_scalar_mod = SourceModule("""
+    __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
+    {
+        // i, r : output arguments
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+
+        int f_value = f[t_idx];
+        i[t_idx] = f_value / m;
+        r[t_idx] = f_value % m;
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(size_i / block_size)
+    mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
+    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return i_d, r_d
+
+
+def gpu_remove_nan_f(f_d):
+    """Replaces all NaN from array with zeros.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        nd float.
+
+    """
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    size_i = DTYPE_i(f_d.size)
+    mod_replace_nan_f = SourceModule("""
+        __global__ void replace_nan_f(float *f, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if(t_idx >= size) {return;}
+        float value = f[t_idx];
+
+        // Check for NaNs. The comparison is True for NaNs.
+        if (value != value) {f[t_idx] = 0;}
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(size_i / block_size)
+    index_update = mod_replace_nan_f.get_function('replace_nan_f')
+    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
 def _gpu_array_index(array_d, indices, dtype):
@@ -102,74 +203,6 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     x_blocks = int(size_i // block_size + 1)
     index_update = mod_index_update.get_function('index_update')
     index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
-
-
-def _gpu_window_index_f(src_d, indices_d):
-    """Returns the values of the peaks from the 2D correlation.
-
-    Parameters
-    ----------
-    src_d : GPUArray
-        2D float, correlation values.
-    indices_d : GPUArray
-        1D int, indexes of the peaks.
-
-    Returns
-    -------
-    GPUArray
-        1D float.
-
-    """
-    _check_inputs(src_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    n_windows, size = src_d.shape
-    _check_inputs(indices_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(n_windows,), ndim=1)
-
-    dest_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
-
-    mod_index_update = SourceModule("""
-    __global__ void window_index_f(float *dest, float *src, int *indices, int size, int n_windows)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= n_windows) {return;}
-
-        dest[t_idx] = src[t_idx * size + indices[t_idx]];
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(n_windows / block_size)
-    index_update = mod_index_update.get_function('window_index_f')
-    index_update(dest_d, src_d, indices_d, DTYPE_i(size), DTYPE_i(n_windows), block=(block_size, 1, 1),
-                 grid=(x_blocks, 1))
-
-    return dest_d
-
-
-def _gpu_remove_nan_f(f_d):
-    """Replaces all NaN from array with zeros.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        nd float.
-
-    """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    size_i = DTYPE_i(f_d.size)
-    mod_replace_nan_f = SourceModule("""
-        __global__ void replace_nan_f(float *f, int size)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if(t_idx >= size) {return;}
-        float value = f[t_idx];
-
-        // Check for NaNs. The comparison is True for NaNs.
-        if (value != value) {f[t_idx] = 0;}
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(size_i / block_size)
-    index_update = mod_replace_nan_f.get_function('replace_nan_f')
-    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
 
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
