@@ -14,33 +14,6 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 
-def gpu_smooth(f_d, s=0.5):
-    """Smooths a scalar field stored as a GPUArray.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        Field to be smoothed.
-    s : float, optional
-        Smoothing parameter in smoothn.
-
-    Returns
-    -------
-    GPUArray
-        Float, same size as f_d. Smoothed field.
-
-    """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-    assert len(f_d.shape), 'Inputs must be 2D.'
-    assert s > 0, 'Smoothing parameter must be greater than 0.'
-
-    f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
-
-    return f_smooth_d
-
-
 def gpu_scalar_mod_i(f_d, m):
     """Returns the integer and remainder of division of a PyCUDA array by a scalar int.
 
@@ -158,7 +131,7 @@ def _gpu_array_index(array_d, indices, dtype):
     """)
     block_size = 32
     r_size = DTYPE_i(indices.size)
-    x_blocks = int(r_size // block_size + 1)
+    x_blocks = ceil(r_size / block_size)
 
     if dtype == DTYPE_f:
         array_index = mod_array_index.get_function('array_index_float')
@@ -208,7 +181,7 @@ def _gpu_index_update(dest_d, values_d, indices_d):
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
     if array_type is not None:
-        assert all([type(array) == array_type for array in arrays]), 'Inputs must be ({}).'.format(array_type)
+        assert all([isinstance(array, array_type) for array in arrays]), 'Inputs must be ({}).'.format(array_type)
     if dtype is not None:
         assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
     if shape is not None:

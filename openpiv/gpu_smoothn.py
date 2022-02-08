@@ -1,3 +1,5 @@
+"""This module will contain a GPU-accelerated implementation of smoothn."""
+
 import logging
 import warnings
 from math import sqrt, pi, ceil
@@ -17,10 +19,37 @@ with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
     from skcuda import misc as cumisc
 
+from openpiv.gpu_misc import _check_inputs
+
 cumisc.init()
 DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
+
+
+def gpu_smoothn(f_d, s=0.5):
+    """Smooths a scalar field stored as a GPUArray.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        Field to be smoothed.
+    s : float, optional
+        Smoothing parameter in smoothn.
+
+    Returns
+    -------
+    GPUArray
+        Float, same size as f_d. Smoothed field.
+
+    """
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    assert s > 0, 'Smoothing parameter must be greater than 0.'
+
+    f = f_d.get()
+    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
+
+    return f_smooth_d
 
 
 def smoothn(

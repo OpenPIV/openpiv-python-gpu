@@ -28,7 +28,7 @@ with warnings.catch_warnings():
     from skcuda import misc as cumisc
 
 from openpiv.gpu_validation import gpu_validation
-from openpiv.gpu_smoothn import smoothn
+from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i
 
 # Define 32-bit types.
@@ -827,8 +827,8 @@ class PIVGPU:
             v_d = gpu_interpolate(self.x_d[k], self.y_d[k], self.x_d[k + 1], self.y_d[k + 1], v_d)
 
         if self.smooth:
-            dp_x_d = gpu_smooth(u_d, s=self.smoothing_par)
-            dp_y_d = gpu_smooth(v_d, s=self.smoothing_par)
+            dp_x_d = gpu_smoothn(u_d, s=self.smoothing_par)
+            dp_y_d = gpu_smoothn(v_d, s=self.smoothing_par)
         else:
             dp_x_d = u_d.copy()
             dp_y_d = v_d.copy()
@@ -1106,33 +1106,6 @@ def gpu_fft_shift(correlation_d):
               block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_shift_d
-
-
-def gpu_smooth(f_d, s=0.5):
-    """Smooths a scalar field stored as a GPUArray.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        Field to be smoothed.
-    s : float, optional
-        Smoothing parameter in smoothn.
-
-    Returns
-    -------
-    GPUArray
-        Float, same size as f_d. Smoothed field.
-
-    """
-    assert type(f_d) == gpuarray.GPUArray, 'Input must a GPUArray.'
-    assert f_d.dtype == DTYPE_f, 'Input array must float type.'
-    assert len(f_d.shape), 'Inputs must be 2D.'
-    assert s > 0, 'Smoothing parameter must be greater than 0.'
-
-    f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
-
-    return f_smooth_d
 
 
 def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
