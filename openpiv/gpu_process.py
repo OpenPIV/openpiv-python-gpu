@@ -40,9 +40,10 @@ DTYPE_c = np.complex64
 cumisc.init()
 
 # TODO find elegant way to pass correct dtypes
-# TODO dont allocate additonal thread blocks if not necessary
+# TODO dont allocate additional thread blocks if not necessary
 
 
+# TODO should be no GPU kernels in here
 class GPUCorrelation:
     """A class representing the cross correlation function.
 
@@ -236,6 +237,8 @@ class GPUCorrelation:
 
         return win_a_d, win_b_d
 
+    # TODO  should call this twice
+    # TODO should not be a class method
     def _normalize_intensity(self, win_a_d, win_b_d):
         """Remove the mean from each IW of a 3D stack of IWs.
 
@@ -262,12 +265,12 @@ class GPUCorrelation:
             __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size)
         {
             // global thread id for 1D grid of 2D blocks
-            int thread_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
+            int t_idx = blockIdx.x * (blockDim.x * blockDim.y) + threadIdx.y * blockDim.x + threadIdx.x;
 
             // indices for mean matrix
-            int mean_idx = thread_idx / iw_size;
+            int mean_idx = t_idx / iw_size;
 
-            array_norm[thread_idx] = array[thread_idx] - mean[mean_idx];
+            array_norm[t_idx] = array[t_idx] - mean[mean_idx];
         }
         """)
         block_size = 8
@@ -1539,50 +1542,8 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
     row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
-    # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
-    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
-    # TODO add machinery to do parabolic approximation if correlation is negative.
     mod_subpixel_approximation = SourceModule("""
-        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        float small = 1e-20;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        int row_tmp = row;
-        int col_tmp = col;
-
-        if (row_tmp < 1) {row_tmp = 1;}
-        if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
-        if (col_tmp < 1) {col_tmp = 1;}
-        if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
-
-        // Get the neighbouring correlation values.
-        float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
-        float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
-        float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
-        float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
-        float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
-
-        // Convert negative values to zero
-        int non_zero = c > 0;
-        if (c <= 0) {c = small;}
-        if (cl <= 0) {cl = small;}
-        if (cr <= 0) {cr = small;}
-        if (cd <= 0) {cd = small;}
-        if (cu <= 0) {cu = small;}
-
-        // Compute the subpixel value.
-        row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
-        col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
-    }
-    
-        __global__ void subpixel_approximation1(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                             int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -1596,127 +1557,27 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
         float c = corr[ws * w_idx + wd * row + col];
         int non_zero = c > 0;
         
-        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
         } else {
             float cd = corr[ws * w_idx + wd * (row - 1) + col];
             float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd <= 0) {cd = small;}
-            if (cu <= 0) {cu = small;}
-            // 0.5 factor here
-            row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
+            if (cd > 0 && cu > 0 && non_zero) {
+                cd = logf(cd);
+                cu = logf(cu);
+                row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * logf(c) + cu + small);
+            } else {row_sp[w_idx] = row;}
         }
         
-        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
         } else {
             float cl = corr[ws * w_idx + wd * row + col - 1];
             float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl <= 0) {cl = small;}
-            if (cr <= 0) {cr = small;}
-            col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
+            if (cl > 0 && cr > 0 && non_zero) {
+                cl = logf(cl);
+                cr = logf(cr);
+                col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * logf(c) + cr + small);
+            } else {col_sp[w_idx] = col;}
         }
-    }
-    """)
-    block_size = 32
-    x_blocks = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    # subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation1')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
-                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
-    """
-        float c = corr[ws * w_idx + wd * row + col];
-        int non_zero = c > 0;
-        
-        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd <= 0) {cd = small;}
-            if (cu <= 0) {cu = small;}
-            // 0.5 factor here
-            row_sp[w_idx] = row + ((logf(cd) - logf(cu)) / (2 * logf(cd) - 4 * logf(c) + 2 * logf(cu) + small)) * non_zero;
-        }
-        
-        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl <= 0) {cl = small;}
-            if (cr <= 0) {cr = small;}
-            col_sp[w_idx] = col + ((logf(cl) - logf(cr)) / (2 * logf(cl) - 4 * logf(c) + 2 * logf(cr) + small)) * non_zero;
-        }
-    """
-
-    return row_sp_d, col_sp_d
-
-
-def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
-    """Returns the subpixel position of the peaks using centroid approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-    fft_size_x, fft_size_y : int
-        Size of the fft domain.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
-    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
-    mod_subpixel_approximation = SourceModule("""
-        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        float small = 1e-20;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        int row_tmp = row;
-        int col_tmp = col;
-
-        if (row_tmp < 1) {row_tmp = 1;}
-        if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
-        if (col_tmp < 1) {col_tmp = 1;}
-        if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
-
-        // Get the neighbouring correlation values.
-        float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
-        float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
-        float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
-        float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
-        float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
-
-        // Convert negative values to zero
-        int non_zero = c > 0;
-        if (c <= 0) {c = small;}
-        if (cl <= 0) {cl = small;}
-        if (cr <= 0) {cr = small;}
-        if (cd <= 0) {cd = small;}
-        if (cu <= 0) {cu = small;}
-
-        // Compute the subpixel value.
-        row_sp[w_idx] = (row - 1) * cd + row * c + (row + 1) * cu) / (cd + c + cu + small);
-        col_sp[w_idx] = (col - 1) * cl + col * c + (col + 1) * cr) / (cl + c + cr + small);
     }
     """)
     block_size = 32
@@ -1756,46 +1617,108 @@ def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, f
     row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
-    # TODO use one-sided gaussian estimation for edge cases. Or return just the edge peak.
-    # TODO simplify the logic in the kernel since it probably doesn't improve the accuracy that much.
     mod_subpixel_approximation = SourceModule("""
-        __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                             int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= n_windows) {return;}
         float small = 1e-20;
-
+    
         // Compute the index mapping.
         int row = row_p[w_idx];
         int col = col_p[w_idx];
-        int row_tmp = row;
-        int col_tmp = col;
+        float c = corr[ws * w_idx + wd * row + col];
+    
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * c + cu + small);
+        }
+    
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * c + cr + small);
+        }
+    }
+    """)
+    block_size = 32
+    x_blocks = ceil(n_windows / block_size)
+    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
+    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
+                           DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
+                           block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-        if (row_tmp < 1) {row_tmp = 1;}
-        if (row_tmp > fft_size_y - 2) {row_tmp = fft_size_y - 2;}
-        if (col_tmp < 1) {col_tmp = 1;}
-        if (col_tmp > fft_size_x - 2) {col_tmp = fft_size_x - 2;}
+    return row_sp_d, col_sp_d
 
-        // Get the neighbouring correlation values.
-        float c = corr[ws * w_idx + wd * row_tmp + col_tmp];
-        float cd = corr[ws * w_idx + wd * (row_tmp - 1) + col_tmp];
-        float cu = corr[ws * w_idx + wd * (row_tmp + 1) + col_tmp];
-        float cl = corr[ws * w_idx + wd * row_tmp + col_tmp - 1];
-        float cr = corr[ws * w_idx + wd * row_tmp + col_tmp + 1];
 
-        // Convert negative values to zero
+def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, fft_size_y):
+    """Returns the subpixel position of the peaks using centroid approximation.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, data from the window correlations.
+    row_peak_d, col_peak_d : GPUArray
+        1D int, location of the correlation peak.
+    fft_size_x, fft_size_y : int
+        Size of the fft domain.
+
+    Returns
+    -------
+    row_sp_d, col_sp_d : GPUArray
+        1D float, row and column positions of the subpixel peak.
+
+    """
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
+                  ndim=1)
+    n_windows, ht, wd = correlation_d.shape
+    window_size_i = DTYPE_i(ht * wd)
+
+    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
+    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
+
+    mod_subpixel_approximation = SourceModule("""
+    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+                            int ht, int wd, int n_windows, int ws, int fft_size_x, int fft_size_y)
+        {
+        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (w_idx >= n_windows) {return;}
+        float small = 1e-20;
+    
+        // Compute the index mapping.
+        int row = row_p[w_idx];
+        int col = col_p[w_idx];
+        float c = corr[ws * w_idx + wd * row + col];
         int non_zero = c > 0;
-        if (c <= 0) {c = small;}
-        if (cl <= 0) {cl = small;}
-        if (cr <= 0) {cr = small;}
-        if (cd <= 0) {cd = small;}
-        if (cu <= 0) {cu = small;}
-
-        // Compute the subpixel value.
-        row_sp[w_idx] = row + (cd - cu) / (2 * cd - 4 * c + 2 * cu + small)) * non_zero;
-        col_sp[w_idx] = col + (cl - cr) / (2 * cl - 4 * c + 2 * cr + small)) * non_zero;
+    
+        if (row < 1 || row > fft_size_y - 2) {row_sp[w_idx] = row;  // peak on window sedges
+        } else {
+            float cd = corr[ws * w_idx + wd * (row - 1) + col];
+            float cu = corr[ws * w_idx + wd * (row + 1) + col];
+            if (cd > 0 && cu > 0 && non_zero) {
+                cd = logf(cd);
+                cu = logf(cu);
+                row_sp[w_idx] = row + 0.5 * (cu - cd) / (cd + c + cu + small);
+            } else {row_sp[w_idx] = row;}
+        }
+    
+        if (col < 1 || col > fft_size_x - 2) {col_sp[w_idx] = col;  // peak on window sedges
+        } else {
+            float cl = corr[ws * w_idx + wd * row + col - 1];
+            float cr = corr[ws * w_idx + wd * row + col + 1];
+            if (cl > 0 && cr > 0 && non_zero) {
+                cl = logf(cl);
+                cr = logf(cr);
+                col_sp[w_idx] = col + 0.5 * (cr - cl) / (cl + c + cr + small);
+            } else {col_sp[w_idx] = col;}
+        }
     }
     """)
     block_size = 32

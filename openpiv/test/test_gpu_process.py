@@ -379,10 +379,10 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
     # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
 
-    # # save the results to a numpy file.
-    # if not os.path.isdir(_fixture_dir):
-    #     os.mkdir(_fixture_dir)
-    # np.savez(file_str, u=u, v=v)
+    # save the results to a numpy file.
+    if not os.path.isdir(_fixture_dir):
+        os.mkdir(_fixture_dir)
+    np.savez(file_str, u=u, v=v)
 
     # load the results for comparison
     with np.load(file_str + '.npz') as data:
@@ -390,6 +390,11 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
         v0 = data['v']
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+    if not np.allclose(u, u0, atol=_identity_tolerance) or not np.allclose(v, v0, atol=_identity_tolerance):
+        u_debug = u - u0
+        v_debug = v - v0
+        print('')
 
     # compare with the previous results
     assert np.allclose(u, u0, atol=_identity_tolerance)
