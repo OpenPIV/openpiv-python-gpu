@@ -52,9 +52,9 @@ def gpu_scalar_mod_i(f_d, m):
     }
     """)
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    grid_size = ceil(size_i / block_size)
     mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
-    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return i_d, r_d
 
@@ -82,9 +82,9 @@ def gpu_remove_nan_f(f_d):
     }
     """)
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    grid_size = ceil(size_i / block_size)
     index_update = mod_replace_nan_f.get_function('replace_nan_f')
-    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 def _gpu_array_index(array_d, indices, dtype):
@@ -130,15 +130,15 @@ def _gpu_array_index(array_d, indices, dtype):
     }
     """)
     block_size = 32
-    r_size = DTYPE_i(indices.size)
-    x_blocks = ceil(r_size / block_size)
+    size_i = DTYPE_i(indices.size)
+    grid_size = ceil(size_i / block_size)
 
     if dtype == DTYPE_f:
         array_index = mod_array_index.get_function('array_index_float')
-        array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        array_index(return_values_d, array_d, indices, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
     elif dtype == DTYPE_i:
         array_index = mod_array_index.get_function('array_index_int')
-        array_index(return_values_d, array_d, indices, r_size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        array_index(return_values_d, array_d, indices, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return return_values_d
 
@@ -173,9 +173,9 @@ def _gpu_index_update(dest_d, values_d, indices_d):
     }
     """)
     block_size = 32
-    x_blocks = int(size_i // block_size + 1)
+    grid_size = ceil(size_i / block_size)
     index_update = mod_index_update.get_function('index_update')
-    index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    index_update(dest_d, values_d, indices_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):

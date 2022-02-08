@@ -40,7 +40,6 @@ DTYPE_c = np.complex64
 cumisc.init()
 
 # TODO find elegant way to pass correct dtypes
-# TODO dont allocate additional thread blocks if not necessary
 
 
 # TODO save memory in extended search area
@@ -810,10 +809,10 @@ class PIVGPU:
         }
         """)
         block_size = 32
-        x_blocks = int(i_peak_d.size // block_size + 1)
+        grid_size = ceil(i_peak_d.size / block_size)
         update_values = mod_update.get_function("update_values")
-        update_values(u_d, dp_x_d, j_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
-        update_values(v_d, dp_y_d, i_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        update_values(u_d, dp_x_d, j_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(grid_size, 1))
+        update_values(v_d, dp_y_d, i_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(grid_size, 1))
 
         return u_d, v_d
 
@@ -943,9 +942,9 @@ def gpu_mask(frame_d, mask_d):
     }
     """)
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    grid_size = ceil(size_i / block_size)
     mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
-    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return frame_masked_d
 
@@ -1132,10 +1131,8 @@ def gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d)
         2D float, interpolated field.
 
     """
-    _check_inputs(x0_d, y0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
-    _check_inputs(x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
-    _check_inputs(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    _check_inputs(f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
+    _check_inputs(f0_d, f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, shape=f1_d.shape, ndim=2)
     if val_locations_d.dtype != DTYPE_f:
         val_locations_d = val_locations_d.astype(DTYPE_f)
@@ -1223,10 +1220,10 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     }
     """)
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    grid_size = ceil(size_i / block_size)
     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
     interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i, DTYPE_i(n),
-                    size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+                    size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return f1_d
 
@@ -1539,10 +1536,10 @@ def _gpu_window_index_f(src_d, indices_d):
     }
     """)
     block_size = 32
-    x_blocks = ceil(n_windows / block_size)
+    grid_size = ceil(n_windows / block_size)
     index_update = mod_index_update.get_function('window_index_f')
     index_update(dest_d, src_d, indices_d, DTYPE_i(size), DTYPE_i(n_windows), block=(block_size, 1, 1),
-                 grid=(x_blocks, 1))
+                 grid=(grid_size, 1))
 
     return dest_d
 
@@ -1613,11 +1610,11 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
     }
     """)
     block_size = 32
-    x_blocks = ceil(n_windows / block_size)
+    grid_size = ceil(n_windows / block_size)
     subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
     subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
                            DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+                           block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return row_sp_d, col_sp_d
 
@@ -1679,11 +1676,11 @@ def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d, fft_size_x, f
     }
     """)
     block_size = 32
-    x_blocks = ceil(n_windows / block_size)
+    grid_size = ceil(n_windows / block_size)
     subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
     subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
                            DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+                           block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return row_sp_d, col_sp_d
 
@@ -1754,11 +1751,11 @@ def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d, fft_size_x, ff
     }
     """)
     block_size = 32
-    x_blocks = ceil(n_windows / block_size)
+    grid_size = ceil(n_windows / block_size)
     subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
     subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(ht), DTYPE_i(wd),
                            DTYPE_i(n_windows), window_size_i, DTYPE_i(fft_size_x), DTYPE_i(fft_size_y),
-                           block=(block_size, 1, 1), grid=(x_blocks, 1))
+                           block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return row_sp_d, col_sp_d
 
@@ -1897,7 +1894,6 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
         2D float, velocity fields with replaced vectors.
 
     """
-    # val_locations_inverse_d = 1 - val_locations_d
     val_locations_d = val_locations_d.astype(DTYPE_f)
     val_locations_inverse_d = 1 - val_locations_d
 

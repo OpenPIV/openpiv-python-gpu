@@ -2,6 +2,7 @@
 
 import time
 import logging
+from math import ceil
 
 import numpy as np
 # Create the PyCUDA context.
@@ -97,7 +98,7 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
     
     """)
     block_size = 32
-    x_blocks = int(n_col * n_row / block_size + 1)
+    grid_size = ceil(n_col * n_row / block_size)
 
     # S2N VALIDATION
     if s2n_tol is not None:
@@ -105,7 +106,7 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
 
         # Launch signal to noise kernel
         s2n = mod_validation.get_function("s2n_validation")
-        s2n(val_locations_d, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+        s2n(val_locations_d, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     # MEDIAN VALIDATION
     if median_tol is not None:
@@ -116,7 +117,7 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
         # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
         neighbour_validation(val_locations_d, u_d, v_d, u_median_d, v_median_d, u_median_fluc_d, v_median_fluc_d, n_row,
-                             n_col, median_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+                             n_col, median_tol, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     # MEAN VALIDATION
     if mean_tol is not None:
@@ -128,7 +129,7 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
         # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
         neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_mean_fluc_d, v_mean_fluc_d, n_row, n_col,
-                             mean_tol, block=(block_size, 1, 1), grid=(x_blocks, 1))
+                             mean_tol, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     # RMS VALIDATION
     if rms_tol is not None:
@@ -139,7 +140,7 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
         # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
         neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_rms_d, v_rms_d, n_row, n_col, rms_tol,
-                             block=(block_size, 1, 1), grid=(x_blocks, 1))
+                             block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return val_locations_d, u_median_d, v_median_d
 
@@ -190,9 +191,9 @@ def gpu_find_neighbours(n_row, n_col):
     }
     """)
     block_size = 32
-    x_blocks = int(n_col * n_row // block_size + 1)
+    grid_size = ceil(n_col * n_row / block_size)
     find_neighbours = mod_neighbours.get_function("find_neighbours")
-    find_neighbours(neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    find_neighbours(neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return neighbours_present_d
 
@@ -262,13 +263,13 @@ def gpu_get_neighbours(d_u, d_v, n_row, n_col):
     }
     """)
     block_size = 32
-    x_blocks = int(n_col * n_row // block_size + 1)
+    grid_size = ceil(n_col * n_row / block_size)
     get_u_neighbours = mod_get_neighbours.get_function("get_u_neighbours")
     get_v_neighbours = mod_get_neighbours.get_function("get_v_neighbours")
     get_u_neighbours(neighbours_d, neighbours_present_d, d_u, n_row, n_col, block=(block_size, 1, 1),
-                     grid=(x_blocks, 1))
+                     grid=(grid_size, 1))
     get_v_neighbours(neighbours_d, neighbours_present_d, d_v, n_row, n_col, block=(block_size, 1, 1),
-                     grid=(x_blocks, 1))
+                     grid=(grid_size, 1))
 
     return neighbours_d, neighbours_present_d
 
@@ -332,11 +333,13 @@ def gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     u_mean_vel = mod_mean_vel.get_function("u_mean_vel")
     v_mean_vel = mod_mean_vel.get_function("v_mean_vel")
-    u_mean_vel(u_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    v_mean_vel(v_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    u_mean_vel(u_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
+               grid=(grid_size, 1))
+    v_mean_vel(v_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
+               grid=(grid_size, 1))
 
     return u_mean_d, v_mean_d
 
@@ -406,18 +409,17 @@ def gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row,
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     mod_u_fluc = mod_mean_fluc.get_function("u_fluc_k")
     mod_v_fluc = mod_mean_fluc.get_function("v_fluc_k")
     mod_u_fluc(u_fluc_d, u_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
-               grid=(x_blocks, 1))
+               grid=(grid_size, 1))
     mod_v_fluc(v_fluc_d, v_mean_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
-               grid=(x_blocks, 1))
+               grid=(grid_size, 1))
 
     return u_fluc_d, v_fluc_d
 
 
-# TODO remove syncthreads
 def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
 
@@ -550,18 +552,17 @@ def gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col):
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     u_median_vel = mod_median_vel.get_function("u_median_vel")
     v_median_vel = mod_median_vel.get_function("v_median_vel")
     u_median_vel(u_median_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
-                 grid=(x_blocks, 1))
+                 grid=(grid_size, 1))
     v_median_vel(v_median_d, neighbours_d, neighbours_present_d, n_row, n_col, block=(block_size, 1, 1),
-                 grid=(x_blocks, 1))
+                 grid=(grid_size, 1))
 
     return u_median_d, v_median_d
 
 
-# TODO remove syncthreads
 def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, n_row, n_col):
     """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
@@ -701,13 +702,13 @@ def gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median, 
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     mod_u_fluc = mod_median_fluc.get_function("u_fluc_k")
     mod_v_fluc = mod_median_fluc.get_function("v_fluc_k")
     mod_u_fluc(u_median_fluc_d, d_u_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1),
-               grid=(x_blocks, 1))
+               grid=(grid_size, 1))
     mod_v_fluc(v_median_fluc_d, d_v_median, d_neighbours, d_neighbours_present, n_row, n_col, block=(block_size, 1, 1),
-               grid=(x_blocks, 1))
+               grid=(grid_size, 1))
 
     return u_median_fluc_d, v_median_fluc_d
 
@@ -783,13 +784,13 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     mod_u_rms = mod_rms.get_function("u_rms_k")
     mod_v_rms = mod_rms.get_function("v_rms_k")
     mod_u_rms(u_rms_d, d_neighbours, d_neighbours_present, d_u_mean, n_row, n_col, block=(block_size, 1, 1),
-              grid=(x_blocks, 1))
+              grid=(grid_size, 1))
     mod_v_rms(v_rms_d, d_neighbours, d_neighbours_present, d_v_mean, n_row, n_col, block=(block_size, 1, 1),
-              grid=(x_blocks, 1))
+              grid=(grid_size, 1))
 
     return u_rms_d, v_rms_d
 
@@ -851,11 +852,11 @@ def __gpu_divergence(u_d, v_d, w, n_row, n_col):
     }
     """)
     block_size = 32
-    x_blocks = int(n_row * n_col // block_size + 1)
+    grid_size = ceil(n_row * n_col / block_size)
     div_k = mod_div.get_function("div_k")
     div_boundary_k = mod_div.get_function("div_boundary_k")
-    div_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
-    div_boundary_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    div_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
+    div_boundary_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     # Get single case of bottom i = 0, j = n_col-1.
     div_d[0, int(n_col - 1)] = (u_d[1, n_col - 1] - u_d[0, n_col - 1]) / w - (v_d[0, n_col - 1] - v_d[0, n_col - 2]) / w
