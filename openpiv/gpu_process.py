@@ -8,6 +8,9 @@ arrays that are arguments to GPU kernels should be identified with ending in eit
 kernels should have size of at least 32 to avoid wasting GPU resources. E.g. (32, 1, 1), (8, 8, 1), etc.
 
 """
+# TODO find elegant way to pass correct dtypes.
+# TODO check all inputs at public interfaces and use python error codes.
+# TODO catch out of memory errors.
 
 import time
 import logging
@@ -39,10 +42,8 @@ DTYPE_c = np.complex64
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 cumisc.init()
 
-# TODO find elegant way to pass correct dtypes
 
-
-# TODO save memory in extended search area
+# TODO save memory in extended search area -- need to cleanup the implementation
 class GPUCorrelation:
     """A class representing the cross correlation function.
 
@@ -50,8 +51,8 @@ class GPUCorrelation:
     ----------
     frame_a_d, frame_b_d : GPUArray
         2D int, image pair.
-    nfft_x : int or None, optional
-        Window size multiplier for fft.
+    n_fft : int or tuple, optional
+        Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
         Method to approximate the subpixel location of the peaks.
 
@@ -64,19 +65,18 @@ class GPUCorrelation:
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, nfft_x=None, subpixel_method='gaussian'):
+    def __init__(self, frame_a_d, frame_b_d, n_fft=2, subpixel_method='gaussian'):
         _check_inputs(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
-        # TODO input checks -- need to be python types
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
-        self.frame_shape = DTYPE_i(frame_a_d.shape)
-        # TODO fix this definition. Default values should be 2 in arguments.
-        if nfft_x is None:
-            self.nfft_x = 2
+        self.frame_shape = frame_a_d.shape
+        if isinstance(n_fft, int):
+            assert (n_fft & (n_fft - 1)) == 0, 'n_fft must be power of 2.'
+            self.n_fft_x = self.n_fft_y = int(n_fft)
         else:
-            assert (self.nfft_x & (self.nfft_x - 1)) == 0, 'nfft must be power of 2'
-            self.nfft_x = nfft_x
-        self.nfft_y = self.nfft_x
+            assert (n_fft[0] & (n_fft[0] - 1)) == (n_fft[1] & (n_fft[1] - 1)) == 0, 'n_fft must be power of 2.'
+            self.n_fft_x = int(n_fft[0])
+            self.n_fft_x = int(n_fft[1])
         allowed_methods = {'gaussian', 'centroid', 'parabolic'}
         try:
             assert subpixel_method in allowed_methods
@@ -112,16 +112,15 @@ class GPUCorrelation:
         assert window_size % 8 == 0, "Window size must be a multiple of 8."
         self.window_size = window_size
         self.overlap_ratio = overlap_ratio
-        # TODO remove unnecessary type casts--Python structures should have python types.
-        # TODO extended size must be power of 2?
         self.size_extended = extended_size if extended_size is not None else window_size
-        self.fft_width_x = self.size_extended * self.nfft_x
-        self.fft_width_y = self.size_extended * self.nfft_y
+        assert (self.size_extended & (self.size_extended - 1)) == 0, 'Window size (extended) must be power of 2.'
+        self.spacing = int(self.window_size - (self.window_size * self.overlap_ratio))
+        self.field_shape = get_field_shape(self.frame_shape, self.window_size, self.spacing)
+        self.n_windows = self.field_shape[0] * self.field_shape[1]
+        self.fft_width_x = self.size_extended * self.n_fft_x
+        self.fft_width_y = self.size_extended * self.n_fft_y
         self.fft_shape = (self.fft_width_y, self.fft_width_x)
         self.fft_size = self.fft_width_x * self.fft_width_y
-        self.spacing = int(self.window_size - (self.window_size * self.overlap_ratio))
-        self.n_rows, self.n_cols = DTYPE_i(get_field_shape(self.frame_shape, self.window_size, self.spacing))
-        self.n_windows = self.n_rows * self.n_cols
 
         # Return stack of all IWs.
         win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
@@ -193,7 +192,7 @@ class GPUCorrelation:
         # Remove NaNs.
         sig2noise_d = sig2noise_d * (sig2noise_d == np.NaN)
 
-        return sig2noise_d.reshape(self.n_rows, self.n_cols)
+        return sig2noise_d.reshape(self.field_shape)
 
     def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d=None):
         """Creates a 3D array stack of all the interrogation windows.
@@ -251,7 +250,7 @@ class GPUCorrelation:
         win_a_norm_d = _gpu_normalize_intensity(win_a_d)
         win_b_norm_d = _gpu_normalize_intensity(win_b_d)
 
-        # Zero pad arrays.
+        # Zero pad arrays according to extended size requirements.
         size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
         size1_a = DTYPE_i(self.size_extended - size0_a)
         size0_b = DTYPE_i(0)
@@ -538,7 +537,6 @@ class PIVGPU:
                  nb_validation_iter=1,
                  validation_method='median_velocity',
                  **kwargs):
-        # TODO check all inputs.
         if hasattr(frame_shape, 'shape'):
             self.frame_shape = frame_shape.shape
         else:
@@ -586,7 +584,7 @@ class PIVGPU:
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
-        self.nfft_x = kwargs['nfft_x'] if 'nfft_x' in kwargs else None
+        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else 2
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
         self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else 'gaussian'
@@ -623,7 +621,7 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # Create the correlation object.
-        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.nfft_x, self.subpixel_method)
+        self.corr = GPUCorrelation(frame_a_d, frame_b_d, self.n_fft, self.subpixel_method)
 
         # MAIN LOOP
         for k in range(self.nb_iter_max):
