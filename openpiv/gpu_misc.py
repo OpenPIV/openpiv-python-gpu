@@ -181,15 +181,15 @@ def _gpu_index_update(dest_d, values_d, indices_d):
 def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
     if array_type is not None:
-        assert all([isinstance(array, array_type) for array in arrays]), 'Inputs must be ({}).'.format(array_type)
+        assert all([isinstance(array, array_type) for array in arrays]), 'Input(s) must be ({}).'.format(array_type)
     if dtype is not None:
-        assert all([array.dtype == dtype for array in arrays]), 'Inputs must have dtype ({}).'.format(dtype)
+        assert all([array.dtype == dtype for array in arrays]), 'Input(s) must have dtype ({}).'.format(dtype)
     if shape is not None:
         assert all(
             [array.shape == shape for array in
-             arrays]), 'Inputs must have shape ({}, all must be same shape).'.format(
+             arrays]), 'Input(s) must have shape ({}, all must be same shape).'.format(
             shape)
     if ndim is not None:
-        assert all([array.ndim == ndim for array in arrays]), 'Inputs must have same ndim ({}).'.format(ndim)
+        assert all([array.ndim == ndim for array in arrays]), 'Input(s) must have ndim ({}).'.format(ndim)
     if size is not None:
-        assert all([array.size == size for array in arrays]), 'Inputs must have same size ({}).'.format(size)
+        assert all([array.size == size for array in arrays]), 'Input(s) must have size ({}).'.format(size)

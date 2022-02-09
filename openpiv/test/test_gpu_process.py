@@ -117,9 +117,9 @@ def test_gpu_interpolate():
     ws1 = 8
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
-    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
+    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
     n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
-    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
+    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
 
     f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
     x0_d = gpuarray.to_gpu(x0[0, :])
@@ -133,7 +133,7 @@ def test_gpu_interpolate():
     f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
     f1_gpu = f1_d.get()
 
-    assert np.allclose(f1, f1_gpu, 0.01)
+    assert np.allclose(f1, f1_gpu, _identity_tolerance)
 
 
 def test_gpu_interpolate_validation():
@@ -142,9 +142,9 @@ def test_gpu_interpolate_validation():
     ws1 = 8
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
-    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, 0.5)
+    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
     n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
-    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, 0.5)
+    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
 
     f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
     f1, f1_d = generate_cpu_gpu_pair((n_row1, n_col1))
@@ -162,7 +162,7 @@ def test_gpu_interpolate_validation():
     f1_val_d = gpu_process.gpu_interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d=val_locations_d)
     f1_val_gpu = f1_val_d.get()
 
-    assert np.allclose(f1_val, f1_val_gpu, 0.01)
+    assert np.allclose(f1_val, f1_val_gpu, _identity_tolerance)
 
 
 def test_gpu_ftt_shift():
@@ -171,10 +171,11 @@ def test_gpu_ftt_shift():
     shift_stack_cpu = fftshift(correlation_stack, axes=(1, 2))
     shift_stack_gpu = gpu_process.gpu_fft_shift(correlation_stack_d).get()
 
-    assert np.allclose(shift_stack_cpu, shift_stack_gpu, 0.01)
+    assert np.allclose(shift_stack_cpu, shift_stack_gpu, _identity_tolerance)
 
 
 def test_mask_peak():
+    n_windows, ht, wd = _test_size_small_stack
     correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
 
     row_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
@@ -186,14 +187,17 @@ def test_mask_peak():
 
 
 def test_mask_rms():
+    n_windows, ht, wd = _test_size_small_stack
     correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
 
-    row_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
-    col_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
+    corr_peak = np.random.random(_test_size_small_stack[0]).astype(DTYPE_f)
+    corr_peak_d = gpuarray.to_gpu(corr_peak)
 
-    correlation_stack_masked_d = gpu_process._gpu_mask_peak(correlation_stack_d, row_peak_d, col_peak_d, 2)
+    a = correlation_stack.reshape((n_windows, ht * wd))
+    correlation_stack_masked_cpu = (a * (a < corr_peak.reshape(n_windows, 1) / 2)).reshape(_test_size_small_stack)
+    correlation_stack_masked_gpu = gpu_process._gpu_mask_rms(correlation_stack_d, corr_peak_d).get()
 
-    assert np.all(correlation_stack_masked_d.get()[6, 4:9, 4:9] == 0)
+    assert np.allclose(correlation_stack_masked_cpu, correlation_stack_masked_gpu, _identity_tolerance)
 
 
 def test_gpu_replace_nan():
@@ -324,7 +328,6 @@ def test_subpixel_peak(subpixel_method):
             'smooth': True,
             'nb_validation_iter': 2,
             'validation_method': 'median_velocity',
-            'return_sig2noise': True,
             'subpixel_method': subpixel_method,
             }
 
@@ -347,6 +350,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
             }
 
     piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
+
     # piv_gpu = gpu_process_old.PIVGPU(_image_size_rectangle, **args)
 
     @benchmark
