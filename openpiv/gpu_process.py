@@ -345,6 +345,11 @@ class GPUCorrelation:
 
         return corr_max2_d
 
+    def free_data(self):
+        """Frees frame data from GPU."""
+        self.frame_a_d = None
+        self.frame_b_d = None
+
 
 def gpu_piv(frame_a, frame_b,
             mask=None,
@@ -524,7 +529,6 @@ class PIVGPU:
         Main method to process image pairs.
 
     """
-
     def __init__(self,
                  frame_shape,
                  window_size_iters=(1, 2),
@@ -658,8 +662,7 @@ class PIVGPU:
 
         logging.info('[DONE]\n')
 
-        frame_a_d.gpudata.free()
-        frame_b_d.gpudata.free()
+        self.corr.free_data()
 
         return u, v
 
@@ -678,6 +681,10 @@ class PIVGPU:
         else:
             s2n = self.corr.get_sig2noise(method=self.sig2noise_method)
         return s2n
+
+    def free_data(self):
+        """Frees correlation data from GPU."""
+        self.corr = None
 
     def set_geometry(self, mask=None):
         """Creates the parameters for the mesh geometry and mask at each iteration.
@@ -785,41 +792,20 @@ class PIVGPU:
 
     def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d, k):
         """Updates the velocity values after each iteration."""
-        _check_inputs(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
         if dp_x_d == dp_y_d is None:
-            dp_x_d = gpuarray.zeros(self.field_shape[k], dtype=DTYPE_f)
-            dp_y_d = gpuarray.zeros(self.field_shape[k], dtype=DTYPE_f)
+            u_d = gpu_mask(j_peak_d, self.field_mask_d[k])
+            v_d = gpu_mask(i_peak_d, self.field_mask_d[k])
         else:
-            _check_inputs(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=dp_x_d.shape)
-        size = DTYPE_i(dp_x_d.size)
-
-        u_d = gpuarray.empty_like(dp_x_d, dtype=DTYPE_f)
-        v_d = gpuarray.empty_like(dp_y_d, dtype=DTYPE_f)
-
-        mod_update = SourceModule("""
-        __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
-        {
-            // u_new : output argument
-            int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (t_idx >= size) {return;}
-
-            f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
-        }
-        """)
-        block_size = 32
-        grid_size = ceil(i_peak_d.size / block_size)
-        update_values = mod_update.get_function("update_values")
-        update_values(u_d, dp_x_d, j_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(grid_size, 1))
-        update_values(v_d, dp_y_d, i_peak_d, self.field_mask_d[k], size, block=(block_size, 1, 1), grid=(grid_size, 1))
+            u_d = _gpu_update_field(dp_x_d, j_peak_d, self.field_mask_d[k])
+            v_d = _gpu_update_field(dp_y_d, i_peak_d, self.field_mask_d[k])
 
         return u_d, v_d
 
     def _get_next_iteration_prediction(self, u_d, v_d, k):
         """Returns the velocity field to begin the next iteration."""
         _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
-        # Interpolate if dimensions do not agree
+        # Interpolate if dimensions do not agree.
         if self.window_size[k + 1] != self.window_size[k]:
-            # Interpolate velocity onto next iterations grid. Then use it as the predictor for the next step.
             u_d = gpu_interpolate(self.x_d[k], self.y_d[k], self.x_d[k + 1], self.y_d[k + 1], u_d)
             v_d = gpu_interpolate(self.x_d[k], self.y_d[k], self.x_d[k + 1], self.y_d[k + 1], v_d)
 
@@ -907,27 +893,27 @@ def get_field_coords(field_shape, window_size, overlap_ratio):
     return x, y
 
 
-def gpu_mask(frame_d, mask_d):
-    """Multiply two integer-type arrays.
+def gpu_mask(f_d, mask_d):
+    """Mask a float-type array with an int type-array.
 
     Parameters
     ----------
-    frame_d : GPUArray
-        2D int, frame to be masked.
+    f_d : GPUArray
+        nD float, frame to be masked.
     mask_d : GPUArray
-        2D int, mask to apply to frame.
+        nD int, mask to apply to frame.
 
     Returns
     -------
     GPUArray
-        2D int, masked frame.
+        nD int, masked field.
 
     """
-    _check_inputs(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=frame_d.shape, ndim=2)
-    _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=frame_d.shape, ndim=2)
-    size_i = DTYPE_i(frame_d.size)
+    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
+    size_i = DTYPE_i(f_d.size)
 
-    frame_masked_d = gpuarray.empty_like(frame_d, dtype=DTYPE_f)
+    frame_masked_d = gpuarray.empty_like(mask_d, dtype=DTYPE_f)
 
     mod_mask = SourceModule("""
     __global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
@@ -942,7 +928,7 @@ def gpu_mask(frame_d, mask_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
-    mask_frame_gpu(frame_masked_d, frame_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    mask_frame_gpu(frame_masked_d, f_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return frame_masked_d
 
@@ -1328,7 +1314,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
 
     mod_ws = SourceModule("""
     __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
-                        int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
+                        const int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
     {
         // f : factor to apply to the shift and strain tensors
         // wd : width (number of columns in the full image)
@@ -1860,6 +1846,47 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
               grid=(n_windows, grid_size, grid_size))
 
     return correlation_masked_d
+
+
+def _gpu_update_field(dp_d, peak_d, mask_d):
+    """Returns updated velocity field values with masking.
+
+    Parameters
+    ----------
+    dp_d : GPUArray.
+        1D or 2D float, predicted displacement.
+    peak_d : GPUArray
+        1D float, location of peaks.
+    mask_d : GPUArray
+        2D float, mask.
+
+    Returns
+    -------
+    GPUArray
+        3D float.
+
+    """
+    _check_inputs(dp_d, peak_d, mask_d, array_type=gpuarray.GPUArray, size=dp_d.size)
+    size_i = DTYPE_i(dp_d.size)
+
+    f_d = gpuarray.empty_like(dp_d, dtype=DTYPE_f)
+
+    mod_update = SourceModule("""
+    __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
+    {
+        // u_new : output argument
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+
+        f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
+    }
+    """)
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    update_values = mod_update.get_function("update_values")
+    update_values(f_d, dp_d, peak_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+
+    return f_d
 
 
 def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
