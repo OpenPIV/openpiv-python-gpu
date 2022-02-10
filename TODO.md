@@ -4,12 +4,12 @@
 - [x] very high overlap ratios throw an error
 - [x] bias error in non-translating window
 - [x] square window shapes sometimes error
-- [ ] completely blank frames cause smoothn to error
+- [x] completely blank frames cause smoothn to error
 - [x] smoothing parameter doesn't default to 0.5
 - [x] validation being done on first iteration even when trust_first_iter is True
 - [x] smoothing is not being applied to functions
 
-# Errors
+# Error handling
 - [ ] out-of-memory is unhandled
 - [ ] 
 
@@ -29,14 +29,14 @@
   - [x] don't calculate x, y for every iteration
   - [ ] use shared memory for GPU kernels
   - [x] confirm if to_gpu() is faster than gpuarray.zeros()
-  - [ ] optimize masking the input frames
+  - [x] optimize masking the input frames
 
 - [ ] correlation class
   - [x] reduce operations outside of CUDA kernels in iw_arrange()
   - [x] move methods out of init()
   - [x] define fewer GPU arrays
-  - [ ] use CUDA kernel in subpixel location
-  - [ ] return a GPU array for the validation list
+  - [x] use CUDA kernel in subpixel location
+  - [x] return a GPU array for the validation list
 
 - [x] define empty arrays on the GPU directly instead of sending Numpy arrays to the GPU by gpuarray.to_gpu
 - [x] reduce the number of temporary gpu arrays created

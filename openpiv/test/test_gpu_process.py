@@ -261,8 +261,7 @@ def test_gpu_piv_zero(image_size):
             'overlap_ratio': 0.5,
             'dt': 1,
             'deform': True,
-            # This is False so that smoothn doesn't error out.
-            'smooth': False,
+            'smooth': True,
             'nb_validation_iter': 1,
             'validation_method': 'median_velocity',
             'trust_1st_iter': False,

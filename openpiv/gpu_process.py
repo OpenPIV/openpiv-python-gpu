@@ -8,7 +8,6 @@ arrays that are arguments to GPU kernels should be identified with ending in eit
 kernels should have size of at least 32 to avoid wasting GPU resources. E.g. (32, 1, 1), (8, 8, 1), etc.
 
 """
-# TODO find elegant way to pass correct dtypes.
 # TODO check all inputs at public interfaces and use python error codes.
 # TODO catch out of memory errors.
 
@@ -132,7 +131,8 @@ class GPUCorrelation:
         self.row_peak_d, self.col_peak_d, self.corr_peak1_d = self._find_peak(self.correlation_d)
 
         # Get the subpixel location.
-        row_sp_d, col_sp_d = self._locate_subpixel_peak()
+        row_sp_d, col_sp_d = _gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d,
+                                                         self.subpixel_method)
 
         # # Center the peak displacement.
         i_peak = (row_sp_d - DTYPE_f(self.fft_ht // 2)).reshape(self.field_shape)
@@ -294,24 +294,6 @@ class GPUCorrelation:
         col_peak_d = col_peak_d * zero_peak_inverse_d + zero_peak_d
 
         return row_peak_d, col_peak_d, peak_d
-
-    def _locate_subpixel_peak(self):
-        """Find subpixel peak approximation using Gaussian method.
-
-        Returns
-        -------
-        row_sp, col_sp : GPUArray
-            1D float, location of peak to subpixel accuracy for each window.
-
-        """
-        if self.subpixel_method == 'gaussian':
-            row_sp_d, col_sp_d = _gpu_subpixel_gaussian(self.correlation_d, self.row_peak_d, self.col_peak_d)
-        elif self.subpixel_method == 'centroid':
-            row_sp_d, col_sp_d = _gpu_subpixel_centroid(self.correlation_d, self.row_peak_d, self.col_peak_d)
-        else:
-            row_sp_d, col_sp_d = _gpu_subpixel_parabolic(self.correlation_d, self.row_peak_d, self.col_peak_d)
-
-        return row_sp_d, col_sp_d
 
     def _find_second_peak_height(self, correlation_positive_d, mask_width):
         """Find the value of the second-largest peak.
@@ -556,13 +538,11 @@ class PIVGPU:
         self.mask_final = None
 
         if mask is not None:
-            try:
-                assert mask.shape == self.frame_shape
-            except AssertionError:
-                raise ValueError('Mask is not same shape as image.') from None
+            if not mask.shape == self.frame_shape:
+                raise ValueError('Mask is not same shape as image.')
 
         # TODO These are terrible for understanding. Try a dictionary instead.
-        # Validation method.
+        # Validation methods are parsed.
         self.val_tols = [None, None, None, None]
         val_methods = validation_method if type(validation_method) == str else (validation_method,)
         if 's2n' in val_methods:
@@ -589,7 +569,7 @@ class PIVGPU:
         # Set window sizes.
         self.window_size_l = [(2 ** (num_ws - i - 1)) * min_window_size for i in range(num_ws)
                               for _ in range(ws_iters[i])]
-        # Init derived parameters - mesh geometry and masks at each iteration.
+        # Init derived parameters--mesh geometry and masks at each iteration.
         self.set_geometry(mask)
 
     def __call__(self, frame_a, frame_b):
@@ -1521,8 +1501,7 @@ def _gpu_window_index_f(src_d, indices_d):
     return dest_d
 
 
-# TODO combine the subpixel kernels
-def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d):
+def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     """Returns the subpixel position of the peaks using gaussian approximation.
 
     Parameters
@@ -1531,6 +1510,8 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d):
         3D float, data from the window correlations.
     row_peak_d, col_peak_d : GPUArray
         1D int, location of the correlation peak.
+    method : {'gaussian', 'parabolic', 'centroid'}
+        Method of the subpixel approximation.
 
     Returns
     -------
@@ -1541,6 +1522,8 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d):
     _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
                   ndim=1)
+    allowed_methods = {'gaussian', 'parabolic', 'centroid'}
+    assert method in allowed_methods
     n_windows, ht, wd = correlation_d.shape
     window_size_i = DTYPE_i(ht * wd)
 
@@ -1548,7 +1531,7 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d):
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
     mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+    __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                         int n_windows, int ht, int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -1584,43 +1567,8 @@ def _gpu_subpixel_gaussian(correlation_d, row_peak_d, col_peak_d):
             } else {col_sp[w_idx] = col;}
         }
     }
-    """)
-    block_size = 32
-    grid_size = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
-                           DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-
-    return row_sp_d, col_sp_d
-
-
-def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d):
-    """Returns the subpixel position of the peaks using parabolic approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+    
+    __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                         int n_windows, int ht, int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -1647,43 +1595,8 @@ def _gpu_subpixel_parabolic(correlation_d, row_peak_d, col_peak_d):
             col_sp[w_idx] = col + 0.5 * (cl - cr) / (cl - 2 * c + cr + small);
         }
     }
-    """)
-    block_size = 32
-    grid_size = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
-                           DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-
-    return row_sp_d, col_sp_d
-
-
-def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d):
-    """Returns the subpixel position of the peaks using centroid approximation.
-
-    Parameters
-    ----------
-    correlation_d : GPUArray
-        3D float, data from the window correlations.
-    row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-
-    Returns
-    -------
-    row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
-
-    """
-    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
-                  ndim=1)
-    n_windows, ht, wd = correlation_d.shape
-    window_size_i = DTYPE_i(ht * wd)
-
-    row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
-    col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
-
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void subpixel_approximation(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
+    
+    __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
                         int n_windows, int ht, int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -1722,9 +1635,18 @@ def _gpu_subpixel_centroid(correlation_d, row_peak_d, col_peak_d):
     """)
     block_size = 32
     grid_size = ceil(n_windows / block_size)
-    subpixel_approximation = mod_subpixel_approximation.get_function('subpixel_approximation')
-    subpixel_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
-                           DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    if method == 'gaussian':
+        gaussian_approximation = mod_subpixel_approximation.get_function('gaussian')
+        gaussian_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
+                               DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    elif method == 'parabolic':
+        parabolic_approximation = mod_subpixel_approximation.get_function('parabolic')
+        parabolic_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
+                                DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    if method == 'centroid':
+        centroid_approximation = mod_subpixel_approximation.get_function('centroid')
+        centroid_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
+                               DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return row_sp_d, col_sp_d
 
