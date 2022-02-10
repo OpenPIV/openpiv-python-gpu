@@ -9,9 +9,13 @@
 - [x] validation being done on first iteration even when trust_first_iter is True
 - [x] smoothing is not being applied to functions
 
-# Error handling
+## Error handling
 - [ ] out-of-memory is unhandled
 - [ ] 
+
+## Needs testing
+- [ ] smoothing par
+- [ ] validation tolerances
 
 ## Documentation
 - [x] complete the Jupyter notebook tutorials

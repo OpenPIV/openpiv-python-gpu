@@ -33,16 +33,17 @@ from openpiv.gpu_validation import gpu_validation
 from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i, gpu_remove_nan_f
 
+# Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
+cumisc.init()
+
 # Define 32-bit types.
 DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
-# Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
-cumisc.init()
+ALLOWED_SUBPIXEL_METHODS = {'gaussian', 'parabolic', 'centroid'}
 
 
-# TODO save memory in extended search area -- need to cleanup the implementation
 class GPUCorrelation:
     """A class representing the cross correlation function.
 
@@ -76,13 +77,12 @@ class GPUCorrelation:
             assert (n_fft[0] & (n_fft[0] - 1)) == (n_fft[1] & (n_fft[1] - 1)) == 0, 'n_fft must be power of 2.'
             self.n_fft_x = int(n_fft[0])
             self.n_fft_x = int(n_fft[1])
-        allowed_methods = {'gaussian', 'centroid', 'parabolic'}
         try:
-            assert subpixel_method in allowed_methods
+            assert subpixel_method in ALLOWED_SUBPIXEL_METHODS
             self.subpixel_method = subpixel_method
         except AssertionError:
             raise ValueError('subpixel_method is invalid. Must be one of {}. ({} was input.)'.format(
-                allowed_methods, subpixel_method)) from None
+                ALLOWED_SUBPIXEL_METHODS, subpixel_method)) from None
 
     def __call__(self, window_size, overlap_ratio, extended_size=None, shift_d=None, strain_d=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -171,6 +171,9 @@ class GPUCorrelation:
         correlation_positive_d = self.correlation_d * (self.correlation_d > 1e-3)
 
         # TODO SRP violation.
+        # TODO simplify by doing 2 * log
+        # TODO negative corr_peaks?
+        # TODO compute corr peak here rather than in other find_peak method?
         # Compute signal-to-noise ratio by the chosen method.
         if method == 'peak2mean':
             corr_max1_d = self.corr_peak1_d ** 2
@@ -249,6 +252,7 @@ class GPUCorrelation:
         win_b_norm_d = _gpu_normalize_intensity(win_b_d)
 
         # Zero pad arrays according to extended size requirements.
+        # TODO save memory in extended search area -- need to cleanup the implementation
         size0_a = DTYPE_i((self.size_extended - self.window_size) / 2)
         size1_a = DTYPE_i(self.size_extended - size0_a)
         size0_b = DTYPE_i(0)
@@ -467,8 +471,7 @@ class PIVGPU:
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
-        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for
-        median validation.
+        Method(s) to use for validation.
 
     Other Parameters
     ----------------
@@ -522,6 +525,9 @@ class PIVGPU:
             self.frame_shape = frame_shape.shape
         else:
             self.frame_shape = frame_shape
+        if mask is not None:
+            if not mask.shape == self.frame_shape:
+                raise ValueError('Mask is not same shape as image.')
         ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
         num_ws = len(ws_iters)
         self.overlap_ratio = overlap_ratio
@@ -536,25 +542,16 @@ class PIVGPU:
         self.x_dl = self.y_dl = None
         self.field_mask_dl = None
         self.mask_final = None
-
-        if mask is not None:
-            if not mask.shape == self.frame_shape:
-                raise ValueError('Mask is not same shape as image.')
-
-        # TODO These are terrible for understanding. Try a dictionary instead.
-        # Validation methods are parsed.
-        self.val_tols = [None, None, None, None]
-        val_methods = validation_method if type(validation_method) == str else (validation_method,)
-        if 's2n' in val_methods:
-            self.val_tols[0] = kwargs['s2n_tol'] if 's2n_tol' in kwargs else 1.2
-        if 'median_velocity' in val_methods:
-            self.val_tols[1] = kwargs['median_tol'] if 'median_tol' in kwargs else 2
-        if 'mean_velocity' in val_methods:
-            self.val_tols[2] = kwargs['mean_tol'] if 'mean_tol' in kwargs else 2
-        if 'rms_velocity' in val_methods:
-            self.val_tols[3] = kwargs['rms_tol'] if 'rms_tol' in kwargs else 2
+        self.corr = None
+        self.sig2noise_d = None
+        self.validation_method = validation_method
+        # input checks for validation_method
 
         # Init other parameters.
+        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else None
+        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else None
+        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else None
+        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else None
         self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
@@ -563,8 +560,6 @@ class PIVGPU:
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
         self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else 'gaussian'
-        self.corr = None
-        self.sig2noise_d = None
 
         # Set window sizes.
         self.window_size_l = [(2 ** (num_ws - i - 1)) * min_window_size for i in range(num_ws)
@@ -651,10 +646,10 @@ class PIVGPU:
     @property
     def s2n(self):
         if self.sig2noise_d is not None:
-            s2n_d = self.sig2noise_d
+            sig2noise_d = self.sig2noise_d
         else:
-            s2n_d = self.corr.get_sig2noise(method=self.sig2noise_method)
-        return s2n_d.get()
+            sig2noise_d = self.corr.get_sig2noise(method=self.sig2noise_method)
+        return sig2noise_d.get()
 
     def free_data(self):
         """Frees correlation data from GPU."""
@@ -736,28 +731,27 @@ class PIVGPU:
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d, k):
         """Return velocity fields with outliers removed."""
         _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
-        m, n = u_d.shape
+        size = u_d.size
 
-        if self.val_tols[0] is not None and self.nb_validation_iter > 0:
+        if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self.sig2noise_d = self.corr.get_sig2noise(method=self.sig2noise_method, mask_width=self.s2n_width)
 
         for i in range(self.nb_validation_iter):
             # Get list of places that need to be validated.
             # TODO validation should be done on one field at a time
-            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, m, n, self.window_size_l[k],
-                                                                 self.sig2noise_d, *self.val_tols)
+            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self.sig2noise_d, self.validation_method,
+                                                                 s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+                                                                 mean_tol=self.mean_tol, rms_tol=self.rms_tol)
 
             # Do the validation.
-            total_vectors = m * n
-            n_val = total_vectors - int(gpuarray.sum(val_locations_d).get())
+            n_val = size - int(gpuarray.sum(val_locations_d).get())
             if n_val > 0:
-                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, total_vectors, n_val / (m * n)))
+                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
 
                 # TODO make this a class method so the replacement logic remains here.
                 u_d, v_d = _gpu_replace_vectors(self.x_dl[k], self.y_dl[k], self.x_dl[k - 1], self.y_dl[k - 1],
                                                 u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
                                                 v_mean_d, self.field_shape_l, k)
-
                 logging.info('[DONE]\n')
             else:
                 logging.info('No invalid vectors!')
@@ -1522,8 +1516,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     _check_inputs(row_peak_d, col_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(correlation_d.shape[0],),
                   ndim=1)
-    allowed_methods = {'gaussian', 'parabolic', 'centroid'}
-    assert method in allowed_methods
+    assert method in ALLOWED_SUBPIXEL_METHODS
     n_windows, ht, wd = correlation_d.shape
     window_size_i = DTYPE_i(ht * wd)
 

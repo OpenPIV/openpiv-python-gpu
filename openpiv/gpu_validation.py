@@ -1,4 +1,5 @@
 """This module is for GPU-accelerated validation algorithms."""
+# TODO cleanup input arguments
 
 import time
 import logging
@@ -18,29 +19,35 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
+ALLOWED_VALIDATION_METHODS = {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
+DEFAULT_VALIDATION_TOLS = {
+    's2n_tol': DTYPE_f(0.1),
+    'median_tol': DTYPE_f(2),
+    'mean_tol': DTYPE_f(2),
+    'rms_tol': DTYPE_f(2),
+}
+
 
 # TODO cleanup this function
-def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None, median_tol=None, mean_tol=None,
-                   rms_tol=None):
+def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocity', s2n_tol=None, median_tol=None,
+                   mean_tol=None, rms_tol=None):
     """Returns an array indicating which indices need to be validated.
 
     Parameters
     ----------
     u_d, v_d : GPUArray
         2D float, velocity fields to be validated.
-    n_row, n_col : int
-        Number of rows and columns in the velocity field.
-    spacing : int
-        Number of pixels between each interrogation window center.
-    sig2noise : ndarray
-        2D float, signal-to-noise ratio of each velocity.
-    s2n_tol : float
+    sig2noise_d : ndarray, optional
+        1D or 2D float, signal-to-noise ratio of each velocity.
+    validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+        Method(s) to use for validation.
+    s2n_tol : float, optional
         Minimum value for sig2noise.
-    median_tol : float
+    median_tol : float, optional
         Tolerance for median velocity validation.
-    mean_tol : float
+    mean_tol : float, optional
         Tolerance for mean velocity validation.
-    rms_tol : float
+    rms_tol : float, optional
         Tolerance for rms validation.
 
     Returns
@@ -54,24 +61,25 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
         2D float, mean of the velocities surrounding each point in this iteration.
 
     """
-    n_row = DTYPE_i(n_row)
-    n_col = DTYPE_i(n_col)
-    # spacing = DTYPE_f(spacing)
-    s2n_tol = DTYPE_f(s2n_tol) if s2n_tol is not None else None
-    median_tol = DTYPE_f(median_tol) if median_tol is not None else None
-    mean_tol = DTYPE_f(mean_tol) if mean_tol is not None else None
-    rms_tol = DTYPE_f(rms_tol) if rms_tol is not None else None
+    _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
+    if sig2noise_d is not None:
+        _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
+    m_i, n_i = DTYPE_i(u_d.shape)
+    s2n_tol_i = DTYPE_f(s2n_tol) if s2n_tol is not None else DEFAULT_VALIDATION_TOLS['s2n_tol']
+    median_tol_i = DTYPE_f(median_tol) if median_tol is not None else DEFAULT_VALIDATION_TOLS['median_tol']
+    mean_tol_i = DTYPE_f(mean_tol) if mean_tol is not None else DEFAULT_VALIDATION_TOLS['mean_tol']
+    rms_tol_i = DTYPE_f(rms_tol) if rms_tol is not None else DEFAULT_VALIDATION_TOLS['rms_tol']
 
     val_locations_d = gpuarray.ones_like(u_d, dtype=DTYPE_i)
 
     # Get neighbours information.
-    neighbours_d, neighbours_present_d = gpu_get_neighbours(u_d, v_d, n_row, n_col)
+    neighbours_d, neighbours_present_d = gpu_get_neighbours(u_d, v_d, m_i, n_i)
 
     # Compute the mean velocities to be returned.
-    u_median_d, v_median_d = gpu_median_vel(neighbours_d, neighbours_present_d, n_row, n_col)
+    u_median_d, v_median_d = gpu_median_vel(neighbours_d, neighbours_present_d, m_i, n_i)
 
     mod_validation = SourceModule("""
-    __global__ void s2n_validation(int *val_list, float *sig2noise, float s2n_tol, int n_row, int n_col)
+    __global__ void validation(int *val_list, float *sig2noise, float s2n_tol, int n_row, int n_col)
     {
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (w_idx >= n_col * n_row) {return;}
@@ -98,48 +106,36 @@ def gpu_validation(u_d, v_d, n_row, n_col, spacing, sig2noise=None, s2n_tol=None
     
     """)
     block_size = 32
-    grid_size = ceil(n_col * n_row / block_size)
+    grid_size = ceil(m_i * n_i / block_size)
 
-    # S2N VALIDATION
-    if s2n_tol is not None:
-        d_sig2noise = gpuarray.to_gpu(sig2noise)
+    if 's2n' in validation_method:
+        d_sig2noise = gpuarray.to_gpu(sig2noise_d)
 
-        # Launch signal to noise kernel
-        s2n = mod_validation.get_function("s2n_validation")
-        s2n(val_locations_d, d_sig2noise, s2n_tol, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
+        validation = mod_validation.get_function("validation")
+        validation(val_locations_d, d_sig2noise, s2n_tol_i, m_i, n_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    # MEDIAN VALIDATION
-    if median_tol is not None:
-        # Get median velocity data.
+    if 'median_velocity' in validation_method:
         u_median_fluc_d, v_median_fluc_d = gpu_median_fluc(neighbours_d, neighbours_present_d, u_median_d, v_median_d,
-                                                           n_row, n_col)
+                                                           m_i, n_i)
 
-        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_median_d, v_median_d, u_median_fluc_d, v_median_fluc_d, n_row,
-                             n_col, median_tol, block=(block_size, 1, 1), grid=(grid_size, 1))
+        neighbour_validation(val_locations_d, u_d, v_d, u_median_d, v_median_d, u_median_fluc_d, v_median_fluc_d, m_i,
+                             n_i, median_tol_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    # MEAN VALIDATION
-    if mean_tol is not None:
-        # Get mean velocity data.
-        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col)
-        u_mean_fluc_d, v_mean_fluc_d = gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row,
-                                                     n_col)
+    if 'mean_velocity' in validation_method:
+        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, m_i, n_i)
+        u_mean_fluc_d, v_mean_fluc_d = gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, m_i, n_i)
 
-        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_mean_fluc_d, v_mean_fluc_d, n_row, n_col,
-                             mean_tol, block=(block_size, 1, 1), grid=(grid_size, 1))
+        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_mean_fluc_d, v_mean_fluc_d, m_i, n_i,
+                             mean_tol_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    # RMS VALIDATION
-    if rms_tol is not None:
-        # Get rms velocity data.
-        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, n_row, n_col)
-        u_rms_d, v_rms_d = gpu_rms(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, n_row, n_col)
+    if 'rms_velocity' in validation_method:
+        u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, m_i, n_i)
+        u_rms_d, v_rms_d = gpu_rms(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, m_i, n_i)
 
-        # Launch validation kernel.
         neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_rms_d, v_rms_d, n_row, n_col, rms_tol,
+        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_rms_d, v_rms_d, m_i, n_i, rms_tol_i,
                              block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return val_locations_d, u_median_d, v_median_d
@@ -795,7 +791,7 @@ def gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean, n_row, n_col
     return u_rms_d, v_rms_d
 
 
-def __gpu_divergence(u_d, v_d, w, n_row, n_col):
+def __gpu_divergence(u_d, v_d, w):
     """[This function very likely does not work as intended.] Calculates the divergence at each point in a velocity
     field.
 
@@ -805,8 +801,6 @@ def __gpu_divergence(u_d, v_d, w, n_row, n_col):
         2D float, velocity field.
     w: int
         Pixel separation between velocity vectors.
-    n_row, n_col : int
-        Number of rows and columns of the velocity field.
 
     Returns
     -------
@@ -814,11 +808,10 @@ def __gpu_divergence(u_d, v_d, w, n_row, n_col):
         2D float, divergence at each point.
 
     """
-    n_row = DTYPE_i(n_row)
-    n_col = DTYPE_i(n_col)
+    m, n = DTYPE_i(u_d.shape)
     w = DTYPE_f(w)
 
-    div_d = np.empty((int(n_row), int(n_col)), dtype=DTYPE_f)
+    div_d = np.empty_like(u_d, dtype=DTYPE_f)
 
     mod_div = SourceModule("""
     __global__ void div_k(float *div, float *u, float *v, float w, int n_row, int n_col)
@@ -852,14 +845,14 @@ def __gpu_divergence(u_d, v_d, w, n_row, n_col):
     }
     """)
     block_size = 32
-    grid_size = ceil(n_row * n_col / block_size)
+    grid_size = ceil(m * n / block_size)
     div_k = mod_div.get_function("div_k")
     div_boundary_k = mod_div.get_function("div_boundary_k")
-    div_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
-    div_boundary_k(div_d, u_d, v_d, w, n_row, n_col, block=(block_size, 1, 1), grid=(grid_size, 1))
+    div_k(div_d, u_d, v_d, w, m, n, block=(block_size, 1, 1), grid=(grid_size, 1))
+    div_boundary_k(div_d, u_d, v_d, w, m, n, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     # Get single case of bottom i = 0, j = n_col-1.
-    div_d[0, int(n_col - 1)] = (u_d[1, n_col - 1] - u_d[0, n_col - 1]) / w - (v_d[0, n_col - 1] - v_d[0, n_col - 2]) / w
-    div_d[int(n_row - 1), 0] = (u_d[n_row - 1, 0] - u_d[n_row - 2, 0]) / w - (v_d[n_row - 1, 1] - v_d[n_row - 1, 0]) / w
+    div_d[0, int(n - 1)] = (u_d[1, n - 1] - u_d[0, n - 1]) / w - (v_d[0, n - 1] - v_d[0, n - 2]) / w
+    div_d[int(m - 1), 0] = (u_d[m - 1, 0] - u_d[m - 2, 0]) / w - (v_d[m - 1, 1] - v_d[m - 1, 0]) / w
 
     return div_d
