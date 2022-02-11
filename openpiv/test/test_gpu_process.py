@@ -14,7 +14,7 @@ from imageio import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
-import openpiv.gpu_validation as gpu_validation
+import openpiv.gpu_validation_new as gpu_validation
 import openpiv.gpu_misc as gpu_misc
 from openpiv.gpu_smoothn import smoothn
 
@@ -325,6 +325,24 @@ def test_subpixel_peak(subpixel_method):
             'nb_validation_iter': 2,
             'validation_method': 'median_velocity',
             'subpixel_method': subpixel_method,
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+
+@pytest.mark.parametrize('validation_method', ('s2n', 'mean_velocity', 'median_velocity', 'rms_velocity'))
+def test_validation(validation_method):
+    """Inputs every s2n method to ensure they don't error out."""
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': validation_method,
             }
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)

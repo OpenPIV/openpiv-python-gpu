@@ -190,7 +190,7 @@ class GPUCorrelation:
             corr_max2_d = self._find_second_peak_height(correlation_positive_d, mask_width)
 
         # Get signal-to-noise ratio.
-        sig2noise_d = cumath.log10(corr_max1_d / corr_max2_d)
+        sig2noise_d = cumath.log10(corr_max1_d / corr_max2_d).reshape(self.field_shape)
         gpu_remove_nan_f(sig2noise_d)
 
         return sig2noise_d
@@ -220,12 +220,12 @@ class GPUCorrelation:
         spacing = DTYPE_i(self.window_size - (self.window_size * self.overlap_ratio))
         buffer = int(spacing - self.size_extended / 2)
 
-        # Use translating windows.
         if shift_d is not None:
+            # Use translating windows.
             win_a_d = _window_slice_deform(frame_a_d, self.size_extended, spacing, buffer, -0.5, shift_d, strain_d)
             win_b_d = _window_slice_deform(frame_b_d, self.size_extended, spacing, buffer, 0.5, shift_d, strain_d)
-        # Use non-translating windows.
         else:
+            # Use non-translating windows.
             win_a_d = _window_slice(frame_a_d, self.size_extended, spacing, buffer)
             win_b_d = _window_slice(frame_b_d, self.size_extended, spacing, buffer)
 
