@@ -61,84 +61,106 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
         2D float, mean of the velocities surrounding each point in this iteration.
 
     """
+    # 'mean' in this function refers to either the mean or median estimators of the average.
     _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
     if sig2noise_d is not None:
         _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
+    val_locations_d = None
     m_i, n_i = DTYPE_i(u_d.shape)
-    s2n_tol_i = DTYPE_f(s2n_tol) if s2n_tol is not None else DEFAULT_VALIDATION_TOLS['s2n_tol']
-    median_tol_i = DTYPE_f(median_tol) if median_tol is not None else DEFAULT_VALIDATION_TOLS['median_tol']
-    mean_tol_i = DTYPE_f(mean_tol) if mean_tol is not None else DEFAULT_VALIDATION_TOLS['mean_tol']
-    rms_tol_i = DTYPE_f(rms_tol) if rms_tol is not None else DEFAULT_VALIDATION_TOLS['rms_tol']
-
-    val_locations_d = gpuarray.ones_like(u_d, dtype=DTYPE_i)
-
-    # Get neighbours information.
-    neighbours_d, neighbours_present_d = gpu_get_neighbours(u_d, v_d, m_i, n_i)
 
     # Compute the mean velocities to be returned.
+    neighbours_d, neighbours_present_d = _gpu_get_neighbours(u_d, v_d, m_i, n_i)
     u_median_d, v_median_d = gpu_median_vel(neighbours_d, neighbours_present_d, m_i, n_i)
 
-    mod_validation = SourceModule("""
-    __global__ void validation(int *val_list, float *sig2noise, float s2n_tol, int n_row, int n_col)
-    {
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_col * n_row) {return;}
-
-        // get the val list
-        val_list[w_idx] = val_list[w_idx] * (sig2noise[w_idx] > s2n_tol);
-    }
-
-    __global__ void neighbour_validation(int *val_list, float *u, float *v, float *u_nb, float *v_nb, float *u_fluc,
-                        float *v_fluc, int n_row, int n_col, float tol)
-    {
-        // u_nb, v_nb : measurement of velocity of neighbours
-        // tol : validation tolerance. usually 2
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_row * n_col) {return;}
-        
-        // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-        int u_validation = fabsf(u[w_idx] - u_nb[w_idx]) / (u_fluc[w_idx] + 0.1) < tol;
-        int v_validation = fabsf(v[w_idx] - v_nb[w_idx]) / (v_fluc[w_idx] + 0.1) < tol;
-        
-        // get the val list
-        val_list[w_idx] = val_list[w_idx] * u_validation * v_validation;
-    }
-    
-    """)
-    block_size = 32
-    grid_size = ceil(m_i * n_i / block_size)
-
     if 's2n' in validation_method:
-        d_sig2noise = gpuarray.to_gpu(sig2noise_d)
+        assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
+        s2n_tol = DTYPE_f(s2n_tol) if s2n_tol is not None else DEFAULT_VALIDATION_TOLS['s2n_tol']
 
-        validation = mod_validation.get_function("validation")
-        validation(val_locations_d, d_sig2noise, s2n_tol_i, m_i, n_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+        val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
 
     if 'median_velocity' in validation_method:
+        if 'median_velocity' in validation_method:
+            median_tol = DTYPE_f(median_tol) if median_tol is not None else DEFAULT_VALIDATION_TOLS['median_tol']
+
         u_median_fluc_d, v_median_fluc_d = gpu_median_fluc(neighbours_d, neighbours_present_d, u_median_d, v_median_d,
                                                            m_i, n_i)
 
-        neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_median_d, v_median_d, u_median_fluc_d, v_median_fluc_d, m_i,
-                             n_i, median_tol_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+        val_locations_d = _neighbour_validation(u_d, u_median_d, u_median_fluc_d, median_tol, val_locations_d)
+        val_locations_d = _neighbour_validation(v_d, v_median_d, v_median_fluc_d, median_tol, val_locations_d)
 
     if 'mean_velocity' in validation_method:
+        mean_tol = DTYPE_f(mean_tol) if mean_tol is not None else DEFAULT_VALIDATION_TOLS['mean_tol']
+
         u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, m_i, n_i)
         u_mean_fluc_d, v_mean_fluc_d = gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, m_i, n_i)
 
-        neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_mean_fluc_d, v_mean_fluc_d, m_i, n_i,
-                             mean_tol_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+        val_locations_d = _neighbour_validation(u_d, u_mean_d, u_mean_fluc_d, mean_tol, val_locations_d)
+        val_locations_d = _neighbour_validation(v_d, v_mean_d, v_mean_fluc_d, mean_tol, val_locations_d)
 
     if 'rms_velocity' in validation_method:
+        rms_tol = DTYPE_f(rms_tol) if rms_tol is not None else DEFAULT_VALIDATION_TOLS['rms_tol']
+
         u_mean_d, v_mean_d = gpu_mean_vel(neighbours_d, neighbours_present_d, m_i, n_i)
         u_rms_d, v_rms_d = gpu_rms(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d, m_i, n_i)
 
-        neighbour_validation = mod_validation.get_function("neighbour_validation")
-        neighbour_validation(val_locations_d, u_d, v_d, u_mean_d, v_mean_d, u_rms_d, v_rms_d, m_i, n_i, rms_tol_i,
-                             block=(block_size, 1, 1), grid=(grid_size, 1))
+        val_locations_d = _neighbour_validation(u_d, u_mean_d, u_rms_d, rms_tol, val_locations_d)
+        val_locations_d = _neighbour_validation(v_d, v_mean_d, v_rms_d, rms_tol, val_locations_d)
 
     return val_locations_d, u_median_d, v_median_d
+
+
+def _local_validation(f_d, tol, val_locations_d=None):
+    """Updates the validation list by checking if the array elements exceed the tolerance."""
+    size_i = f_d.size
+    tol_f = DTYPE_f(tol)
+
+    if val_locations_d is None:
+        val_locations_d = gpuarray.ones_like(f_d)
+
+    mod_validation = SourceModule("""
+    __global__ void validation(int *val_list, float *sig2noise, float s2n_tol, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+
+        val_list[t_idx] = val_list[t_idx] * (sig2noise[t_idx] > s2n_tol);
+    }
+    """)
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    local_validation = mod_validation.get_function("local_validation")
+    local_validation(val_locations_d, f_d, tol_f, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+
+    return val_locations_d
+
+
+def _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, tol, val_locations_d=None):
+    """Updates the validation list by checking if the neighbouring elements exceed the tolerance."""
+    size_i = DTYPE_i(f_d.size)
+    tol_f = DTYPE_f(tol)
+
+    if val_locations_d is None:
+        val_locations_d = gpuarray.ones_like(f_d)
+
+    mod_validation = SourceModule("""
+    __global__ void neighbour_validation(int *val_list, float *f, float *f_mean, float *f_fluc, float tol, int size)
+    {
+        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (t_idx >= size) {return;}
+
+        // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
+        int f_validation = fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1) < tol;
+
+        val_list[t_idx] = val_list[t_idx] * f_validation;
+    }
+    """)
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    neighbour_validation = mod_validation.get_function("neighbour_validation")
+    neighbour_validation(val_locations_d, f_d, f_mean_d, f_mean_fluc_d, tol_f, size_i, block=(block_size, 1, 1),
+                         grid=(grid_size, 1))
+
+    return val_locations_d
 
 
 def gpu_find_neighbours(n_row, n_col):
@@ -194,7 +216,7 @@ def gpu_find_neighbours(n_row, n_col):
     return neighbours_present_d
 
 
-def gpu_get_neighbours(d_u, d_v, n_row, n_col):
+def _gpu_get_neighbours(d_u, d_v, n_row, n_col):
     """An array that stores the values of the velocity of the neighbours around it.
 
     Parameters
