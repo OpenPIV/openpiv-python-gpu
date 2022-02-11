@@ -147,9 +147,7 @@ def _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, tol, val_locations_d=Non
         if (t_idx >= size) {return;}
 
         // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-        int f_validation = fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1) < tol;
-
-        val_list[t_idx] = val_list[t_idx] * f_validation;
+        val_list[t_idx] = val_list[t_idx] * (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1) < tol);
     }
     """)
     block_size = 32
@@ -238,7 +236,7 @@ def _gpu_get_neighbours(d_u, d_v):
     m, n = d_u.shape
     size_i = DTYPE_i(d_u.size)
 
-    neighbours_d = gpuarray.zeros((m, n, 2, 3, 3), dtype=DTYPE_f)
+    neighbours_d = gpuarray.empty((m, n, 2, 3, 3), dtype=DTYPE_f)
 
     neighbours_present_d = _gpu_find_neighbours((m, n))
 
@@ -256,7 +254,7 @@ def _gpu_get_neighbours(d_u, d_v):
         if (np[t_idx * 9 + 2]) {nb[t_idx * 18 + 2] = u[t_idx - n + 1];}
 
         if (np[t_idx * 9 + 3]) {nb[t_idx * 18 + 3] = u[t_idx - 1];}
-        // nb[t_idx * 18 + 4] = 0.0;
+        nb[t_idx * 18 + 4] = 0;
         if (np[t_idx * 9 + 5]) {nb[t_idx * 18 + 5] = u[t_idx + 1];}
 
         if (np[t_idx * 9 + 6]) {nb[t_idx * 18 + 6] = u[t_idx + n - 1];}
@@ -277,7 +275,7 @@ def _gpu_get_neighbours(d_u, d_v):
         if (np[t_idx * 9 + 2]) {nb[t_idx * 18 + 11] = v[t_idx - n + 1];}
 
         if (np[t_idx * 9 + 3]) {nb[t_idx * 18 + 12] = v[t_idx - 1];}
-        // nb[t_idx * 18 + 13] = 0.0;
+        nb[t_idx * 18 + 13] = 0;
         if (np[t_idx * 9 + 5]) {nb[t_idx * 18 + 14] = v[t_idx + 1];}
 
         if (np[t_idx * 9 + 6]) {nb[t_idx * 18 + 15] = v[t_idx + n - 1];}
@@ -315,8 +313,9 @@ def _gpu_median_velocity(neighbours_d, neighbours_present_d):
     """
     m, n, _, _, _ = neighbours_d.shape
     size_i = DTYPE_i(m * n)
-    u_median_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
-    v_median_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
+
+    u_median_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    v_median_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_median_vel = SourceModule("""
     // device-side function to swap elements of two arrays
@@ -399,8 +398,8 @@ def _gpu_median_velocity(neighbours_d, neighbours_present_d):
 
     __global__ void v_median_velocity(float *v_median, float *nb, int *np, int size)
     {
-        // n : value of neighbours
-        // np : neighbours present
+        // nb - values of the neighbouring points
+        // np - 1 if there is a neighbour, 0 if no neighbour
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
 
@@ -461,8 +460,8 @@ def _gpu_median_fluc(d_neighbours, d_neighbours_present, d_u_median, d_v_median)
     m, n = d_u_median.shape
     size_i = DTYPE_i(d_u_median.size)
 
-    u_median_fluc_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
-    v_median_fluc_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
+    u_median_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    v_median_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_median_fluc = SourceModule("""
     // device-side function to swap elements of two arrays
@@ -610,8 +609,8 @@ def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
     m, n, _, _, _ = neighbours_d.shape
     size_i = DTYPE_i(m * n)
 
-    u_mean_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
-    v_mean_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
+    u_mean_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    v_mean_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_mean_vel = SourceModule("""
     __global__ void u_mean_velocity(float *u_mean, float *nb, int *np, int size)
@@ -621,15 +620,17 @@ def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
 
-        // ensure denominator is not zero then compute mean
-        float numerator_u = nb[t_idx * 18 + 0] + nb[t_idx * 18 + 1] + nb[t_idx * 18 + 2] + nb[t_idx * 18 + 3]
-                            + nb[t_idx * 18 + 5] + nb[t_idx * 18 + 6] + nb[t_idx * 18 + 7] + nb[t_idx * 18 + 8];
-
         // mean is normalized by number of terms summed
         float denominator = np[t_idx * 9 + 0] + np[t_idx * 9 + 1] + np[t_idx * 9 + 2] + np[t_idx * 9 + 3]
                             + np[t_idx * 9 + 5] + np[t_idx * 9 + 6] + np[t_idx * 9 + 7] + np[t_idx * 9 + 8];
 
-        u_mean[t_idx] = numerator_u / denominator;
+        // ensure denominator is not zero then compute mean
+        if (denominator > 0) {
+            float numerator_u = nb[t_idx * 18 + 0] + nb[t_idx * 18 + 1] + nb[t_idx * 18 + 2] + nb[t_idx * 18 + 3]
+                                + nb[t_idx * 18 + 5] + nb[t_idx * 18 + 6] + nb[t_idx * 18 + 7] + nb[t_idx * 18 + 8];
+
+            u_mean[t_idx] = numerator_u / denominator;
+        } else {u_mean[t_idx] = 0;}
     }
 
     __global__ void v_mean_velocity(float *v_mean, float *nb, int *np, int size)
@@ -639,15 +640,17 @@ def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
 
-        // ensure denominator is not zero then compute mean
-        float numerator_v = nb[t_idx * 18 + 9] + nb[t_idx * 18 + 10] + nb[t_idx * 18 + 11] + nb[t_idx * 18 + 12]
-                            + nb[t_idx * 18 + 14] + nb[t_idx * 18 + 15] + nb[t_idx * 18 + 16] + nb[t_idx * 18 + 17];
-
         // mean is normalized by number of terms summed
         float denominator = np[t_idx * 9 + 0] + np[t_idx * 9 + 1] + np[t_idx * 9 + 2] + np[t_idx * 9 + 3]
                             + np[t_idx * 9 + 5] + np[t_idx * 9 + 6] + np[t_idx * 9 + 7] + np[t_idx * 9 + 8];
 
-        v_mean[t_idx] = numerator_v / denominator;
+        // ensure denominator is not zero then compute mean
+        if (denominator > 0) {
+            float numerator_v = nb[t_idx * 18 + 9] + nb[t_idx * 18 + 10] + nb[t_idx * 18 + 11] + nb[t_idx * 18 + 12]
+                                + nb[t_idx * 18 + 14] + nb[t_idx * 18 + 15] + nb[t_idx * 18 + 16] + nb[t_idx * 18 + 17];
+
+            v_mean[t_idx] = numerator_v / denominator;
+        } else {v_mean[t_idx] = 0;}
     }
     """)
     block_size = 32
@@ -680,8 +683,8 @@ def _gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d):
     m, n = u_mean_d.shape
     size_i = DTYPE_i(u_mean_d.size)
 
-    u_fluc_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
-    v_fluc_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
+    u_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    v_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_mean_fluc = SourceModule("""
     __global__ void u_fluc_k(float *u_fluc, float *u_mean, float *nb, int *np, int size)
@@ -691,17 +694,19 @@ def _gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d):
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
 
-        // ensure denominator is not zero then compute fluctuations
-        float numerator = fabsf(nb[t_idx * 18 + 0] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 1] - u_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 2] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 3] - u_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 5] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 6] - u_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 7] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 8] - u_mean[t_idx]);
-
         // mean is normalized by number of terms summed
         float denominator = np[t_idx * 9 + 0] + np[t_idx * 9 + 1] + np[t_idx * 9 + 2] + np[t_idx * 9 + 3]
                             + np[t_idx * 9 + 5] + np[t_idx * 9 + 6] + np[t_idx * 9 + 7] + np[t_idx * 9 + 8];
 
-        u_fluc[t_idx] = numerator / denominator;
+        // ensure denominator is not zero then compute fluctuations
+        if (denominator > 0) {
+            float numerator = fabsf(nb[t_idx * 18 + 0] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 1] - u_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 2] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 3] - u_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 5] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 6] - u_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 7] - u_mean[t_idx]) + fabsf(nb[t_idx * 18 + 8] - u_mean[t_idx]);
+
+            u_fluc[t_idx] = numerator / denominator;
+        } else {u_fluc[t_idx] = 0;}
     }
 
     __global__ void v_fluc_k(float *v_fluc, float *v_mean, float *nb, int *np, int size)
@@ -711,17 +716,19 @@ def _gpu_mean_fluc(neighbours_d, neighbours_present_d, u_mean_d, v_mean_d):
         int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (t_idx >= size) {return;}
 
-        // ensure denominator is not zero then compute fluctuations
-        float numerator = fabsf(nb[t_idx * 18 + 9] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 10] - v_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 11] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 12] - v_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 14] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 15] - v_mean[t_idx])
-                          + fabsf(nb[t_idx * 18 + 16] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 17] - v_mean[t_idx]);
-
         // mean is normalized by number of terms summed
         float denominator = np[t_idx * 9 + 0] + np[t_idx * 9 + 1] + np[t_idx * 9 + 2] + np[t_idx * 9 + 3]
                             + np[t_idx * 9 + 5] + np[t_idx * 9 + 6] + np[t_idx * 9 + 7] + np[t_idx * 9 + 8];
 
-        v_fluc[t_idx] = numerator / denominator;
+        // ensure denominator is not zero then compute fluctuations
+        if (denominator > 0) {
+            float numerator = fabsf(nb[t_idx * 18 + 9] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 10] - v_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 11] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 12] - v_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 14] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 15] - v_mean[t_idx])
+                              + fabsf(nb[t_idx * 18 + 16] - v_mean[t_idx]) + fabsf(nb[t_idx * 18 + 17] - v_mean[t_idx]);
+
+            v_fluc[t_idx] = numerator / denominator;
+        } else {v_fluc[t_idx] = 0;}
     }
     """)
     block_size = 32
@@ -757,8 +764,8 @@ def _gpu_rms(d_neighbours, d_neighbours_present, d_u_mean, d_v_mean):
     m, n = d_u_mean.shape
     size_i = DTYPE_i(d_u_mean.size)
 
-    u_rms_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
-    v_rms_d = gpuarray.zeros((m, n), dtype=DTYPE_f)
+    u_rms_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    v_rms_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_rms = SourceModule("""
     __global__ void u_rms_k(float *u_rms, float *u_mean, float *nb, int *np, int size)
@@ -846,7 +853,7 @@ def __gpu_divergence(u_d, v_d, w):
     m, n = DTYPE_i(u_d.shape)
     size_i = DTYPE_i(u_d.size)
 
-    div_d = np.empty_like(u_d, dtype=DTYPE_f)
+    div_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     mod_div = SourceModule("""
     __global__ void div_k(float *div, float *u, float *v, float ws, int m, int n, int size)
