@@ -167,13 +167,11 @@ class GPUCorrelation:
             'Mask width must be integer from 0 and to less than half the correlation window height or width. ' \
             'Recommended value is 2.'
 
-        # Set all negative values to zero.
+        # Set all negative values in correlation peak to zero.
         correlation_positive_d = self.correlation_d * (self.correlation_d > 1e-3)
 
         # TODO SRP violation.
         # TODO simplify by doing 2 * log
-        # TODO negative corr_peaks?
-        # TODO compute corr peak here rather than in other find_peak method?
         # Compute signal-to-noise ratio by the chosen method.
         if method == 'peak2mean':
             corr_max1_d = self.corr_peak1_d ** 2
@@ -509,6 +507,7 @@ class PIVGPU:
         Main method to process image pairs.
 
     """
+
     def __init__(self,
                  frame_shape,
                  window_size_iters=(1, 2),
@@ -738,7 +737,6 @@ class PIVGPU:
 
         for i in range(self.nb_validation_iter):
             # Get list of places that need to be validated.
-            # TODO validation should be done on one field at a time
             val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self.sig2noise_d, self.validation_method,
                                                                  s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                                                  mean_tol=self.mean_tol, rms_tol=self.rms_tol)
