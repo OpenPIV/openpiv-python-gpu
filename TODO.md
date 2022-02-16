@@ -34,6 +34,8 @@
   - [ ] use shared memory for GPU kernels
   - [x] confirm if to_gpu() is faster than gpuarray.zeros()
   - [x] optimize masking the input frames
+  - [x] move kernel compilation out from functions
+  - [x] break global functions into device functions
 
 - [ ] correlation class
   - [x] reduce operations outside of CUDA kernels in iw_arrange()

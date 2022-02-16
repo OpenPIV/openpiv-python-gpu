@@ -14,7 +14,6 @@ from imageio import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
-import openpiv.gpu_validation_new as gpu_validation
 import openpiv.gpu_misc as gpu_misc
 from openpiv.gpu_smoothn import smoothn
 
