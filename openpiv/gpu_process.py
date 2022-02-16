@@ -1239,7 +1239,7 @@ def _window_slice(frame_d, window_size, spacing, buffer):
     return win_d
 
 
-def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, shift_d, strain_d=None):
+def _window_slice_deform(frame_d, window_size, spacing, buffer, dt, shift_d, strain_d=None):
     """Creates a 3D array stack of all the interrogation windows using shift and strain.
 
     Parameters
@@ -1252,7 +1252,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         Spacing between vectors of the velocity field.
     buffer : int
         Spacing from left/top vectors to edge of frame.
-    shift_factor : float
+    dt : float
         Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
         stationary. This is applied to the deformation in an analogous way.
     shift_d : GPUArray
@@ -1278,10 +1278,10 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
 
     mod_ws = SourceModule("""
-    __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float f,
+    __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float dt,
                         const int do_deform, int ws, int spacing, int buffer, int n_windows, int n, int wd, int ht)
     {
-        // f : factor to apply to the shift and strain tensors
+        // dt : factor to apply to the shift and strain tensors
         // wd : width (number of columns in the full image)
         // ht : height (number of rows in the full image)
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -1291,37 +1291,37 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
         if (idx_x >= ws || idx_y >= ws) {return;}
 
         // Get the shift values.
-        float shift_x = shift[idx_i];
-        float shift_y = shift[n_windows + idx_i];
+        float u = shift[idx_i];
+        float v = shift[n_windows + idx_i];
         float dx;
         float dy;
 
         if (do_deform) {
             // Get the strain tensor values.
-            float u_x = strain[idx_i];
-            float u_y = strain[n_windows + idx_i];
-            float v_x = strain[2 * n_windows + idx_i];
-            float v_y = strain[3 * n_windows + idx_i];
+            float du_dx = strain[idx_i];
+            float du_dy = strain[n_windows + idx_i];
+            float dv_dx = strain[2 * n_windows + idx_i];
+            float dv_dy = strain[3 * n_windows + idx_i];
     
             // Compute the window vector.
-            float r_x = idx_x - ws / 2 + 0.5;  // r_x = x - x_c
-            float r_y = idx_y - ws / 2 + 0.5;  // r_y = y - y_c
+            float r_x = idx_x - ws / 2 + 0.5;
+            float r_y = idx_y - ws / 2 + 0.5;
     
             // Compute the deform.
-            float deform_x = r_x * u_x + r_y * u_y; // du_dr = dx_dr * du_dx + dy_dr * du_dy
-            float deform_y = r_x * v_x + r_y * v_y; // dv_dr = dx_dr * dv_dx + dy_dr * dv_dy
+            float du = r_x * du_dx + r_y * du_dy;
+            float dv = r_x * dv_dx + r_y * dv_dy;
     
             // Apply shift and deformation operations.
-            dx = idx_x + (shift_x + deform_x) * f;  // dx = (r * du_dr + u) * dt
-            dy = idx_y + (shift_y + deform_y) * f;  // dy = (r * dv_dr + v) * dt
+            dx = (u + du) * dt;
+            dy = (v + dv) * dt;
         } else {
-            dx = idx_x + shift_x * f;
-            dy = idx_y + shift_y * f;
+            dx = u * dt;
+            dy = v * dt;
         }
 
         // Do the mapping
-        float x = (idx_i % n) * spacing + buffer + dx;
-        float y = (idx_i / n) * spacing + buffer + dy;
+        float x = (idx_i % n) * spacing + buffer + idx_x + dx;
+        float y = (idx_i / n) * spacing + buffer + idx_y + dy;
 
         // Do bilinear interpolation.
         int x1 = floorf(x);
@@ -1351,7 +1351,7 @@ def _window_slice_deform(frame_d, window_size, spacing, buffer, shift_factor, sh
     block_size = 8
     grid_size = ceil(window_size / block_size)
     window_slice_deform = mod_ws.get_function('window_slice_deform')
-    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(shift_factor), do_deform, DTYPE_i(window_size),
+    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
                         DTYPE_i(spacing), DTYPE_i(buffer), DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd), DTYPE_i(ht),
                         block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
 
@@ -1522,8 +1522,8 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
     mod_subpixel_approximation = SourceModule("""
-    __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                        int n_windows, int ht, int wd, int ws)
+    __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                        int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1536,7 +1536,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         float c = corr[ws * w_idx + wd * row + col];
         int non_zero = c > 0;
 
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window sedges
+        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
         } else {
             float cd = corr[ws * w_idx + wd * (row - 1) + col];
             float cu = corr[ws * w_idx + wd * (row + 1) + col];
@@ -1547,7 +1547,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
             } else {row_sp[w_idx] = row;}
         }
 
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window sedges
+        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
         } else {
             float cl = corr[ws * w_idx + wd * row + col - 1];
             float cr = corr[ws * w_idx + wd * row + col + 1];
@@ -1559,8 +1559,8 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         }
     }
     
-    __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                        int n_windows, int ht, int wd, int ws)
+    __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                        int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1572,14 +1572,14 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         int col = col_p[w_idx];
         float c = corr[ws * w_idx + wd * row + col];
 
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window sedges
+        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
         } else {
             float cd = corr[ws * w_idx + wd * (row - 1) + col];
             float cu = corr[ws * w_idx + wd * (row + 1) + col];
             row_sp[w_idx] = row + 0.5 * (cd - cu) / (cd - 2 * c + cu + small);
         }
 
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window sedges
+        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
         } else {
             float cl = corr[ws * w_idx + wd * row + col - 1];
             float cr = corr[ws * w_idx + wd * row + col + 1];
@@ -1587,8 +1587,8 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         }
     }
     
-    __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr,
-                        int n_windows, int ht, int wd, int ws)
+    __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                        int wd, int ws)
     {
         // x blocks are windows; y and z blocks are x and y dimensions, respectively.
         int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1601,7 +1601,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         float c = corr[ws * w_idx + wd * row + col];
         int non_zero = c > 0;
 
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window sedges
+        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
         } else {
             float cd = corr[ws * w_idx + wd * (row - 1) + col];
             float cu = corr[ws * w_idx + wd * (row + 1) + col];
@@ -1612,7 +1612,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
             } else {row_sp[w_idx] = row;}
         }
 
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window sedges
+        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
         } else {
             float cl = corr[ws * w_idx + wd * row + col - 1];
             float cr = corr[ws * w_idx + wd * row + col + 1];
