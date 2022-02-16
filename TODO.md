@@ -48,6 +48,11 @@
 - [x] reduce the number of temporary gpu arrays created
 - [x] make consistent the strain and shift array arguments in the correlation function
 - [ ] flatten the 3D kernel indexing to 2D
+- [ ] use at least 64 threads per block
+- [ ] limit use of braching execution paths in same warp
+- [ ] explicitly define float type literals to avoid casting down from double
+- [ ] use const int literals
+- [ ] ensure memory accesses are coherent
 
 ## Features
 - [x] dismantle the F-structure so that others can more easily contribute

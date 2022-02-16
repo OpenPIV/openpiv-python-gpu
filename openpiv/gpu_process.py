@@ -31,7 +31,7 @@ with warnings.catch_warnings():
 
 from openpiv.gpu_validation import gpu_validation
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i, gpu_remove_nan_f
+from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 cumisc.init()
@@ -128,17 +128,18 @@ class GPUCorrelation:
         self.correlation_d = self._correlate_windows(win_a_d, win_b_d)
 
         # Get first peak of correlation.
-        self.row_peak_d, self.col_peak_d, self.corr_peak1_d = self._find_peak(self.correlation_d)
+        self.row_peak_d, self.col_peak_d, self.corr_peak1_d = _find_peak(self.correlation_d)
+        self._check_zero_correlation()
 
         # Get the subpixel location.
         row_sp_d, col_sp_d = _gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d,
                                                          self.subpixel_method)
 
-        # # Center the peak displacement.
-        i_peak = (row_sp_d - DTYPE_f(self.fft_ht // 2)).reshape(self.field_shape)
-        j_peak = (col_sp_d - DTYPE_f(self.fft_wd // 2)).reshape(self.field_shape)
+        # Center the peak displacement.
+        i_peak = row_sp_d - DTYPE_f(self.fft_ht // 2)
+        j_peak = col_sp_d - DTYPE_f(self.fft_wd // 2)
 
-        return i_peak, j_peak
+        return i_peak.reshape(self.field_shape), j_peak.reshape(self.field_shape)
 
     def get_sig2noise(self, method='peak2peak', mask_width=2):
         """Computes the signal-to-noise ratio using one of three available methods.
@@ -167,31 +168,19 @@ class GPUCorrelation:
             'Mask width must be integer from 0 and to less than half the correlation window height or width. ' \
             'Recommended value is 2.'
 
-        # Set all negative values in correlation peak to zero.
-        correlation_positive_d = self.correlation_d * (self.correlation_d > 1e-3)
+        # Set all negative values in correlation peaks to zero.
+        corr_peak1_d = self.corr_peak1_d * (self.corr_peak1_d > 1e-3)
 
-        # TODO SRP violation.
-        # TODO simplify by doing 2 * log
         # Compute signal-to-noise ratio by the chosen method.
         if method == 'peak2mean':
-            corr_max1_d = self.corr_peak1_d ** 2
-            correlation_rms_d = _gpu_mask_rms(correlation_positive_d, self.corr_peak1_d) ** 2
-            corr_reshape = correlation_rms_d.reshape(self.n_windows, self.fft_size)
-            corr_max2_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(self.fft_size)
+            sig2noise_d = _peak2mean(self.correlation_d, corr_peak1_d)
         elif method == 'peak2energy':
-            corr_max1_d = self.corr_peak1_d ** 2
-            correlation_energy_d = correlation_positive_d ** 2
-            corr_reshape = correlation_energy_d.reshape(self.n_windows, self.fft_size)
-            corr_max2_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(self.fft_size)
+            sig2noise_d = _peak2energy(self.correlation_d, corr_peak1_d)
         else:
-            corr_max1_d = self.corr_peak1_d
-            corr_max2_d = self._find_second_peak_height(correlation_positive_d, mask_width)
+            corr_peak2_d = self._get_second_peak_height(self.correlation_d, mask_width)
+            sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
 
-        # Get signal-to-noise ratio.
-        sig2noise_d = cumath.log10(corr_max1_d / corr_max2_d).reshape(self.field_shape)
-        gpu_remove_nan_f(sig2noise_d)
-
-        return sig2noise_d
+        return sig2noise_d.reshape(self.field_shape)
 
     def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d=None):
         """Creates a 3D array stack of all the interrogation windows.
@@ -259,45 +248,18 @@ class GPUCorrelation:
         win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape, (size0_b, size1_b))
 
         corr_d = gpu_cross_correlate(win_a_zp_d, win_b_zp_d)
+
         return gpu_fft_shift(corr_d)
 
-    def _find_peak(self, corr_d):
-        """Find the row and column of the highest peak in correlation function.
+    def _check_zero_correlation(self):
+        """Sets the row and column to the center if the correlation peak is near zero."""
+        non_zero_peak_d = (self.corr_peak1_d > 1e-3).astype(DTYPE_i)
+        zero_peak_replacement_d = (1 - non_zero_peak_d) * DTYPE_i(self.fft_wd / 2)
 
-        Parameters
-        ----------
-        corr_d : GPUArray
-            3D float, image of the correlation function.
+        self.row_peak_d = self.row_peak_d * non_zero_peak_d + zero_peak_replacement_d
+        self.col_peak_d = self.col_peak_d * non_zero_peak_d + zero_peak_replacement_d
 
-        Returns
-        -------
-        row_peak : GPUArray
-            1D int, row position of corr peak.
-        col_peak : GPUArray
-            1D int, column position of corr peak.
-        max_peak : GPUArray
-            1D int, flattened index of corr peak.
-
-        """
-        w = DTYPE_i(self.fft_wd / 2)
-
-        # Get index and value of peak.
-        corr_reshape_d = corr_d.reshape(int(self.n_windows), int(self.fft_size))
-        peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
-        peak_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
-
-        # Row and column information of peak.
-        row_peak_d, col_peak_d = gpu_scalar_mod_i(peak_idx_d, self.fft_wd)
-
-        # Return the center if the correlation peak is near zero.
-        zero_peak_inverse_d = (peak_d > 1e-3).astype(DTYPE_i)
-        zero_peak_d = (1 - zero_peak_inverse_d) * w
-        row_peak_d = row_peak_d * zero_peak_inverse_d + zero_peak_d
-        col_peak_d = col_peak_d * zero_peak_inverse_d + zero_peak_d
-
-        return row_peak_d, col_peak_d, peak_d
-
-    def _find_second_peak_height(self, correlation_positive_d, mask_width):
+    def _get_second_peak_height(self, correlation_positive_d, mask_width):
         """Find the value of the second-largest peak.
 
         The second-largest peak is the height of the peak in the region outside a "width * width" submatrix around
@@ -316,11 +278,13 @@ class GPUCorrelation:
             Value of the second correlation peak for each interrogation window.
 
         """
+        assert self.row_peak_d is not None and self.col_peak_d is not None
+
         # Set points around the first peak to zero.
         correlation_masked_d = _gpu_mask_peak(correlation_positive_d, self.row_peak_d, self.col_peak_d, mask_width)
 
         # Get the height of the second peak of correlation.
-        _, _, corr_max2_d = self._find_peak(correlation_masked_d)
+        _, _, corr_max2_d = _find_peak(correlation_masked_d)
 
         return corr_max2_d
 
@@ -615,7 +579,7 @@ class PIVGPU:
                 u_d, v_d = self._validate_fields(u_d, v_d, u_previous_d, v_previous_d, k)
 
             # NEXT ITERATION
-            # Go to next iteration: compute the predictors dpx and dpy from the current displacements.
+            # Compute the predictors dpx and dpy from the current displacements.
             if k < self.nb_iter_max - 1:
                 u_previous_d = u_d
                 v_previous_d = v_d
@@ -1493,6 +1457,37 @@ def _gpu_window_index_f(src_d, indices_d):
     return dest_d
 
 
+def _find_peak(correlation_d):
+    """Find the row and column of the highest peak in correlation function.
+
+    Parameters
+    ----------
+    correlation_d : GPUArray
+        3D float, image of the correlation function.
+
+    Returns
+    -------
+    row_peak : GPUArray
+        1D int, row position of corr peak.
+    col_peak : GPUArray
+        1D int, column position of corr peak.
+    max_peak : GPUArray
+        1D int, flattened index of corr peak.
+
+    """
+    n_windows, wd, ht = correlation_d.shape
+
+    # Get index and value of peak.
+    corr_reshape_d = correlation_d.reshape(n_windows, wd * ht)
+    peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
+    peak_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
+
+    # Row and column information of peak.
+    row_peak_d, col_peak_d = gpu_scalar_mod_i(peak_idx_d, wd)
+
+    return row_peak_d, col_peak_d, peak_d
+
+
 def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     """Returns the subpixel position of the peaks using gaussian approximation.
 
@@ -1606,8 +1601,6 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
             float cd = corr[ws * w_idx + wd * (row - 1) + col];
             float cu = corr[ws * w_idx + wd * (row + 1) + col];
             if (cd > 0 && cu > 0 && non_zero) {
-                cd = logf(cd);
-                cu = logf(cu);
                 row_sp[w_idx] = row + 0.5 * (cu - cd) / (cd + c + cu + small);
             } else {row_sp[w_idx] = row;}
         }
@@ -1617,8 +1610,6 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
             float cl = corr[ws * w_idx + wd * row + col - 1];
             float cr = corr[ws * w_idx + wd * row + col + 1];
             if (cl > 0 && cr > 0 && non_zero) {
-                cl = logf(cl);
-                cr = logf(cr);
                 col_sp[w_idx] = col + 0.5 * (cr - cl) / (cl + c + cr + small);
             } else {col_sp[w_idx] = col;}
         }
@@ -1640,6 +1631,41 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
                                DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return row_sp_d, col_sp_d
+
+
+def _peak2mean(correlation_d, corr_peak1_d):
+    """Returns the mean-energy measure of the signal-to-noise-ratio."""
+    correlation_rms_d = _gpu_mask_rms(correlation_d, corr_peak1_d)
+    return _peak2energy(correlation_rms_d, corr_peak1_d)
+
+
+def _peak2energy(correlation_d, corr_peak1_d):
+    """Returns the RMS-measure of the signal-to-noise-ratio."""
+    _check_inputs(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_inputs(corr_peak1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=correlation_d.shape[0])
+    n_windows, wd, ht = correlation_d.shape
+    window_size = wd * ht
+
+    # Remove negative correlation values.
+    correlation_d = correlation_d * (correlation_d > 1e-3) + 1e-20
+
+    corr_reshape = correlation_d.reshape(n_windows, window_size)
+    corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
+    sig2noise_d = 2 * cumath.log10(corr_peak1_d / corr_mean_d)
+
+    return sig2noise_d
+
+
+def _peak2peak(corr_peak1_d, corr_peak2_d):
+    """Returns the peak-to-peak measure of the signal-to-noise-ratio."""
+    _check_inputs(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
+
+    # Remove negative peaks.
+    corr_peak2_d = corr_peak2_d * (corr_peak2_d > 1e-3) + 1e-20
+
+    sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
+
+    return sig2noise_d
 
 
 def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
@@ -1701,7 +1727,7 @@ def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
 
 
 def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
-    """Returns correlation windows with values less than the primary peak.
+    """Returns correlation windows with values greater than half the primary peak height zeroed.
 
     Parameters
     ----------
@@ -1817,7 +1843,8 @@ def _gpu_replace_vectors(x1_d, y1_d, x0_d, y0_d, u_d, v_d, u_previous_d, v_previ
         2D float, velocity fields with replaced vectors.
 
     """
-    val_locations_d = val_locations_d.astype(DTYPE_f)
+    _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+
     val_locations_inverse_d = 1 - val_locations_d
 
     # First iteration, just replace with mean velocity.
