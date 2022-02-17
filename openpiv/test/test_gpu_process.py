@@ -174,7 +174,6 @@ def test_gpu_ftt_shift():
 
 
 def test_mask_peak():
-    n_windows, ht, wd = _test_size_small_stack
     correlation_stack, correlation_stack_d = generate_cpu_gpu_pair(_test_size_small_stack)
 
     row_peak_d = gpuarray.to_gpu(np.arange(_test_size_small_stack[0], dtype=DTYPE_i))
@@ -268,6 +267,34 @@ def test_gpu_piv_zero(image_size):
 
     assert np.allclose(u, 0, _identity_tolerance)
     assert np.allclose(v, 0, _identity_tolerance)
+
+
+def test_extended_search_area():
+    """Inputs every s2n method to ensure they don't error out."""
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'extend_ratio': 2
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+    assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance
+    assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
+
+
+def test_asymmetric_windows():
+    pass
+
+
+def test_odd_windows():
+    pass
 
 
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
