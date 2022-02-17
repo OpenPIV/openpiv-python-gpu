@@ -180,7 +180,7 @@ def smoothn(
     nof = is_finite.sum()  # number of finite elements
     w = w * is_finite
     if np.any(w < 0):
-        raise Exception("Weights must all be >=0")
+        raise Exception('Weights must all be >=0')
     else:
         # W = W/np.max(W)
         pass
@@ -432,12 +432,12 @@ def robust_weights(r, i, h, w_str):
 def dct_nd(data, f=dct):
     nd = len(data.shape)
     if nd == 1:
-        return f(data, norm="ortho", type=2)
+        return f(data, norm='ortho', type=2)
     elif nd == 2:
-        return f(f(data, norm="ortho", type=2).T, norm="ortho", type=2).T
+        return f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T
     elif nd == 3:
         return f(
-            f(f(data, norm="ortho", type=2, axis=0), norm="ortho", type=2, axis=1), norm="ortho", type=2, axis=2)
+            f(f(data, norm='ortho', type=2, axis=0), norm='ortho', type=2, axis=1), norm='ortho', type=2, axis=2)
 
 
 def gpu_forward_fft(data_d, norm='backward'):
