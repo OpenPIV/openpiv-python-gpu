@@ -31,7 +31,7 @@ with warnings.catch_warnings():
 
 from openpiv.gpu_validation import gpu_validation
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i
+from openpiv.gpu_misc import _check_inputs, gpu_scalar_mod_i, gpu_remove_nan_f
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 cumisc.init()
@@ -170,7 +170,7 @@ class GPUCorrelation:
             'Recommended value is 2.'
 
         # Set all negative values in correlation peaks to zero.
-        corr_peak1_d = self.corr_peak1_d * (self.corr_peak1_d > DTYPE_f(1e-3))
+        corr_peak1_d = self.corr_peak1_d * (self.corr_peak1_d > DTYPE_f(0))
 
         # Compute signal-to-noise ratio by the chosen method.
         if method == 'peak2mean':
@@ -180,6 +180,8 @@ class GPUCorrelation:
         else:
             corr_peak2_d = self._get_second_peak_height(self.correlation_d, mask_width)
             sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
+
+        gpu_remove_nan_f(sig2noise_d)
 
         return sig2noise_d.reshape(self.field_shape)
 
@@ -1661,7 +1663,7 @@ def _peak2energy(correlation_d, corr_peak1_d):
     window_size = wd * ht
 
     # Remove negative correlation values.
-    correlation_d = correlation_d * (correlation_d > DTYPE_f(1e-3)) + DTYPE_f(1e-20)
+    correlation_d = correlation_d * (correlation_d > DTYPE_f(0))
 
     corr_reshape = correlation_d.reshape(n_windows, window_size)
     corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
@@ -1675,7 +1677,7 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     _check_inputs(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
 
     # Remove negative peaks.
-    corr_peak2_d = corr_peak2_d * (corr_peak2_d > DTYPE_f(1e-3)) + DTYPE_f(1e-20)
+    corr_peak2_d = corr_peak2_d * (corr_peak2_d > DTYPE_f(0))
 
     sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
 
