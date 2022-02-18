@@ -246,7 +246,7 @@ class GPUCorrelation:
         win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, offset=offset)
         win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape)
 
-        corr_d = cross_correlate(win_a_zp_d, win_b_zp_d)
+        corr_d = _cross_correlate(win_a_zp_d, win_b_zp_d)
 
         return gpu_fft_shift(corr_d)
 
@@ -851,6 +851,18 @@ def get_field_coords(field_shape, window_size, spacing):
     return x, y
 
 
+mod_mask = SourceModule("""
+__global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
+{
+    // frame_masked : output argument
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    frame_masked[t_idx] = frame[t_idx] * mask[t_idx];
+}
+""")
+
+
 def gpu_mask(f_d, mask_d):
     """Mask a float-type array with an int type-array.
 
@@ -873,22 +885,55 @@ def gpu_mask(f_d, mask_d):
 
     frame_masked_d = gpuarray.empty_like(mask_d, dtype=DTYPE_f)
 
-    mod_mask = SourceModule("""
-    __global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
-    {
-        // frame_masked : output argument
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        frame_masked[t_idx] = frame[t_idx] * mask[t_idx];
-    }
-    """)
     block_size = 32
     grid_size = ceil(size_i / block_size)
     mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
     mask_frame_gpu(frame_masked_d, f_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return frame_masked_d
+
+
+mod_strain = SourceModule("""
+__global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n)
+{
+    // strain : output argument
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int size = m * n;
+    if (t_idx >= size) {return;}
+    int row = t_idx / n;
+    int col = t_idx % n;
+
+    // x-axis
+    // first column
+    if (col == 0) {
+        strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
+        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
+    // last column
+    } else if (col == n - 1) {
+        strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
+        strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
+    // main body
+    } else {
+        strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
+        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
+    }
+
+    // y-axis
+    // first row
+    if (row == 0) {
+        strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
+        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
+    // last row
+    } else if (row == m - 1) {
+        strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
+        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
+    // main body
+    } else {
+        strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
+        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
+    }
+}
+""")
 
 
 def gpu_strain(u_d, v_d, spacing=1):
@@ -913,47 +958,6 @@ def gpu_strain(u_d, v_d, spacing=1):
     m, n = u_d.shape
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
-    mod_strain = SourceModule("""
-    __global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n)
-    {
-        // strain : output argument
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        int size = m * n;
-        if (t_idx >= size) {return;}
-        int row = t_idx / n;
-        int col = t_idx % n;
-
-        // x-axis
-        // first column
-        if (col == 0) {
-            strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
-            strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
-        // last column
-        } else if (col == n - 1) {
-            strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
-            strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
-        // main body
-        } else {
-            strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
-            strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
-        }
-
-        // y-axis
-        // first row
-        if (row == 0) {
-            strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
-            strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
-        // last row
-        } else if (row == m - 1) {
-            strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
-            strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
-        // main body
-        } else {
-            strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
-            strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
-        }
-    }
-    """)
     block_size = 32
     n_blocks = int((m * n) // block_size + 1)
     strain_gpu = mod_strain.get_function('strain_gpu')
@@ -963,43 +967,25 @@ def gpu_strain(u_d, v_d, spacing=1):
     return strain_d
 
 
-def cross_correlate(win_a_d, win_b_d):
-    """Returns cross-correlation between two stacks of interrogation windows.
+mod_fft_shift = SourceModule("""
+__global__ void fft_shift(float *destination, float *source, int ht, int wd, int ws)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int idx_i = blockIdx.x;
+    int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+    if (idx_x >= wd || idx_y >= ht) {return;}
 
-    The correlation function is computed by using the correlation theorem to speed up the computation.
+    // Compute the mapping.
+    int row_dest = (idx_y + ht / 2) % ht;
+    int col_dest = (idx_x + wd / 2) % wd;
 
-    Parameters
-    ----------
-    win_a_d, win_b_d : GPUArray
-        3D float, stacked window data.
-
-    Returns
-    -------
-    GPUArray
-        3D, outputs of the cross-correlation function.
-
-    """
-    _check_inputs(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
-    n_windows, fft_ht, fft_wd = win_a_d.shape
-
-    win_i_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd), DTYPE_f)
-    win_a_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
-    win_b_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
-
-    # Forward FFTs.
-    plan_forward = cufft.Plan((fft_ht, fft_wd), DTYPE_f, DTYPE_c, batch=n_windows)
-    cufft.fft(win_a_d, win_a_fft_d, plan_forward)
-    cufft.fft(win_b_d, win_b_fft_d, plan_forward)
-
-    # Multiply the FFTs.
-    win_a_fft_d = win_a_fft_d.conj()
-    tmp_d = win_b_fft_d * win_a_fft_d
-
-    # Inverse transform.
-    plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
-    cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
-
-    return win_i_fft_d
+    // Get the source and destination indices.
+    int s_idx = ws * idx_i + wd * idx_y + idx_x;
+    int d_idx = ws * idx_i + wd * row_dest + col_dest;
+    destination[d_idx] = source[s_idx];
+}
+""")
 
 
 def gpu_fft_shift(correlation_d):
@@ -1021,25 +1007,6 @@ def gpu_fft_shift(correlation_d):
 
     correlation_shift_d = gpuarray.empty_like(correlation_d, dtype=DTYPE_f)
 
-    mod_fft_shift = SourceModule("""
-    __global__ void fft_shift(float *destination, float *source, int ht, int wd, int ws)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= wd || idx_y >= ht) {return;}
-
-        // Compute the mapping.
-        int row_dest = (idx_y + ht / 2) % ht;
-        int col_dest = (idx_x + wd / 2) % wd;
-
-        // Get the source and destination indices.
-        int s_idx = ws * idx_i + wd * idx_y + idx_x;
-        int d_idx = ws * idx_i + wd * row_dest + col_dest;
-        destination[d_idx] = source[s_idx];
-    }
-    """)
     block_size = 8
     grid_size = ceil(max(ht, wd) / block_size)
     fft_shift = mod_fft_shift.get_function('fft_shift')
@@ -1047,6 +1014,44 @@ def gpu_fft_shift(correlation_d):
               block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_shift_d
+
+
+mod_interpolate = SourceModule("""
+__global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
+                    float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // Map indices to old mesh coordinates.
+    int x_idx = t_idx % n;
+    int y_idx = t_idx / n;
+    float x = (x_grid[x_idx] - buffer_x) / spacing_x;
+    float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+
+    // Find limits of domain.
+    if (x < 0) {x = 0;
+    } else if (x > wd - 1) {x = wd - 1;}
+    if (y < 0) {y = 0;
+    } else if (y > ht - 1) {y = ht - 1;}
+
+    // Do bilinear interpolation.
+    int x1 = floorf(x);
+    int x2 = x1 + 1;
+    int y1 = floorf(y);
+    int y2 = y1 + 1;
+
+    // Terms of the bilinear interpolation.
+    float f11 = f0[(y1 * wd + x1)];
+    float f21 = f0[(y1 * wd + x2)];
+    float f12 = f0[(y2 * wd + x1)];
+    float f22 = f0[(y2 * wd + x2)];
+
+    // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
+    f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1)
+                * (y - y1);
+}
+""")
 
 
 def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
@@ -1085,42 +1090,6 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
     spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 
-    mod_interpolate = SourceModule("""
-    __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, float *y_grid, float buffer_x,
-                        float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        // Map indices to old mesh coordinates.
-        int x_idx = t_idx % n;
-        int y_idx = t_idx / n;
-        float x = (x_grid[x_idx] - buffer_x) / spacing_x;
-        float y = (y_grid[y_idx] - buffer_y) / spacing_y;
-
-        // Find limits of domain.
-        if (x < 0) {x = 0;
-        } else if (x > wd - 1) {x = wd - 1;}
-        if (y < 0) {y = 0;
-        } else if (y > ht - 1) {y = ht - 1;}
-
-        // Do bilinear interpolation.
-        int x1 = floorf(x);
-        int x2 = x1 + 1;
-        int y1 = floorf(y);
-        int y2 = y1 + 1;
-
-        // Terms of the bilinear interpolation.
-        float f11 = f0[(y1 * wd + x1)];
-        float f21 = f0[(y1 * wd + x2)];
-        float f12 = f0[(y2 * wd + x1)];
-        float f22 = f0[(y2 * wd + x2)];
-
-        // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-        f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1)
-                    * (y - y1);
-    }
-    """)
     block_size = 32
     grid_size = ceil(size_i / block_size)
     interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
@@ -1128,6 +1097,104 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
                     size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return f1_d
+
+
+mod_window_slice = SourceModule("""
+__global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer_x, int buffer_y, int n,
+                    int wd, int ht)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int idx_i = blockIdx.x;
+    int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+    if (idx_x >= ws || idx_y >= ws) {return;}
+
+    // Do the mapping.
+    int x = (idx_i % n) * spacing + buffer_x + idx_x;
+    int y = (idx_i / n) * spacing + buffer_y + idx_y;
+
+    // Indices of new array to map to.
+    int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+    // Find limits of domain.
+    int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
+
+    if (inside_domain) {
+    // Apply the mapping.
+    output[w_range] = input[(y * wd + x)];
+    } else {output[w_range] = 0;}
+}
+
+__global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float dt, int deform,
+                    int ws, int spacing, int buffer_x, int buffer_y, int n_windows, int n, int wd, int ht)
+{
+    // dt : factor to apply to the shift and strain tensors
+    // wd : width (number of columns in the full image)
+    // ht : height (number of rows in the full image)
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int idx_i = blockIdx.x;
+    int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+    if (idx_x >= ws || idx_y >= ws) {return;}
+
+    // Get the shift values.
+    float u = shift[idx_i];
+    float v = shift[n_windows + idx_i];
+    float dx;
+    float dy;
+
+    if (deform) {
+        // Get the strain tensor values.
+        float du_dx = strain[idx_i];
+        float du_dy = strain[n_windows + idx_i];
+        float dv_dx = strain[2 * n_windows + idx_i];
+        float dv_dy = strain[3 * n_windows + idx_i];
+
+        // Compute the window vector.
+        float r_x = idx_x - ws / 2 + 0.5f;
+        float r_y = idx_y - ws / 2 + 0.5f;
+
+        // Compute the deform.
+        float du = r_x * du_dx + r_y * du_dy;
+        float dv = r_x * dv_dx + r_y * dv_dy;
+
+        // Apply shift and deformation operations.
+        dx = (u + du) * dt;
+        dy = (v + dv) * dt;
+    } else {
+        dx = u * dt;
+        dy = v * dt;
+    }
+
+    // Do the mapping
+    float x = (idx_i % n) * spacing + buffer_x + idx_x + dx;
+    float y = (idx_i / n) * spacing + buffer_y + idx_y + dy;
+
+    // Do bilinear interpolation.
+    int x1 = floorf(x);
+    int x2 = x1 + 1;
+    int y1 = floorf(y);
+    int y2 = y1 + 1;
+
+    // Indices of image to map to.
+    int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+
+    // Find limits of domain.
+    int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+
+    if (inside_domain) {
+    // Terms of the bilinear interpolation.
+    float f11 = input[(y1 * wd + x1)];
+    float f21 = input[(y1 * wd + x2)];
+    float f12 = input[(y2 * wd + x1)];
+    float f22 = input[(y2 * wd + x2)];
+
+    // Apply the mapping.
+    output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
+                      * (x - x1) * (y - y1));
+    } else {output[w_range] = 0.0f;}
+}
+""")
 
 
 def _gpu_window_slice(frame_d, window_size, spacing, buffer):
@@ -1162,35 +1229,9 @@ def _gpu_window_slice(frame_d, window_size, spacing, buffer):
 
     win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
 
-    mod_ws = SourceModule("""
-    __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer_x, int buffer_y, int n,
-                        int wd, int ht)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= ws || idx_y >= ws) {return;}
-
-        // Do the mapping.
-        int x = (idx_i % n) * spacing + buffer_x + idx_x;
-        int y = (idx_i / n) * spacing + buffer_y + idx_y;
-
-        // Indices of new array to map to.
-        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-
-        // Find limits of domain.
-        int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
-
-        if (inside_domain) {
-        // Apply the mapping.
-        output[w_range] = input[(y * wd + x)];
-        } else {output[w_range] = 0;}
-    }
-    """)
     block_size = 8
     grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_ws.get_function('window_slice')
+    window_slice_deform = mod_window_slice.get_function('window_slice')
     window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n),
                         DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
                         grid=(int(n_windows), grid_size, grid_size))
@@ -1241,85 +1282,29 @@ def _gpu_window_slice_deform(frame_d, window_size, spacing, buffer, dt, shift_d,
     if not do_deform:
         strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
 
-    mod_ws = SourceModule("""
-    __global__ void window_slice_deform(float *output, float *input, float *shift, float *strain, float dt, int deform,
-                        int ws, int spacing, int buffer_x, int buffer_y, int n_windows, int n, int wd, int ht)
-    {
-        // dt : factor to apply to the shift and strain tensors
-        // wd : width (number of columns in the full image)
-        // ht : height (number of rows in the full image)
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= ws || idx_y >= ws) {return;}
-
-        // Get the shift values.
-        float u = shift[idx_i];
-        float v = shift[n_windows + idx_i];
-        float dx;
-        float dy;
-
-        if (deform) {
-            // Get the strain tensor values.
-            float du_dx = strain[idx_i];
-            float du_dy = strain[n_windows + idx_i];
-            float dv_dx = strain[2 * n_windows + idx_i];
-            float dv_dy = strain[3 * n_windows + idx_i];
-
-            // Compute the window vector.
-            float r_x = idx_x - ws / 2 + 0.5f;
-            float r_y = idx_y - ws / 2 + 0.5f;
-
-            // Compute the deform.
-            float du = r_x * du_dx + r_y * du_dy;
-            float dv = r_x * dv_dx + r_y * dv_dy;
-
-            // Apply shift and deformation operations.
-            dx = (u + du) * dt;
-            dy = (v + dv) * dt;
-        } else {
-            dx = u * dt;
-            dy = v * dt;
-        }
-
-        // Do the mapping
-        float x = (idx_i % n) * spacing + buffer_x + idx_x + dx;
-        float y = (idx_i / n) * spacing + buffer_y + idx_y + dy;
-
-        // Do bilinear interpolation.
-        int x1 = floorf(x);
-        int x2 = x1 + 1;
-        int y1 = floorf(y);
-        int y2 = y1 + 1;
-
-        // Indices of image to map to.
-        int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
-
-        // Find limits of domain.
-        int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-
-        if (inside_domain) {
-        // Terms of the bilinear interpolation.
-        float f11 = input[(y1 * wd + x1)];
-        float f21 = input[(y1 * wd + x2)];
-        float f12 = input[(y2 * wd + x1)];
-        float f22 = input[(y2 * wd + x2)];
-
-        // Apply the mapping.
-        output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-                          * (x - x1) * (y - y1));
-        } else {output[w_range] = 0.0f;}
-    }
-    """)
     block_size = 8
     grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_ws.get_function('window_slice_deform')
+    window_slice_deform = mod_window_slice.get_function('window_slice_deform')
     window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
                         DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd),
                         DTYPE_i(ht), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
 
     return win_d
+
+
+mod_norm = SourceModule("""
+__global__ void normalize(float *array, float *array_norm, float *mean, int iw_size, int size)
+{
+    // global thread id for 1D grid of 2D blocks
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // indices for mean matrix
+    int w_idx = t_idx / iw_size;
+
+    array_norm[t_idx] = array[t_idx] - mean[w_idx];
+}
+""")
 
 
 def _gpu_normalize_intensity(win_d):
@@ -1345,25 +1330,30 @@ def _gpu_normalize_intensity(win_d):
 
     mean_a_d = cumisc.mean(win_d.reshape(n_windows, int(iw_size_i)), axis=1)
 
-    mod_norm = SourceModule("""
-    __global__ void normalize(float *array, float *array_norm, float *mean, int iw_size, int size)
-    {
-        // global thread id for 1D grid of 2D blocks
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        // indices for mean matrix
-        int w_idx = t_idx / iw_size;
-
-        array_norm[t_idx] = array[t_idx] - mean[w_idx];
-    }
-    """)
     block_size = 32
     grid_size = ceil(size_i / block_size)
     normalize = mod_norm.get_function('normalize')
     normalize(win_d, win_norm_d, mean_a_d, iw_size_i, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return win_norm_d
+
+
+mod_zp = SourceModule("""
+__global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, int ht, int wd, int dx, int dy)
+{
+    // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
+    int ind_i = blockIdx.x;
+    int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
+
+    // get range of values to map
+    int data_range = ind_i * ht * wd + wd * ind_y + ind_x;
+    int zp_range = ind_i * fft_ht * fft_wd + fft_wd * (ind_y + dy) + ind_x + dx;
+
+    // apply the map
+    array_zp[zp_range] = array[data_range];
+}
+""")
 
 
 def _gpu_zero_pad(win_d, fft_shape, offset=0):
@@ -1395,22 +1385,6 @@ def _gpu_zero_pad(win_d, fft_shape, offset=0):
 
     win_zp_d = gpuarray.zeros((n_windows, *fft_shape), dtype=DTYPE_f)
 
-    mod_zp = SourceModule("""
-    __global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, int ht, int wd, int dx, int dy)
-    {
-        // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
-        int ind_i = blockIdx.x;
-        int ind_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
-
-        // get range of values to map
-        int data_range = ind_i * ht * wd + wd * ind_y + ind_x;
-        int zp_range = ind_i * fft_ht * fft_wd + fft_wd * (ind_y + dy) + ind_x + dx;
-
-        // apply the map
-        array_zp[zp_range] = array[data_range];
-    }
-    """)
     block_size = 8
     grid_size = ceil(max(wd, ht) / block_size)
     zero_pad = mod_zp.get_function('zero_pad')
@@ -1418,6 +1392,56 @@ def _gpu_zero_pad(win_d, fft_shape, offset=0):
              block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return win_zp_d
+
+
+def _cross_correlate(win_a_d, win_b_d):
+    """Returns cross-correlation between two stacks of interrogation windows.
+
+    The correlation function is computed by using the correlation theorem to speed up the computation.
+
+    Parameters
+    ----------
+    win_a_d, win_b_d : GPUArray
+        3D float, stacked window data.
+
+    Returns
+    -------
+    GPUArray
+        3D, outputs of the cross-correlation function.
+
+    """
+    _check_inputs(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
+    n_windows, fft_ht, fft_wd = win_a_d.shape
+
+    win_i_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd), DTYPE_f)
+    win_a_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
+    win_b_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
+
+    # Forward FFTs.
+    plan_forward = cufft.Plan((fft_ht, fft_wd), DTYPE_f, DTYPE_c, batch=n_windows)
+    cufft.fft(win_a_d, win_a_fft_d, plan_forward)
+    cufft.fft(win_b_d, win_b_fft_d, plan_forward)
+
+    # Multiply the FFTs.
+    win_a_fft_d = win_a_fft_d.conj()
+    tmp_d = win_b_fft_d * win_a_fft_d
+
+    # Inverse transform.
+    plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
+    cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
+
+    return win_i_fft_d
+
+
+mod_index_update = SourceModule("""
+__global__ void window_index_f(float *dest, float *src, int *indices, int ws, int n_windows)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= n_windows) {return;}
+
+    dest[t_idx] = src[t_idx * ws + indices[t_idx]];
+}
+""")
 
 
 def _gpu_window_index_f(src_d, indices_d):
@@ -1442,15 +1466,6 @@ def _gpu_window_index_f(src_d, indices_d):
 
     dest_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
 
-    mod_index_update = SourceModule("""
-    __global__ void window_index_f(float *dest, float *src, int *indices, int ws, int n_windows)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= n_windows) {return;}
-
-        dest[t_idx] = src[t_idx * ws + indices[t_idx]];
-    }
-    """)
     block_size = 32
     grid_size = ceil(n_windows / block_size)
     index_update = mod_index_update.get_function('window_index_f')
@@ -1491,6 +1506,107 @@ def _find_peak(correlation_d):
     return row_peak_d, col_peak_d, peak_d
 
 
+mod_subpixel_approximation = SourceModule("""
+__global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                    int wd, int ws)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (w_idx >= n_windows) {return;}
+    const float small = 1e-20f;
+
+    // Compute the index mapping.
+    int row = row_p[w_idx];
+    int col = col_p[w_idx];
+    float c = corr[ws * w_idx + wd * row + col];
+    int non_zero = c > 0;
+
+    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
+    } else {
+        float cd = corr[ws * w_idx + wd * (row - 1) + col];
+        float cu = corr[ws * w_idx + wd * (row + 1) + col];
+        if (cd > 0 && cu > 0 && non_zero) {
+            cd = logf(cd);
+            cu = logf(cu);
+            row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * logf(c) + cu + small);
+        } else {row_sp[w_idx] = row;}
+    }
+
+    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
+    } else {
+        float cl = corr[ws * w_idx + wd * row + col - 1];
+        float cr = corr[ws * w_idx + wd * row + col + 1];
+        if (cl > 0 && cr > 0 && non_zero) {
+            cl = logf(cl);
+            cr = logf(cr);
+            col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * logf(c) + cr + small);
+        } else {col_sp[w_idx] = col;}
+    }
+}
+
+__global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                    int wd, int ws)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (w_idx >= n_windows) {return;}
+    const float small = 1e-20f;
+
+    // Compute the index mapping.
+    int row = row_p[w_idx];
+    int col = col_p[w_idx];
+    float c = corr[ws * w_idx + wd * row + col];
+
+    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
+    } else {
+        float cd = corr[ws * w_idx + wd * (row - 1) + col];
+        float cu = corr[ws * w_idx + wd * (row + 1) + col];
+        row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * c + cu + small);
+    }
+
+    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
+    } else {
+        float cl = corr[ws * w_idx + wd * row + col - 1];
+        float cr = corr[ws * w_idx + wd * row + col + 1];
+        col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * c + cr + small);
+    }
+}
+
+__global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
+                    int wd, int ws)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (w_idx >= n_windows) {return;}
+    const float small = 1e-20f;
+
+    // Compute the index mapping.
+    int row = row_p[w_idx];
+    int col = col_p[w_idx];
+    float c = corr[ws * w_idx + wd * row + col];
+    int non_zero = c > 0;
+
+    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
+    } else {
+        float cd = corr[ws * w_idx + wd * (row - 1) + col];
+        float cu = corr[ws * w_idx + wd * (row + 1) + col];
+        if (cd > 0 && cu > 0 && non_zero) {
+            row_sp[w_idx] = row + 0.5f * (cu - cd) / (cd + c + cu + small);
+        } else {row_sp[w_idx] = row;}
+    }
+
+    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
+    } else {
+        float cl = corr[ws * w_idx + wd * row + col - 1];
+        float cr = corr[ws * w_idx + wd * row + col + 1];
+        if (cl > 0 && cr > 0 && non_zero) {
+            col_sp[w_idx] = col + 0.5f * (cr - cl) / (cl + c + cr + small);
+        } else {col_sp[w_idx] = col;}
+    }
+}
+""")
+
+
 def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     """Returns the subpixel position of the peaks using gaussian approximation.
 
@@ -1519,105 +1635,6 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
-    mod_subpixel_approximation = SourceModule("""
-    __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
-                        int wd, int ws)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        const float small = 1e-20f;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-        int non_zero = c > 0;
-
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd > 0 && cu > 0 && non_zero) {
-                cd = logf(cd);
-                cu = logf(cu);
-                row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * logf(c) + cu + small);
-            } else {row_sp[w_idx] = row;}
-        }
-
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl > 0 && cr > 0 && non_zero) {
-                cl = logf(cl);
-                cr = logf(cr);
-                col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * logf(c) + cr + small);
-            } else {col_sp[w_idx] = col;}
-        }
-    }
-
-    __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
-                        int wd, int ws)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        const float small = 1e-20f;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * c + cu + small);
-        }
-
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * c + cr + small);
-        }
-    }
-
-    __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
-                        int wd, int ws)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (w_idx >= n_windows) {return;}
-        const float small = 1e-20f;
-
-        // Compute the index mapping.
-        int row = row_p[w_idx];
-        int col = col_p[w_idx];
-        float c = corr[ws * w_idx + wd * row + col];
-        int non_zero = c > 0;
-
-        if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-        } else {
-            float cd = corr[ws * w_idx + wd * (row - 1) + col];
-            float cu = corr[ws * w_idx + wd * (row + 1) + col];
-            if (cd > 0 && cu > 0 && non_zero) {
-                row_sp[w_idx] = row + 0.5f * (cu - cd) / (cd + c + cu + small);
-            } else {row_sp[w_idx] = row;}
-        }
-
-        if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-        } else {
-            float cl = corr[ws * w_idx + wd * row + col - 1];
-            float cr = corr[ws * w_idx + wd * row + col + 1];
-            if (cl > 0 && cr > 0 && non_zero) {
-                col_sp[w_idx] = col + 0.5f * (cr - cl) / (cl + c + cr + small);
-            } else {col_sp[w_idx] = col;}
-        }
-    }
-    """)
     block_size = 32
     grid_size = ceil(n_windows / block_size)
     if method == 'gaussian':
@@ -1671,6 +1688,28 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     return sig2noise_d
 
 
+mod_mask_peak = SourceModule("""
+__global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int ht, int wd, int mask_dim, int size)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int idx_i = blockIdx.x;
+    int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+    if (idx_x >= mask_dim || idx_y >= mask_dim) {return;}
+
+    // Get the mapping.
+    int row = row_p[idx_i] - mask_w + idx_y;
+    int col = col_p[idx_i] - mask_w + idx_x;
+
+    // Return if outside edge of window.
+    if (row >= ht || col >= wd) {return;}
+
+    // Mask the point.
+    corr[idx_i * size + row * wd + col] = 0.0f;
+}
+""")
+
+
 def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
     """Returns correlation windows with points around peak masked.
 
@@ -1700,26 +1739,6 @@ def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
 
     correlation_masked_d = correlation_positive_d.copy()
 
-    mod_mask_peak = SourceModule("""
-    __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int ht, int wd, int mask_dim, int size)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= mask_dim || idx_y >= mask_dim) {return;}
-
-        // Get the mapping.
-        int row = row_p[idx_i] - mask_w + idx_y;
-        int col = col_p[idx_i] - mask_w + idx_x;
-
-        // Return if outside edge of window.
-        if (row >= ht || col >= wd) {return;}
-
-        // Mask the point.
-        corr[idx_i * size + row * wd + col] = 0.0f;
-    }
-    """)
     block_size = 8
     grid_size = ceil(mask_dim_i / block_size)
     fft_shift = mod_mask_peak.get_function('mask_peak')
@@ -1727,6 +1746,22 @@ def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
               window_size_i, block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_masked_d
+
+
+mod_correlation_rms = SourceModule("""
+__global__ void correlation_rms(float *corr, float *corr_p, int ht, int wd, int size)
+{
+    // x blocks are windows; y and z blocks are x and y dimensions, respectively.
+    int idx_i = blockIdx.x;
+    int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
+    if (idx_x >= wd || idx_y >= ht) {return;}
+    int idx = idx_i * size + idx_y * wd + idx_x;
+
+    // Mask the point if its value greater than the half-peak value.
+    if (corr[idx] >= corr_p[idx_i] / 2.0f) {corr[idx] = 0.0f;}
+}
+""")
 
 
 def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
@@ -1752,20 +1787,6 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
 
     correlation_masked_d = correlation_positive_d.copy()
 
-    mod_correlation_rms = SourceModule("""
-    __global__ void correlation_rms(float *corr, float *corr_p, int ht, int wd, int size)
-    {
-        // x blocks are windows; y and z blocks are x and y dimensions, respectively.
-        int idx_i = blockIdx.x;
-        int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
-        int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
-        if (idx_x >= wd || idx_y >= ht) {return;}
-        int idx = idx_i * size + idx_y * wd + idx_x;
-
-        // Mask the point if its value greater than the half-peak value.
-        if (corr[idx] >= corr_p[idx_i] / 2.0f) {corr[idx] = 0.0f;}
-    }
-    """)
     block_size = 8
     grid_size = ceil(max(ht, wd) / block_size)
     fft_shift = mod_correlation_rms.get_function('correlation_rms')
@@ -1773,6 +1794,18 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
               block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_masked_d
+
+
+mod_update = SourceModule("""
+__global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
+{
+    // u_new : output argument
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
+}
+""")
 
 
 def _gpu_update_field(dp_d, peak_d, mask_d):
@@ -1798,16 +1831,6 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
 
     f_d = gpuarray.empty_like(dp_d, dtype=DTYPE_f)
 
-    mod_update = SourceModule("""
-    __global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
-    {
-        // u_new : output argument
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
-    }
-    """)
     block_size = 32
     grid_size = ceil(size_i / block_size)
     update_values = mod_update.get_function('update_values')

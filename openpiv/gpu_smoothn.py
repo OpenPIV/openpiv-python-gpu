@@ -176,7 +176,7 @@ def smoothn(
 
     # Weights. Zero weights are assigned to not finite values (Inf or NaN),
     # (Inf/NaN values = missing data).
-    is_finite = np.array(np.isfinite(y)).astype(np.bool)
+    is_finite = np.array(np.isfinite(y)).astype(bool)
     nof = is_finite.sum()  # number of finite elements
     w = w * is_finite
     if np.any(w < 0):
@@ -204,7 +204,7 @@ def smoothn(
     lambda_ = np.zeros(y_shape)
     for i in axis:
         # create a 1 x d array (so e.g. [1,1] for a 2D case
-        siz0 = np.ones((1, y.ndim), dtype=np.int)[0]
+        siz0 = np.ones((1, y.ndim), dtype=int)[0]
         siz0[i] = y_shape[i]
         # cos(pi*(reshape(1:y_shape(i),siz0)-1)/y_shape(i)))
         # (arange(1,y_shape[i]+1).reshape(siz0) - 1.)/y_shape[i]
@@ -402,7 +402,7 @@ def gcv(p, lambda_, aow, dct_y, is_finite, w_tot, y, nof, noe, smooth_order):
         rss = linalg.norm(np.sqrt(w_tot[is_finite]) * (y[is_finite] - y_hat[is_finite])) ** 2
     # ---
     tr_h = np.sum(gamma)
-    gcv_score = rss / np.float(nof) / (1.0 - tr_h / np.float(noe)) ** 2
+    gcv_score = rss / float(nof) / (1.0 - tr_h / float(noe)) ** 2
     return gcv_score
 
 
@@ -507,6 +507,29 @@ def gpu_forward_dct(data_d, norm='backward'):
     return forward_dct_d
 
 
+mod_dct = SourceModule("""
+__global__ void fft_flip(float *dest, float *src, int wd, int fl, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+    int row = t_idx / fl;
+    int col = t_idx % fl + 1;
+
+    dest[row * (fl + 1) + col] = src[row * wd + wd - col];
+}
+    __global__ void dct_sift(float *dest, float *src, int wd, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+    int row = t_idx / wd;
+    int col = t_idx % wd;
+
+    if (col % 2 == 0) {dest[row * wd + col] = src[row * wd + col / 2];}
+    else {dest[row * wd + col] = src[row * wd + wd - 1 - col / 2];}
+}
+""")
+
+
 def gpu_inverse_dct(dct_data_d, norm='backward'):
     assert dct_data_d.dtype == DTYPE_f
     if dct_data_d.ndim == 1:
@@ -523,27 +546,6 @@ def gpu_inverse_dct(dct_data_d, norm='backward'):
     w_d = 0.5 * cumath.exp(1j * pi * gpuarray.arange(frequency_width + 1, dtype=DTYPE_f) / (2 * n))
     fft_data_flip = gpuarray.zeros((m, frequency_width + 1), dtype=DTYPE_f)
 
-    mod_dct = SourceModule("""
-    __global__ void fft_flip(float *dest, float *src, int wd, int fl, int size)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-        int row = t_idx / fl;
-        int col = t_idx % fl + 1;
-
-        dest[row * (fl + 1) + col] = src[row * wd + wd - col];
-    }
-        __global__ void dct_sift(float *dest, float *src, int wd, int size)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-        int row = t_idx / wd;
-        int col = t_idx % wd;
-
-        if (col % 2 == 0) {dest[row * wd + col] = src[row * wd + col / 2];}
-        else {dest[row * wd + col] = src[row * wd + wd - 1 - col / 2];}
-    }
-    """)
     block_size = 32
     x_blocks_flip = ceil(size_i_flip / block_size)
     x_blocks = ceil(size_i / block_size)
