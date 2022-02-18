@@ -138,10 +138,9 @@ class GPUCorrelation:
                                                          self.subpixel_method)
 
         # Center the peak displacement.
-        i_peak = row_sp_d - DTYPE_f(self.fft_ht // 2)
-        j_peak = col_sp_d - DTYPE_f(self.fft_wd // 2)
+        i_peak, j_peak = self._get_displacement(row_sp_d, col_sp_d)
 
-        return i_peak.reshape(self.field_shape), j_peak.reshape(self.field_shape)
+        return i_peak, j_peak
 
     def get_sig2noise(self, method='peak2peak', mask_width=2):
         """Computes the signal-to-noise ratio using one of three available methods.
@@ -252,14 +251,15 @@ class GPUCorrelation:
 
     def _check_zero_correlation(self):
         """Sets the row and column to the center if the correlation peak is near zero."""
-        non_zero_peak_d = (self.corr_peak1_d > 1e-3).astype(DTYPE_i)
-        zero_peak_replacement_d = (DTYPE_i(1) - non_zero_peak_d) * DTYPE_i(self.fft_wd // 2)
+        center_d = gpuarray.ones_like(self.row_peak_d, dtype=DTYPE_i) * DTYPE_i(self.fft_wd // 2)
+        self.row_peak_d = gpuarray.if_positive(self.corr_peak1_d, self.row_peak_d, center_d)
+        self.col_peak_d = gpuarray.if_positive(self.corr_peak1_d, self.col_peak_d, center_d)
 
-        self.row_peak_d = self.row_peak_d * non_zero_peak_d + zero_peak_replacement_d
-        self.col_peak_d = self.col_peak_d * non_zero_peak_d + zero_peak_replacement_d
-        # center_d = gpuarray.ones_like(self.row_peak_d, dtype=DTYPE_i) * DTYPE_i(self.fft_wd // 2)
-        # self.row_peak_d = gpuarray.if_positive(non_zero_peak_d, self.row_peak_d, center_d)
-        # self.col_peak_d = gpuarray.if_positive(non_zero_peak_d, self.col_peak_d, center_d)
+    def _get_displacement(self, row_sp_d, col_sp_d):
+        i_peak = row_sp_d - DTYPE_f(self.fft_ht // 2)
+        j_peak = col_sp_d - DTYPE_f(self.fft_wd // 2)
+
+        return i_peak.reshape(self.field_shape), j_peak.reshape(self.field_shape)
 
     def _get_second_peak_height(self, correlation_positive_d, mask_width):
         """Find the value of the second-largest peak.
@@ -721,26 +721,22 @@ class PIVGPU:
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
 
-                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d,
-                                                     v_mean_d)
+                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d,
+                                                     v_mean_d, val_locations_d)
                 logging.info('[DONE]\n')
             else:
                 logging.info('No invalid vectors!')
 
         return u_d, v_d
 
-    def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, val_locations_d, u_mean_d, v_mean_d):
+    def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d, val_locations_d):
         """Replace spurious vectors by the mean or median of the surrounding points."""
-        _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-
-        val_locations_inverse_d = DTYPE_f(1) - val_locations_d
+        _check_inputs(u_d, v_d, u_mean_d, v_mean_d, val_locations_d, array_type=gpuarray.GPUArray, shape=u_d.shape)
 
         # First iteration, just replace with mean velocity.
         if self._k == 0:
-            u_d = val_locations_inverse_d * u_mean_d + val_locations_d * u_d
-            v_d = val_locations_inverse_d * v_mean_d + val_locations_d * v_d
-            # u_d = gpuarray.if_positive(val_locations_d, u_d, u_mean_d)
-            # v_d = gpuarray.if_positive(val_locations_d, v_d, v_mean_d)
+            u_d = gpuarray.if_positive(val_locations_d, u_d, u_mean_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_d, v_mean_d)
 
         # Case if different dimensions: interpolation using previous iteration.
         elif self._k > 0 and self.field_shape_l[self._k] != self.field_shape_l[self._k - 1]:
@@ -751,10 +747,8 @@ class PIVGPU:
 
         # Case if same dimensions.
         elif self._k > 0 and self.field_shape_l[self._k] == self.field_shape_l[self._k - 1]:
-            u_d = val_locations_inverse_d * u_previous_d + val_locations_d * u_d
-            v_d = val_locations_inverse_d * v_previous_d + val_locations_d * v_d
-            # u_d = gpuarray.if_positive(val_locations_d, u_d, u_previous_d)
-            # v_d = gpuarray.if_positive(val_locations_d, v_d, v_previous_d)
+            u_d = gpuarray.if_positive(val_locations_d, u_d, u_previous_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_d, v_previous_d)
 
         return u_d, v_d
 
@@ -1840,41 +1834,14 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
 
 
 def _interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
-    """Replaces the invalid vectors by interpolating another field.
-
-    The implementation requires that the mesh spacing is uniform. The spacing can be different in x and y directions.
-
-    Parameters
-    ----------
-    x0_d, y0_d : GPUArray
-        1D float, grid coordinates of the original field
-    x1_d, y1_d : GPUArray
-        1D float, grid coordinates of the field to be interpolated.
-    f0_d : GPUArray
-        2D float, field to be interpolated.
-    f1_d : GPUArray
-        2D float, field to be validated
-    val_locations_d : GPUArray
-        2D int or float, locations where validation of the vectors is to be done.
-
-    Returns
-    -------
-    GPUArray
-        2D float, interpolated field.
-
-    """
+    """Replaces the invalid vectors by interpolating another field."""
     _check_inputs(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
     _check_inputs(f0_d, f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     _check_inputs(val_locations_d, array_type=gpuarray.GPUArray, shape=f1_d.shape, ndim=2)
-    if val_locations_d.dtype != DTYPE_f:
-        val_locations_d = val_locations_d.astype(DTYPE_f)
-
-    val_locations_inverse_d = DTYPE_f(1) - val_locations_d
 
     f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
 
     # Replace vectors at validation locations.
-    f1_val_d = f1_d * val_locations_d + f1_val_d * val_locations_inverse_d
-    # f1_val_d = gpuarray.if_positive(val_locations_d, f1_d, f1_val_d)
+    f1_val_d = gpuarray.if_positive(val_locations_d, f1_d, f1_val_d)
 
     return f1_val_d
