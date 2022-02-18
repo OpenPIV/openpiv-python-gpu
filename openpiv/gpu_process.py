@@ -404,7 +404,7 @@ def gpu_piv(frame_a, frame_b,
     return_sig2noise = kwargs['return_sig2noise'] if 'return_sig2noise' in kwargs else False
     x, y = piv_gpu.coords
     u, v = piv_gpu(frame_a, frame_b)
-    mask = piv_gpu.mask_final
+    mask = piv_gpu.mask
     s2n = piv_gpu.s2n if return_sig2noise else None
     return x, y, u, v, mask, s2n
 
@@ -489,23 +489,26 @@ class PIVGPU:
             self.frame_shape = frame_shape.shape
         else:
             self.frame_shape = frame_shape
-        if mask is not None:
-            if not mask.shape == self.frame_shape:
-                raise ValueError('Mask is not same shape as image.')
+
         ws_iters = (window_size_iters,) if type(window_size_iters) == int else window_size_iters
         num_ws = len(ws_iters)
         self.overlap_ratio = overlap_ratio
         self.dt = dt
+        self.im_mask = None
+        if mask is not None:
+            self.im_mask = mask.astype(DTYPE_i)
+            if not mask.shape == self.frame_shape:
+                raise ValueError('Mask is not same shape as image.')
         self.deform = deform
         self.smooth = smooth
         self.nb_iter_max = sum(ws_iters)
         self.nb_validation_iter = nb_validation_iter
         self.spacing_l = None
         self.field_shape_l = None
-        self.x_final = self.y_final = None
+        self.x = self.y = None
         self.x_dl = self.y_dl = None
         self.field_mask_dl = None
-        self.mask_final = None
+        self.mask = None
         self.corr = None
         self.sig2noise_d = None
         self.validation_method = validation_method
@@ -522,14 +525,14 @@ class PIVGPU:
         self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
         self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else 2
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        self.im_mask = gpuarray.to_gpu(mask.astype(DTYPE_i)) if mask is not None else None
+        self.im_mask_d = gpuarray.to_gpu(self.im_mask) if self.im_mask is not None else None
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else 'gaussian'
 
         # Set window sizes.
         self.window_size_l = [(2 ** (num_ws - i - 1)) * min_window_size for i in range(num_ws)
                               for _ in range(ws_iters[i])]
         # Init derived parameters--mesh geometry and masks at each iteration.
-        self.set_geometry(mask)
+        self.set_geometry()
 
     def __call__(self, frame_a, frame_b):
         """Processes an image pair.
@@ -601,11 +604,7 @@ class PIVGPU:
 
     @property
     def coords(self):
-        return self.x_final, self.y_final
-
-    @property
-    def mask(self):
-        return self.mask_final
+        return self.x, self.y
 
     @property
     def s2n(self):
@@ -619,15 +618,8 @@ class PIVGPU:
         """Frees correlation data from GPU."""
         self.corr = None
 
-    def set_geometry(self, mask=None):
-        """Creates the parameters for the mesh geometry and mask at each iteration.
-
-        Parameters
-        ----------
-        mask : ndarray or None, optional;
-            The masked domain indicated with boolean values--1 for mask.
-
-        """
+    def set_geometry(self):
+        """Creates the parameters for the mesh geometry and mask at each iteration."""
         self.spacing_l = []
         self.field_shape_l = []
         self.x_dl = []
@@ -644,24 +636,27 @@ class PIVGPU:
             self.y_dl.append(gpuarray.to_gpu(y[:, 0]))
 
             # Init mask.
-            # TODO SRP violation
-            if mask is not None:
-                field_mask = mask[y.astype(DTYPE_i), x.astype(DTYPE_i)].astype(DTYPE_i)
-            else:
-                field_mask = np.ones(self.field_shape_l[k], dtype=DTYPE_i)
-            self.field_mask_dl.append(gpuarray.to_gpu(field_mask))
+            self._set_mask(x, y)
 
             if k == self.nb_iter_max - 1:
-                self.x_final = x
-                self.y_final = y
-                self.mask_final = field_mask
+                self.x = x
+                self.y = y
+
+        self.mask = self.field_mask_dl[-1]
+
+    def _set_mask(self, x, y):
+        if self.im_mask is not None:
+            field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
+        else:
+            field_mask = np.ones_like(x, dtype=DTYPE_i)
+        self.field_mask_dl.append(gpuarray.to_gpu(field_mask))
 
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
         _check_inputs(frame_a, frame_b, shape=frame_a.shape, ndim=2)
         if self.im_mask is not None:
-            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self.im_mask)
-            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self.im_mask)
+            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self.im_mask_d)
+            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self.im_mask_d)
             # frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f) * self.im_mask
             # frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f) * self.im_mask
         else:
