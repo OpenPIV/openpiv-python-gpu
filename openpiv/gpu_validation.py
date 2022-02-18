@@ -669,75 +669,8 @@ def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
     """)
     block_size = 32
     grid_size = ceil(size_i / block_size)
-    mod_u_rms = mod_rms.get_function('rms_k')
-    mod_u_rms(f_rms_d, f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
-              grid=(grid_size, 1))
+    u_rms = mod_rms.get_function('rms_k')
+    u_rms(f_rms_d, f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
+          grid=(grid_size, 1))
 
     return f_rms_d
-
-
-def __gpu_divergence(u_d, v_d, w):
-    """[This function very likely does not work as intended.] Calculates the divergence at each point in a velocity
-    field.
-
-    Parameters
-    ----------
-    u_d, v_d : array
-        2D float, velocity field.
-    w : int
-        Pixel separation between velocity vectors.
-
-    Returns
-    -------
-    GPUArray
-        2D float, divergence at each point.
-
-    """
-    w = DTYPE_f(w)
-    m, n = DTYPE_i(u_d.shape)
-    size_i = DTYPE_i(u_d.size)
-
-    div_d = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    mod_div = SourceModule("""
-    __global__ void div_k(float *div, float *u, float *v, float ws, int m, int n, int size)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        // Avoid the boundary
-        if (t_idx >= (m - 1) * n) {return;}
-        if (t_idx % n == n - 1) {return;}
-
-        float u1 = u[t_idx + n];
-        float v1 = v[t_idx + 1];
-
-        div[t_idx] = (u1 - u[t_idx]) / ws - (v1 - v[t_idx]) / ws;
-    }
-
-    __global__ void div_boundary_k(float *div, float *u, float *v, float ws, int m, int n)
-    {
-        int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (t_idx >= size) {return;}
-
-        // only calculate on the boundary
-        if (t_idx < (m - 1) * n && t_idx % n != n - 1) {return;}
-
-        float u1 = u[t_idx - n];
-        float v1 = v[t_idx - 1];
-
-        div[t_idx] = (u[t_idx] - u1) / ws - (v[t_idx] - v1) / ws;
-    }
-    """)
-    block_size = 32
-    grid_size = ceil(m * n / block_size)
-    div_k = mod_div.get_function('div_k')
-    div_boundary_k = mod_div.get_function('div_boundary_k')
-    div_k(div_d, u_d, v_d, w, m, n, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-    div_boundary_k(div_d, u_d, v_d, w, m, n, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-
-    # Get single case of bottom i = 0, j = n_col - 1.
-    div_d[0, int(n - 1)] = (u_d[1, n - 1] - u_d[0, n - 1]) / w - (v_d[0, n - 1] - v_d[0, n - 2]) / w
-    div_d[int(m - 1), 0] = (u_d[m - 1, 0] - u_d[m - 2, 0]) / w - (v_d[m - 1, 1] - v_d[m - 1, 0]) / w
-
-    return div_d
