@@ -81,7 +81,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
         s2n_tol = DTYPE_f(s2n_tol) if s2n_tol is not None else DEFAULT_VALIDATION_TOLS['s2n_tol']
 
         val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
-        # val_locations_d = val_locations_d * (sig2noise_d > s2n_tol)
 
     if 'median_velocity' in validation_method:
         median_tol = DTYPE_f(median_tol) if median_tol is not None else DEFAULT_VALIDATION_TOLS['median_tol']
@@ -91,10 +90,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
 
         val_locations_d = _neighbour_validation(u_d, u_median_d, u_median_fluc_d, median_tol, val_locations_d)
         val_locations_d = _neighbour_validation(v_d, v_median_d, v_median_fluc_d, median_tol, val_locations_d)
-        # val_locations_d = val_locations_d * (cumath.fabs(u_d - u_median_d) / (u_median_fluc_d + DTYPE_f(0.1)
-        #                                                                       < median_tol))
-        # val_locations_d = val_locations_d * (cumath.fabs(v_d - v_median_d) / (v_median_fluc_d + DTYPE_f(0.1)
-        #                                                                       < median_tol))
 
     if 'mean_velocity' in validation_method:
         mean_tol = DTYPE_f(mean_tol) if mean_tol is not None else DEFAULT_VALIDATION_TOLS['mean_tol']
@@ -104,10 +99,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
 
         val_locations_d = _neighbour_validation(u_d, u_mean_d, u_mean_fluc_d, mean_tol, val_locations_d)
         val_locations_d = _neighbour_validation(v_d, v_mean_d, v_mean_fluc_d, mean_tol, val_locations_d)
-        # val_locations_d = val_locations_d * (cumath.fabs(u_d - u_mean_d) / (u_mean_fluc_d + DTYPE_f(0.1)
-        #                                                                     < mean_tol))
-        # val_locations_d = val_locations_d * (cumath.fabs(v_d - v_mean_d) / (v_mean_fluc_d + DTYPE_f(0.1)
-        #                                                                     < mean_tol))
 
     if 'rms_velocity' in validation_method:
         rms_tol = DTYPE_f(rms_tol) if rms_tol is not None else DEFAULT_VALIDATION_TOLS['rms_tol']
@@ -117,10 +108,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
 
         val_locations_d = _neighbour_validation(u_d, u_mean_d, u_rms_d, rms_tol, val_locations_d)
         val_locations_d = _neighbour_validation(v_d, v_mean_d, v_rms_d, rms_tol, val_locations_d)
-        # val_locations_d = val_locations_d * (cumath.fabs(u_d - u_mean_d) / (u_rms_d + DTYPE_f(0.1)
-        #                                                                     < rms_tol))
-        # val_locations_d = val_locations_d * (cumath.fabs(v_d - v_mean_d) / (v_rms_d + DTYPE_f(0.1)
-        #                                                                     < rms_tol))
 
     return val_locations_d, u_median_d, v_median_d
 

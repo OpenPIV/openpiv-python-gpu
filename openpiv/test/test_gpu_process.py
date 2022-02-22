@@ -80,9 +80,9 @@ def test_gpu_mask():
     frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_f)
     mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
 
-    frame_masked = frame * mask
+    frame_masked = frame * mask.astype(DTYPE_f)
 
-    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d).get()
+    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d.astype(DTYPE_f)).get()
 
     assert np.array_equal(frame_masked, frame_masked_gpu)
 

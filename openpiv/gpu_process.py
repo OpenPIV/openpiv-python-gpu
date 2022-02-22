@@ -170,7 +170,7 @@ class GPUCorrelation:
             'Recommended value is 2.'
 
         # Set all negative values in correlation peaks to zero.
-        corr_peak1_d = self.corr_peak1_d * (self.corr_peak1_d > DTYPE_f(0))
+        corr_peak1_d = gpu_mask(self.corr_peak1_d)
 
         # Compute signal-to-noise ratio by the chosen method.
         if method == 'peak2mean':
@@ -499,7 +499,7 @@ class PIVGPU:
         self.dt = dt
         self.im_mask = None
         if mask is not None:
-            self.im_mask = mask.astype(DTYPE_i)
+            self.im_mask = mask.astype(DTYPE_f)
             if not mask.shape == self.frame_shape:
                 raise ValueError('Mask is not same shape as image.')
         self.deform = deform
@@ -647,7 +647,7 @@ class PIVGPU:
         if self.im_mask is not None:
             field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
         else:
-            field_mask = np.ones_like(x, dtype=DTYPE_i)
+            field_mask = np.ones_like(x, dtype=DTYPE_f)
         self.field_mask_dl.append(gpuarray.to_gpu(field_mask))
 
     def _mask_image(self, frame_a, frame_b):
@@ -656,8 +656,6 @@ class PIVGPU:
         if self.im_mask is not None:
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self.im_mask_d)
             frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self.im_mask_d)
-            # frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f) * self.im_mask
-            # frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f) * self.im_mask
         else:
             frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
             frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
@@ -694,13 +692,9 @@ class PIVGPU:
         if dp_x_d == dp_y_d is None:
             u_d = gpu_mask(j_peak_d, self.field_mask_dl[self._k])
             v_d = gpu_mask(i_peak_d, self.field_mask_dl[self._k])
-            # u_d = j_peak_d * self.field_mask_dl[k]
-            # v_d = i_peak_d * self.field_mask_dl[k]
         else:
             u_d = _gpu_update_field(dp_x_d, j_peak_d, self.field_mask_dl[self._k])
             v_d = _gpu_update_field(dp_y_d, i_peak_d, self.field_mask_dl[self._k])
-            # u_d = (dp_x_d + j_peak_d) * self.field_mask_dl[k]
-            # v_d = (dp_y_d + i_peak_d) * self.field_mask_dl[k]
 
         return u_d, v_d
 
@@ -848,26 +842,26 @@ def get_field_coords(field_shape, window_size, spacing):
 
 
 mod_mask = SourceModule("""
-__global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
+__global__ void mask_frame_gpu(float *frame_masked, float *frame, float *mask, int size)
 {
     // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    frame_masked[t_idx] = frame[t_idx] * mask[t_idx];
+    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] > 0.0f);
 }
 """)
 
 
-def gpu_mask(f_d, mask_d):
+def gpu_mask(f_d, mask_d=None):
     """Mask a float-type array with an int type-array.
 
     Parameters
     ----------
     f_d : GPUArray
         nD float, frame to be masked.
-    mask_d : GPUArray
-        nD int, mask to apply to frame.
+    mask_d : GPUArray or None, optional
+        nD int, mask to apply to frame. 1s are values to keep.
 
     Returns
     -------
@@ -875,8 +869,9 @@ def gpu_mask(f_d, mask_d):
         nD int, masked field.
 
     """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    _check_inputs(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
+    if mask_d is None:
+        mask_d = f_d
+    _check_inputs(f_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_d.size)
     size_i = DTYPE_i(f_d.size)
 
     frame_masked_d = gpuarray.empty_like(mask_d, dtype=DTYPE_f)
@@ -1663,7 +1658,7 @@ def _peak2energy(correlation_d, corr_peak1_d):
     window_size = wd * ht
 
     # Remove negative correlation values.
-    correlation_d = correlation_d * (correlation_d > DTYPE_f(0))
+    correlation_d = gpu_mask(correlation_d)
 
     corr_reshape = correlation_d.reshape(n_windows, window_size)
     corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
@@ -1677,7 +1672,7 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     _check_inputs(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
 
     # Remove negative peaks.
-    corr_peak2_d = corr_peak2_d * (corr_peak2_d > DTYPE_f(0))
+    corr_peak2_d = gpu_mask(corr_peak2_d)
 
     sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
 
@@ -1793,7 +1788,7 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
 
 
 mod_update = SourceModule("""
-__global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
+__global__ void update_values(float *f_new, float *f_old, float *peak, float *mask, int size)
 {
     // u_new : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1810,11 +1805,11 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
     Parameters
     ----------
     dp_d : GPUArray.
-        1D or 2D float, predicted displacement.
+        nD float, predicted displacement.
     peak_d : GPUArray
-        1D float, location of peaks.
+        nD float, location of peaks.
     mask_d : GPUArray
-        2D float, mask.
+        nD float, mask.
 
     Returns
     -------
@@ -1822,7 +1817,7 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
         3D float.
 
     """
-    _check_inputs(dp_d, peak_d, mask_d, array_type=gpuarray.GPUArray, size=dp_d.size)
+    _check_inputs(dp_d, peak_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=dp_d.size)
     size_i = DTYPE_i(dp_d.size)
 
     f_d = gpuarray.empty_like(dp_d, dtype=DTYPE_f)
