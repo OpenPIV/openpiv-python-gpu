@@ -6,7 +6,7 @@ import numpy as np
 # Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
-import pycuda.cumath as cumath
+# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
 from openpiv.gpu_misc import _check_arrays
@@ -17,16 +17,14 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 ALLOWED_VALIDATION_METHODS = {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
-DEFAULT_VALIDATION_TOLS = {
-    's2n_tol': DTYPE_f(0.1),
-    'median_tol': DTYPE_f(2),
-    'mean_tol': DTYPE_f(2),
-    'rms_tol': DTYPE_f(2),
-}
+S2N_TOL = 2
+MEDIAN_TOL = 2
+MEAN_TOL = 2
+RMS_TOL = 2
 
 
-def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocity',
-                   s2n_tol=None, median_tol=None, mean_tol=None, rms_tol=None):
+def gpu_validation(u_d, v_d, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
+                   s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
     """Returns an array indicating which indices need to be validated.
 
     Parameters
@@ -35,6 +33,8 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
         2D float, velocity fields to be validated.
     sig2noise_d : GPUArray, optional
         1D or 2D float, signal-to-noise ratio of each velocity.
+    mask_d : GPUArray
+        2D float, mask for the velocity field.
     validation_method : {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
     s2n_tol : float, optional
@@ -59,6 +59,8 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
     _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
     if sig2noise_d is not None:
         _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
+    if mask_d is not None:
+        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape)
     val_locations_d = None
     u_mean_d = v_mean_d = None
 
@@ -76,13 +78,10 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
 
     if 's2n' in validation_method:
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
-        s2n_tol = DTYPE_f(s2n_tol) if s2n_tol is not None else DEFAULT_VALIDATION_TOLS['s2n_tol']
 
         val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
 
     if 'median_velocity' in validation_method:
-        median_tol = DTYPE_f(median_tol) if median_tol is not None else DEFAULT_VALIDATION_TOLS['median_tol']
-
         u_median_fluc_d = _gpu_median_fluc(u_median_d, u_neighbours_d, neighbours_present_d)
         v_median_fluc_d = _gpu_median_fluc(v_median_d, v_neighbours_d, neighbours_present_d)
 
@@ -90,8 +89,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
         val_locations_d = _neighbour_validation(v_d, v_median_d, v_median_fluc_d, median_tol, val_locations_d)
 
     if 'mean_velocity' in validation_method:
-        mean_tol = DTYPE_f(mean_tol) if mean_tol is not None else DEFAULT_VALIDATION_TOLS['mean_tol']
-
         u_mean_fluc_d = _gpu_mean_fluc(u_mean_d, u_neighbours_d, neighbours_present_d)
         v_mean_fluc_d = _gpu_mean_fluc(v_mean_d, v_neighbours_d, neighbours_present_d)
 
@@ -99,8 +96,6 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
         val_locations_d = _neighbour_validation(v_d, v_mean_d, v_mean_fluc_d, mean_tol, val_locations_d)
 
     if 'rms_velocity' in validation_method:
-        rms_tol = DTYPE_f(rms_tol) if rms_tol is not None else DEFAULT_VALIDATION_TOLS['rms_tol']
-
         u_rms_d = _gpu_rms(u_mean_d, u_neighbours_d, neighbours_present_d)
         v_rms_d = _gpu_rms(v_mean_d, v_neighbours_d, neighbours_present_d)
 

@@ -104,7 +104,7 @@ def test_gpu_smooth():
     f, f_d = generate_cpu_gpu_pair(_test_size_small)
 
     f_smooth = smoothn(f, s=0.5)[0].astype(DTYPE_f)
-    f_smooth_gpu = (gpu_process.gpu_smoothn(f_d)).get()
+    f_smooth_gpu = (gpu_process.gpu_smoothn(f_d, s=0.5)).get()
 
     assert np.array_equal(f_smooth, f_smooth_gpu)
 

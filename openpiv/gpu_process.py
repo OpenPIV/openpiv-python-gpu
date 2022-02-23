@@ -23,7 +23,7 @@ with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
     from skcuda import misc as cumisc
 
-from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS
+from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f
 
@@ -37,6 +37,11 @@ DTYPE_c = np.complex64
 
 ALLOWED_SUBPIXEL_METHODS = {'gaussian', 'parabolic', 'centroid'}
 ALLOWED_SIG2NOISE_METHODS = {'peak2peak', 'peak2mean', 'peak2energy'}
+SMOOTHING_PAR = 0.5
+N_FFT = 2
+SUBPIXEL_METHOD = 'gaussian'
+SIG2NOISE_METHOD = 'peak2peak'
+SIG2NOISE_WIDTH = 2
 
 
 class GPUCorrelation:
@@ -60,7 +65,7 @@ class GPUCorrelation:
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, n_fft=2, subpixel_method='gaussian'):
+    def __init__(self, frame_a_d, frame_b_d, n_fft=N_FFT, subpixel_method=SUBPIXEL_METHOD):
         _check_arrays(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
@@ -134,7 +139,7 @@ class GPUCorrelation:
 
         return i_peak, j_peak
 
-    def get_sig2noise(self, subpixel_method='peak2peak', mask_width=2):
+    def get_sig2noise(self, subpixel_method=SUBPIXEL_METHOD, mask_width=SIG2NOISE_WIDTH):
         """Computes the signal-to-noise ratio using one of three available methods.
 
         The signal-to-noise ratio is computed from the correlation and is a measure of the quality of the matching
@@ -314,7 +319,7 @@ def gpu_piv(frame_a, frame_b,
     Windows are shifted symmetrically to reduce bias errors.
     The displacement obtained after each correlation is the residual displacement dc.
     The new displacement is computed by dx = dpx + dcx and dy = dpy + dcy.
-    Validation is done by any combination of signal-to-noise ratio, mean, median and rms.
+    Validation is done by any combination of signal-to-noise ratio, mean, median and rms velocities.
     Smoothn can be used between iterations to improve the estimate and replace missing values.
 
     References
@@ -447,7 +452,7 @@ class PIVGPU:
         Method to estimate subpixel location of the peak.
     sig2noise_method : {'peak2peak', 'peak2mean', 'peak2energy'}
         Method of signal-to-noise-ratio measurement.
-    s2n_width : int
+    sig2noise_width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
         Only used if sig2noise_method==peak2peak.
     n_fft : int or tuple
@@ -494,17 +499,16 @@ class PIVGPU:
         self.nb_validation_iter = nb_validation_iter
         self.validation_method = (validation_method,) if isinstance(validation_method, str) else validation_method
 
-        # TODO these shouldn't be None and other values
         self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else None
-        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else None
-        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else None
-        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else None
-        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else 0.5
-        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else 2
-        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else 'gaussian'
-        self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else 'peak2peak'
-        self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else 2
+        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else S2N_TOL
+        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else MEDIAN_TOL
+        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else MEAN_TOL
+        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else RMS_TOL
+        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else SMOOTHING_PAR
+        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
+        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
+        self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else SIG2NOISE_METHOD
+        self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
         self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
 
         self._check_inputs()
@@ -668,7 +672,7 @@ class PIVGPU:
             raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SIG2NOISE_METHODS))
         if self.subpixel_method not in ALLOWED_SUBPIXEL_METHODS:
             raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
-        if not 1 < self.s2n_width == int(self.s2n_width):
+        if not 1 < self.sig2noise_width == int(self.sig2noise_width):
             raise ValueError('s2n_width must be an integer.')
         if self.trust_1st_iter != bool(self.trust_1st_iter):
             raise ValueError('trust_1st_iter must have a boolean value.')
@@ -734,11 +738,13 @@ class PIVGPU:
         size = u_d.size
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
-            self.sig2noise_d = self.corr.get_sig2noise(subpixel_method=self.sig2noise_method, mask_width=self.s2n_width)
+            self.sig2noise_d = self.corr.get_sig2noise(subpixel_method=self.sig2noise_method,
+                                                       mask_width=self.sig2noise_width)
 
         for i in range(self.nb_validation_iter):
             # Get list of places that need to be validated.
-            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self.sig2noise_d, self.validation_method,
+            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self.sig2noise_d, None,
+                                                                 self.validation_method,
                                                                  s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                                                  mean_tol=self.mean_tol, rms_tol=self.rms_tol)
 

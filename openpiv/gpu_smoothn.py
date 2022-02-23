@@ -27,7 +27,7 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 
-def gpu_smoothn(f_d, s=0.5):
+def gpu_smoothn(f_d, s=None):
     """Smooths a scalar field stored as a GPUArray.
 
     Parameters
@@ -44,7 +44,8 @@ def gpu_smoothn(f_d, s=0.5):
 
     """
     _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    assert s > 0, 'Smoothing parameter must be greater than 0.'
+    if s is not None:
+        assert s > 0, 'Smoothing parameter must be greater than 0.'
 
     f = f_d.get()
     f_smooth_d = gpuarray.to_gpu(smoothn(f, s=s)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
