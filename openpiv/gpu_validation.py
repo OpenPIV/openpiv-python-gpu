@@ -1,7 +1,5 @@
 """This module is for GPU-accelerated validation algorithms."""
 
-import time
-import logging
 from math import ceil
 
 import numpy as np
@@ -11,7 +9,7 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu_misc import _check_inputs
+from openpiv.gpu_misc import _check_arrays
 
 # Define 32-bit types
 DTYPE_i = np.int32
@@ -58,9 +56,9 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, validation_method='median_velocit
 
     """
     # 'mean' in this function refers to either the mean or median estimators of the average.
-    _check_inputs(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
+    _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
     if sig2noise_d is not None:
-        _check_inputs(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
+        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
     val_locations_d = None
     u_mean_d = v_mean_d = None
 

@@ -45,7 +45,7 @@ def gpu_scalar_mod_i(f_d, m):
         Int, remainder part of the decomposition.
 
     """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
+    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
     assert 0 < m == int(m)
     size_i = DTYPE_i(f_d.size)
 
@@ -82,7 +82,7 @@ def gpu_remove_nan_f(f_d):
         nd float.
 
     """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     size_i = DTYPE_i(f_d.size)
 
     block_size = 32
@@ -91,18 +91,20 @@ def gpu_remove_nan_f(f_d):
     index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
-def _check_inputs(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
+def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
     if array_type is not None:
-        assert all([isinstance(array, array_type) for array in arrays]), 'Input(s) must be ({}).'.format(array_type)
+        if not all([isinstance(array, array_type) for array in arrays]):
+            raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
     if dtype is not None:
-        assert all([array.dtype == dtype for array in arrays]), 'Input(s) must have dtype ({}).'.format(dtype)
+        if not all([array.dtype == dtype for array in arrays]):
+            raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
     if shape is not None:
-        assert all(
-            [array.shape == shape for array in
-             arrays]), 'Input(s) must have shape ({}, all must be same shape).'.format(
-            shape)
+        if not all([array.shape == shape for array in arrays]):
+            raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
     if ndim is not None:
-        assert all([array.ndim == ndim for array in arrays]), 'Input(s) must have ndim ({}).'.format(ndim)
+        if not all([array.ndim == ndim for array in arrays]):
+            raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
     if size is not None:
-        assert all([array.size == size for array in arrays]), 'Input(s) must have size ({}).'.format(size)
+        if not all([array.size == size for array in arrays]):
+            raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))

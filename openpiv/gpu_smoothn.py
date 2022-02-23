@@ -19,7 +19,7 @@ with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
     from skcuda import misc as cumisc
 
-from openpiv.gpu_misc import _check_inputs
+from openpiv.gpu_misc import _check_arrays
 
 cumisc.init()
 DTYPE_i = np.int32
@@ -43,7 +43,7 @@ def gpu_smoothn(f_d, s=0.5):
         Float, same size as f_d. Smoothed field.
 
     """
-    _check_inputs(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     assert s > 0, 'Smoothing parameter must be greater than 0.'
 
     f = f_d.get()
@@ -343,7 +343,6 @@ def smoothn(
 
             gamma = 1.0 / (1 + (s * np.abs(lambda_)) ** smooth_order)
 
-            # TODO this is done twice?
             z = rf * dct_nd(gamma * dct_y, f=idct) + (1 - rf) * z
             # if no weighted/missing data => tol=0 (no iteration)
             tol = is_weighted * linalg.norm(z0 - z) / linalg.norm(z)

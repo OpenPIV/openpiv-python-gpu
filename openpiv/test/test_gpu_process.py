@@ -18,7 +18,6 @@ import openpiv.gpu_misc as gpu_misc
 from openpiv.gpu_smoothn import smoothn
 
 pyximport.install(setup_args={'include_dirs': np.get_include()}, language_level=3)
-import openpiv.gpu_process_old as gpu_process_old
 
 # GLOBAL VARIABLES
 # datatypes used in gpu_process
@@ -390,8 +389,6 @@ def test_gpu_piv_benchmark_oop(benchmark):
 
     piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
 
-    # piv_gpu = gpu_process_old.PIVGPU(_image_size_rectangle, **args)
-
     @benchmark
     def repeat_10():
         for i in range(10):
@@ -421,9 +418,6 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     """Ensures the results of the GPU algorithm remains unchanged."""
     file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
                                                                   str(nb_validation_iter))
-
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-    # x, y, u, v, mask, s2n = gpu_process_old.gpu_piv(frame_a, frame_b, **args)
 
     # # save the results to a numpy file.
     # if not os.path.isdir(_fixture_dir):
