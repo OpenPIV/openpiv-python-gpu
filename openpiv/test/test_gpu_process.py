@@ -1,5 +1,4 @@
 import os
-import sys
 import numpy as np
 import pytest
 from math import sqrt
@@ -15,7 +14,7 @@ from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_misc as gpu_misc
-from openpiv.gpu_smoothn import smoothn
+from openpiv.gpu_smoothn import gpu_smoothn
 
 pyximport.install(setup_args={'include_dirs': np.get_include()}, language_level=3)
 
@@ -33,7 +32,7 @@ _image_size_square = (1024, 512)
 _u_shift = 8
 _v_shift = -4
 _accuracy_tolerance = 0.1
-_identity_tolerance = 0.001
+_identity_tolerance = 1e-6
 _trim_slice = slice(2, -2, 1)
 
 # test parameters
@@ -100,15 +99,6 @@ def test_gpu_gradient():
     assert np.array_equal(v_y, strain_gpu[3])
 
 
-def test_gpu_smooth():
-    f, f_d = generate_cpu_gpu_pair(_test_size_small)
-
-    f_smooth = smoothn(f, s=0.5)[0].astype(DTYPE_f)
-    f_smooth_gpu = (gpu_process.gpu_smoothn(f_d, s=0.5)).get()
-
-    assert np.array_equal(f_smooth, f_smooth_gpu)
-
-
 def test_gpu_interpolate():
     ws0 = 16
     spacing0 = 8
@@ -118,6 +108,10 @@ def test_gpu_interpolate():
     x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
     n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
     x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
+    x0 = x0.astype(DTYPE_f)
+    y0 = y0.astype(DTYPE_f)
+    x1 = x1.astype(DTYPE_f)
+    y1 = y1.astype(DTYPE_f)
 
     f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
     x0_d = gpuarray.to_gpu(x0[0, :])
@@ -132,35 +126,6 @@ def test_gpu_interpolate():
     f1_gpu = f1_d.get()
 
     assert np.allclose(f1, f1_gpu, _identity_tolerance)
-
-
-def test_gpu_interpolate_validation():
-    ws0 = 16
-    spacing0 = 8
-    ws1 = 8
-    spacing1 = 4
-    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
-    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
-    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
-    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
-
-    f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
-    f1, f1_d = generate_cpu_gpu_pair((n_row1, n_col1))
-    x0_d = gpuarray.to_gpu(x0[0, :])
-    x1_d = gpuarray.to_gpu(x1[0, :])
-    y0_d = gpuarray.to_gpu(y0[:, 0])
-    y1_d = gpuarray.to_gpu(y1[:, 0])
-
-    val_locations, val_locations_d = generate_cpu_gpu_pair((n_row1, n_col1), magnitude=2, dtype=DTYPE_i)
-
-    interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
-    # interp2d returns interpolation results with increasing y
-    f1_val = val_locations * f1 + np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0) * (1 - val_locations)
-
-    f1_val_d = gpu_process._interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d=val_locations_d)
-    f1_val_gpu = f1_val_d.get()
-
-    assert np.allclose(f1_val, f1_val_gpu, _identity_tolerance)
 
 
 def test_gpu_ftt_shift():
@@ -419,6 +384,8 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
                                                                   str(nb_validation_iter))
 
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
     # # save the results to a numpy file.
     # if not os.path.isdir(_fixture_dir):
     #     os.mkdir(_fixture_dir)
@@ -429,12 +396,11 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
         u0 = data['u']
         v0 = data['v']
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
     if not np.allclose(u, u0, atol=_identity_tolerance) or not np.allclose(v, v0, atol=_identity_tolerance):
         u_debug = u - u0
         v_debug = v - v0
-        print('')
+        print(np.max(u_debug))
+        print(np.max(v_debug))
 
     # compare with the previous results
     assert np.allclose(u, u0, atol=_identity_tolerance)

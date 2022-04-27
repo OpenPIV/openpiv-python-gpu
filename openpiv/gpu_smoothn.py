@@ -11,6 +11,8 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
+from gpu_misc import _check_arrays
+
 # scikit-cuda gives an annoying warning everytime it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
@@ -29,7 +31,7 @@ COARSE_COEFFICIENTS = 10
 WEIGHT_METHODS = {'bisquare', 'talworth', 'cauchy'}
 
 
-def gpu_smoothn(f_d, **kwargs):
+def gpu_smoothn(*f_d, **kwargs):
     """Smooths a scalar field stored as a GPUArray.
 
     Parameters
@@ -43,10 +45,15 @@ def gpu_smoothn(f_d, **kwargs):
         Float, same size as f_d. Smoothed field.
 
     """
-    # _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    _check_arrays(*f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    n = len(f_d)
 
-    f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn2(f, **kwargs)[0])
+    f = [array.get() for array in f_d]
+    f_smooth = smoothn2(*f, **kwargs)[0]
+    if n == 1:
+        f_smooth_d = gpuarray.to_gpu(f_smooth)
+    else:
+        f_smooth_d = [gpuarray.to_gpu(array) for array in f_smooth]
 
     return f_smooth_d
 
@@ -193,6 +200,7 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
     else:
         z = [np.zeros(y_shape, dtype=d_type)] * n_y
 
+    # Get spacing.
     if spacing is not None:
         spacing = np.array(spacing)
         if spacing.size != y_ndim:
@@ -203,6 +211,7 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
     else:
         spacing = np.ones(y_ndim)
 
+    # With s given as an argument, it will not be found by GCV-optimization.
     is_auto = not s
     if not is_auto:
         if not 0 < s == float(s):
@@ -367,23 +376,15 @@ def gpu_dct(f_d, norm='backward'):
 
     normal_factor = DTYPE_f(1 / n) if norm == 'forward' else DTYPE_f(2)
 
-    # w_d = cumath.exp(DTYPE_c(-1j * np.pi) * gpuarray.arange(n, dtype=DTYPE_f) / DTYPE_f(2 * n))
-    #
-    # # could extend the fft output rather than zero-pad (Mahkoul)
-    # data_d = _sift(f_d, 'forward')
-    # output_d = gpu_fft(data_d, norm='backward', full_frequency=True)
-    #
-    # dct_d0 = cumisc.multiply(output_d, w_d).real * normal_factor
-
     freq_width = n // 2 + 1
 
-    # W-coefficients from Makhoul
+    # W-coefficients from Makhoul.
     w_real_d = gpuarray.to_gpu(np.cos(DTYPE_f(-np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
                                * normal_factor)
     w_imag_d = gpuarray.to_gpu(np.sin(DTYPE_f(np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
                                * normal_factor)
 
-    # could extend the fft output rather than zero-pad (Mahkoul)
+    # Extend the fft output rather than zero-pad (Mahkoul).
     data_d = _sift(f_d, 'forward')
     fft_data_d = gpu_fft(data_d, norm='backward', full_frequency=False)
     fft_data_real_d = fft_data_d.real
@@ -405,9 +406,6 @@ def gpu_dct(f_d, norm='backward'):
         a[0] = 1 / sqrt(4 * n)
         a_d = gpuarray.to_gpu(a)
 
-        # a_d = gpuarray.empty((n,), dtype=DTYPE_f)
-        # a_d.fill(DTYPE_f(1 / sqrt(2 * n)))
-        # a_d[0] = np.array(1 / sqrt(4 * n), dtype=DTYPE_f)
         dct_d = cumisc.multiply(dct_d, a_d)
 
     return dct_d
@@ -471,7 +469,7 @@ def _gcv(p, lambda_, w_mean, y_dct, is_finite, w, y, nof):
     s = 10 ** p
     gamma = 1 / (1 + s * lambda_)
 
-    # w_mean = 1 means that all the data are equally weighted.
+    # w_mean == 1 means that all the data are equally weighted.
     residual_sum_squares = 0
     if w_mean > 0.9:
         # Very much faster: does not require any inverse DCT.
@@ -515,6 +513,7 @@ def _robust_weights(y, z, is_finite, h, weight_str):
 def _initial_guess(y):
     """Returns initial guess for z using coarse, fast smoothing."""
     n_y = len(y)
+
     # Do smoothing with one-tenth of coefficients.
     z_dct = [_dct_nd(y[i], f=dct) for i in range(n_y)]
     num_dct = np.ceil(np.array(z_dct[0].shape) / COARSE_COEFFICIENTS).astype(int) + 1

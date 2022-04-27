@@ -792,8 +792,7 @@ class PIVGPU:
                                   self.y_dl[self._k + 1], v_d)
 
         if self.smooth:
-            dp_x_d = gpu_smoothn(u_d, s=self.smoothing_par)
-            dp_y_d = gpu_smoothn(v_d, s=self.smoothing_par)
+            dp_x_d, dp_y_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par)
         else:
             dp_x_d = u_d.copy()
             dp_y_d = v_d.copy()
