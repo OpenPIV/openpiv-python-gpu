@@ -488,11 +488,9 @@ class PIVGPU:
         self.frame_shape = frame_shape.shape if hasattr(frame_shape, 'shape') else tuple(frame_shape)
         self.min_window_size = min_window_size
         self.ws_iters = (window_size_iters,) if isinstance(window_size_iters, int) else tuple(window_size_iters)
-        self.nb_iter_max = sum(self.ws_iters)
         self.overlap_ratio = float(overlap_ratio)
         self.dt = dt
         self.im_mask = mask.astype(DTYPE_f) if mask is not None else None
-        self.im_mask_d = gpuarray.to_gpu(self.im_mask) if self.im_mask is not None else None
         self.deform = deform
         self.smooth = smooth
         self.nb_validation_iter = nb_validation_iter
@@ -510,19 +508,21 @@ class PIVGPU:
         self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
         self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
 
-        self._check_inputs()
-
-        self.window_size_l = None
-        self.spacing_l = None
-        self.field_shape_l = None
         self.x = self.y = None
-        self.x_dl = self.y_dl = None
-        self.field_mask_dl = None
-        self.mask = None
-        self.corr = None
-        self.sig2noise_d = None
+        self._nb_iter = sum(self.ws_iters)
+        self._im_mask_d = None
+        self._field_mask = None
+        self._x_dl = self._y_dl = None
+        self._window_size_l = None
+        self._spacing_l = None
+        self._field_shape_l = None
+        self._field_mask_dl = None
+        self._corr = None
+        self._sig2noise_d = None
 
-        self.set_geometry()
+        self._check_inputs()
+        self._invert_mask()
+        self._set_geometry()
 
     def __call__(self, frame_a, frame_b):
         """Processes an image pair.
@@ -547,17 +547,17 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # Create the correlation object.
-        self.corr = GPUCorrelation(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method)
+        self._corr = GPUCorrelation(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method)
 
         # MAIN LOOP
-        for k in range(self.nb_iter_max):
+        for k in range(self._nb_iter):
             self._k = k
             logging.info('ITERATION {}'.format(k))
             extended_size, shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d)
 
             # Get window displacement to subpixel accuracy.
-            i_peak_d, j_peak_d = self.corr(self.window_size_l[k], self.spacing_l[k], extended_size=extended_size,
-                                           shift_d=shift_d, strain_d=strain_d)
+            i_peak_d, j_peak_d = self._corr(self._window_size_l[k], self._spacing_l[k], extended_size=extended_size,
+                                            shift_d=shift_d, strain_d=strain_d)
 
             # update the field with new values
             u_d, v_d = self._update_values(i_peak_d, j_peak_d, dp_x_d, dp_y_d)
@@ -571,7 +571,7 @@ class PIVGPU:
 
             # NEXT ITERATION
             # Compute the predictors dpx and dpy from the current displacements.
-            if k < self.nb_iter_max - 1:
+            if k < self._nb_iter - 1:
                 u_previous_d = u_d
                 v_previous_d = v_d
                 dp_x_d, dp_y_d = self._get_next_iteration_prediction(u_d, v_d)
@@ -585,7 +585,7 @@ class PIVGPU:
 
         logging.info('[DONE.]\n')
 
-        self.corr.free_data()
+        self._corr.free_data()
 
         return u, v
 
@@ -594,44 +594,197 @@ class PIVGPU:
         return self.x, self.y
 
     @property
+    def mask(self):
+        return 1 - self._field_mask
+
+    @property
     def s2n(self):
-        if self.sig2noise_d is not None:
-            sig2noise_d = self.sig2noise_d
+        if self._sig2noise_d is not None:
+            sig2noise_d = self._sig2noise_d
         else:
-            sig2noise_d = self.corr.get_sig2noise(subpixel_method=self.sig2noise_method)
+            sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method)
         return sig2noise_d.get()
 
     def free_data(self):
         """Frees correlation data from GPU."""
-        self.corr = None
+        self._corr = None
 
-    def set_geometry(self):
-        """Creates the parameters for the mesh geometry and mask at each iteration."""
-        self.spacing_l = []
-        self.field_shape_l = []
-        self.x_dl = []
-        self.y_dl = []
-        self.field_mask_dl = []
+    def _invert_mask(self):
+        """Inverts the image mask to agree to simplify future computations."""
+        if self.im_mask is not None:
+            self.im_mask = 1 - self.im_mask
 
-        self.window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
-                              for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
+    def _set_geometry(self):
+        """Creates the geometric parameters for the field at each iteration."""
+        self._spacing_l = []
+        self._field_shape_l = []
+        self._x_dl = []
+        self._y_dl = []
+        self._field_mask_dl = []
 
-        for k in range(self.nb_iter_max):
-            self.spacing_l.append(max(1, int(self.window_size_l[k] * (1 - self.overlap_ratio))))
-            self.field_shape_l.append(get_field_shape(self.frame_shape, self.window_size_l[k], self.spacing_l[k]))
+        self._window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
+                               for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
 
-            x, y = get_field_coords(self.field_shape_l[k], self.window_size_l[k], self.spacing_l[k])
-            self.x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
-            self.y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
+        for k in range(self._nb_iter):
+            self._spacing_l.append(max(1, int(self._window_size_l[k] * (1 - self.overlap_ratio))))
+            self._field_shape_l.append(get_field_shape(self.frame_shape, self._window_size_l[k], self._spacing_l[k]))
 
-            self._set_mask(x, y)
+            x, y = get_field_coords(self._field_shape_l[k], self._window_size_l[k], self._spacing_l[k])
+            self._x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
+            self._y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
 
-            if k == self.nb_iter_max - 1:
+            field_mask = self._mask_field(x, y)
+            self._field_mask_dl.append(gpuarray.to_gpu(field_mask))
+
+            if k == self._nb_iter - 1:
                 self.x = x
                 self.y = y
+                self._field_mask = field_mask
 
-        self.mask = self.field_mask_dl[-1]
-        
+    def _mask_field(self, x, y):
+        if self.im_mask is not None:
+            field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
+        else:
+            field_mask = np.ones_like(x, dtype=DTYPE_f)
+
+        return field_mask
+
+    def _mask_image(self, frame_a, frame_b):
+        """Mask the images before sending to device."""
+        _check_arrays(frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2)
+
+        if self.im_mask is not None:
+            if self._im_mask_d is None:
+                self._im_mask_d = gpuarray.to_gpu(self.im_mask)
+
+            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self._im_mask_d)
+            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self._im_mask_d)
+        else:
+            frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
+            frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
+
+        return frame_a_d, frame_b_d
+
+    def _get_corr_arguments(self, dp_x_d, dp_y_d):
+        """Returns the shift and strain arguments to the correlation class."""
+        # Check if extended search area is used for first iteration.
+        shift_d = None
+        strain_d = None
+        extended_size = None
+        if self._k == 0:
+            if self.extend_ratio is not None:
+                extended_size = int(self._window_size_l[self._k] * self.extend_ratio)
+        else:
+            _check_arrays(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, ndim=2)
+            m, n = dp_x_d.shape
+
+            # Compute the shift.
+            shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
+            shift_d[0, :, :] = dp_x_d
+            shift_d[1, :, :] = dp_y_d
+            # shift_d = gpuarray.stack(dp_x_d, dp_y_d, axis=0)  # This should work in latest version of PyCUDA.
+
+            # Compute the strain rate.
+            if self.deform:
+                strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
+
+        return extended_size, shift_d, strain_d
+
+    def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d):
+        """Updates the velocity values after each iteration."""
+        if dp_x_d == dp_y_d is None:
+            u_d = gpu_mask(j_peak_d, self._field_mask_dl[self._k])
+            v_d = gpu_mask(i_peak_d, self._field_mask_dl[self._k])
+        else:
+            u_d = _gpu_update_field(dp_x_d, j_peak_d, self._field_mask_dl[self._k])
+            v_d = _gpu_update_field(dp_y_d, i_peak_d, self._field_mask_dl[self._k])
+
+        return u_d, v_d
+
+    def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
+        """Return velocity fields with outliers removed."""
+        _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
+        size = u_d.size
+
+        if 's2n' in self.validation_method and self.nb_validation_iter > 0:
+            self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
+                                                         mask_width=self.sig2noise_width)
+
+        for i in range(self.nb_validation_iter):
+            # Get list of places that need to be validated.
+            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self._sig2noise_d, None,
+                                                                 self.validation_method,
+                                                                 s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+                                                                 mean_tol=self.mean_tol, rms_tol=self.rms_tol)
+
+            # Do the validation.
+            n_val = size - int(gpuarray.sum(val_locations_d).get())
+            if n_val > 0:
+                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
+
+                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d,
+                                                     v_mean_d, val_locations_d)
+                logging.info('[DONE.]')
+            else:
+                logging.info('No invalid vectors.')
+
+        return u_d, v_d
+
+    def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d, val_locations_d):
+        """Replace spurious vectors by the mean or median of the surrounding points."""
+        _check_arrays(u_d, v_d, u_mean_d, v_mean_d, val_locations_d, array_type=gpuarray.GPUArray, shape=u_d.shape)
+
+        # First iteration, just replace with mean velocity.
+        if self._k == 0:
+            u_d = gpuarray.if_positive(val_locations_d, u_d, u_mean_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_d, v_mean_d)
+
+        # Case if different dimensions: interpolation using previous iteration.
+        elif self._k > 0 and self._field_shape_l[self._k] != self._field_shape_l[self._k - 1]:
+            u_d = _interpolate_replace(self._x_dl[self._k - 1], self._y_dl[self._k - 1], self._x_dl[self._k],
+                                       self._y_dl[self._k], u_previous_d, u_d, val_locations_d)
+            v_d = _interpolate_replace(self._x_dl[self._k - 1], self._y_dl[self._k - 1], self._x_dl[self._k],
+                                       self._y_dl[self._k], v_previous_d, v_d, val_locations_d)
+
+        # Case if same dimensions.
+        elif self._k > 0 and self._field_shape_l[self._k] == self._field_shape_l[self._k - 1]:
+            u_d = gpuarray.if_positive(val_locations_d, u_d, u_previous_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_d, v_previous_d)
+
+        return u_d, v_d
+
+    def _get_next_iteration_prediction(self, u_d, v_d):
+        """Returns the velocity field to begin the next iteration."""
+        _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
+        # Interpolate if dimensions do not agree.
+        if self._window_size_l[self._k + 1] != self._window_size_l[self._k]:
+            u_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
+                                  self._y_dl[self._k + 1], u_d)
+            v_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
+                                  self._y_dl[self._k + 1], v_d)
+
+        if self.smooth:
+            dp_x_d, dp_y_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par)
+        else:
+            dp_x_d = u_d.copy()
+            dp_y_d = v_d.copy()
+
+        return dp_x_d, dp_y_d
+
+    @staticmethod
+    def _log_residual(i_peak_d, j_peak_d):
+        """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
+        _check_arrays(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
+
+        try:
+            normalized_residual = sqrt(int(gpuarray.sum(i_peak_d ** 2 + j_peak_d ** 2).get()) / i_peak_d.size) / 0.5
+            logging.info('[DONE]--Normalized residual : {}.'.format(normalized_residual))
+        except OverflowError:
+            logging.warning('[DONE]--Overflow in residuals.')
+            normalized_residual = np.nan
+
+        return normalized_residual
+
     def _check_inputs(self):
         if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
             raise TypeError('frame_shape must be either tuple of integers or array-like.')
@@ -639,7 +792,7 @@ class PIVGPU:
             raise ValueError('frame_shape must be 2D.')
         if not all([1 <= ws == int(ws) for ws in self.ws_iters]):
             raise ValueError('Window sizes must be integers greater than or equal to 1.')
-        if not self.nb_iter_max >= 1:
+        if not self._nb_iter >= 1:
             raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
         if not 0 < self.overlap_ratio < 1:
             raise ValueError('overlap ratio must be between 0 and 1.')
@@ -672,146 +825,6 @@ class PIVGPU:
             raise ValueError('s2n_width must be an integer.')
         if self.trust_1st_iter != bool(self.trust_1st_iter):
             raise ValueError('trust_1st_iter must have a boolean value.')
-
-    def _set_mask(self, x, y):
-        if self.im_mask is not None:
-            field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
-        else:
-            field_mask = np.ones_like(x, dtype=DTYPE_f)
-        self.field_mask_dl.append(gpuarray.to_gpu(field_mask))
-
-    # TODO use same mask convention as numpy etc.
-    def _mask_image(self, frame_a, frame_b):
-        """Mask the images before sending to device."""
-        _check_arrays(frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2)
-        if self.im_mask is not None:
-            frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self.im_mask_d)
-            frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self.im_mask_d)
-        else:
-            frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
-            frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
-
-        return frame_a_d, frame_b_d
-
-    def _get_corr_arguments(self, dp_x_d, dp_y_d):
-        """Returns the shift and strain arguments to the correlation class."""
-        # Check if extended search area is used for first iteration.
-        shift_d = None
-        strain_d = None
-        extended_size = None
-        if self._k == 0:
-            if self.extend_ratio is not None:
-                extended_size = int(self.window_size_l[self._k] * self.extend_ratio)
-        else:
-            _check_arrays(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, ndim=2)
-            m, n = dp_x_d.shape
-
-            # Compute the shift.
-            shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
-            shift_d[0, :, :] = dp_x_d
-            shift_d[1, :, :] = dp_y_d
-            # shift_d = gpuarray.stack(dp_x_d, dp_y_d, axis=0)
-
-            # Compute the strain rate.
-            if self.deform:
-                strain_d = gpu_strain(dp_x_d, dp_y_d, self.spacing_l[self._k])
-
-        return extended_size, shift_d, strain_d
-
-    def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d):
-        """Updates the velocity values after each iteration."""
-        if dp_x_d == dp_y_d is None:
-            u_d = gpu_mask(j_peak_d, self.field_mask_dl[self._k])
-            v_d = gpu_mask(i_peak_d, self.field_mask_dl[self._k])
-        else:
-            u_d = _gpu_update_field(dp_x_d, j_peak_d, self.field_mask_dl[self._k])
-            v_d = _gpu_update_field(dp_y_d, i_peak_d, self.field_mask_dl[self._k])
-
-        return u_d, v_d
-
-    def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
-        """Return velocity fields with outliers removed."""
-        _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
-        size = u_d.size
-
-        if 's2n' in self.validation_method and self.nb_validation_iter > 0:
-            self.sig2noise_d = self.corr.get_sig2noise(subpixel_method=self.sig2noise_method,
-                                                       mask_width=self.sig2noise_width)
-
-        for i in range(self.nb_validation_iter):
-            # Get list of places that need to be validated.
-            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self.sig2noise_d, None,
-                                                                 self.validation_method,
-                                                                 s2n_tol=self.s2n_tol, median_tol=self.median_tol,
-                                                                 mean_tol=self.mean_tol, rms_tol=self.rms_tol)
-
-            # Do the validation.
-            n_val = size - int(gpuarray.sum(val_locations_d).get())
-            if n_val > 0:
-                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
-
-                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d,
-                                                     v_mean_d, val_locations_d)
-                logging.info('[DONE.]')
-            else:
-                logging.info('No invalid vectors.')
-
-        return u_d, v_d
-
-    def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d, val_locations_d):
-        """Replace spurious vectors by the mean or median of the surrounding points."""
-        _check_arrays(u_d, v_d, u_mean_d, v_mean_d, val_locations_d, array_type=gpuarray.GPUArray, shape=u_d.shape)
-
-        # First iteration, just replace with mean velocity.
-        if self._k == 0:
-            u_d = gpuarray.if_positive(val_locations_d, u_d, u_mean_d)
-            v_d = gpuarray.if_positive(val_locations_d, v_d, v_mean_d)
-
-        # Case if different dimensions: interpolation using previous iteration.
-        elif self._k > 0 and self.field_shape_l[self._k] != self.field_shape_l[self._k - 1]:
-            u_d = _interpolate_replace(self.x_dl[self._k - 1], self.y_dl[self._k - 1], self.x_dl[self._k],
-                                       self.y_dl[self._k], u_previous_d, u_d, val_locations_d)
-            v_d = _interpolate_replace(self.x_dl[self._k - 1], self.y_dl[self._k - 1], self.x_dl[self._k],
-                                       self.y_dl[self._k], v_previous_d, v_d, val_locations_d)
-
-        # Case if same dimensions.
-        elif self._k > 0 and self.field_shape_l[self._k] == self.field_shape_l[self._k - 1]:
-            u_d = gpuarray.if_positive(val_locations_d, u_d, u_previous_d)
-            v_d = gpuarray.if_positive(val_locations_d, v_d, v_previous_d)
-
-        return u_d, v_d
-
-    def _get_next_iteration_prediction(self, u_d, v_d):
-        """Returns the velocity field to begin the next iteration."""
-        _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
-        # Interpolate if dimensions do not agree.
-        if self.window_size_l[self._k + 1] != self.window_size_l[self._k]:
-            u_d = gpu_interpolate(self.x_dl[self._k], self.y_dl[self._k], self.x_dl[self._k + 1],
-                                  self.y_dl[self._k + 1], u_d)
-            v_d = gpu_interpolate(self.x_dl[self._k], self.y_dl[self._k], self.x_dl[self._k + 1],
-                                  self.y_dl[self._k + 1], v_d)
-
-        if self.smooth:
-            dp_x_d, dp_y_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par)
-        else:
-            dp_x_d = u_d.copy()
-            dp_y_d = v_d.copy()
-
-        return dp_x_d, dp_y_d
-
-    @staticmethod
-    def _log_residual(i_peak_d, j_peak_d):
-        """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
-        _check_arrays(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
-
-        try:
-            normalized_residual = sqrt(int(gpuarray.sum(i_peak_d ** 2 + j_peak_d ** 2).get()) / i_peak_d.size) / 0.5
-            logging.info('[DONE]--Normalized residual : {}.'.format(normalized_residual))
-        except OverflowError:
-            logging.warning('[DONE]--Overflow in residuals.')
-            normalized_residual = np.nan
-
-        return normalized_residual
 
 
 def get_field_shape(image_size, window_size, spacing):
