@@ -12,5 +12,5 @@ build-backend = "setuptools.build_meta"
 minversion = "6.0"
 addopts = "-ra -q --benchmark-disable"
 testpaths = [
-    "tests",
+    "openpiv/test",
 ]
