@@ -13,21 +13,20 @@ import warnings
 from math import sqrt, ceil, log2
 
 import numpy as np
-import skcuda.fft as cufft
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
-
-with warnings.catch_warnings():
-    warnings.simplefilter('ignore', UserWarning)
-    from skcuda import misc as cumisc
 
 from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', UserWarning)
+    import skcuda.fft as cufft
+    from skcuda import misc as cumisc
 cumisc.init()
 
 # Define 32-bit types.
@@ -614,17 +613,16 @@ class PIVGPU:
         self.y_dl = []
         self.field_mask_dl = []
 
-        num_ws = len(self.ws_iters)
-        self.window_size_l = [(2 ** (num_ws - i - 1)) * self.min_window_size for i in range(num_ws)
-                              for _ in range(self.ws_iters[i])]
+        self.window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
+                              for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
 
         for k in range(self.nb_iter_max):
             self.spacing_l.append(max(1, int(self.window_size_l[k] * (1 - self.overlap_ratio))))
             self.field_shape_l.append(get_field_shape(self.frame_shape, self.window_size_l[k], self.spacing_l[k]))
 
             x, y = get_field_coords(self.field_shape_l[k], self.window_size_l[k], self.spacing_l[k])
-            self.x_dl.append(gpuarray.to_gpu(x[0, :]))
-            self.y_dl.append(gpuarray.to_gpu(y[:, 0]))
+            self.x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
+            self.y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
 
             self._set_mask(x, y)
 
@@ -661,11 +659,9 @@ class PIVGPU:
         if self.extend_ratio is not None:
             if not 1 < self.extend_ratio == float(self.extend_ratio):
                 raise ValueError('extend_ratio must be a number greater than unity.')
-        # if not all(0 < tol == float(tol) or tol is None for tol in
-        #            [self.s2n_tol, self.median_tol, self.mean_tol, self.rms_tol]):
-        #     raise ValueError('Validation tolerances must be positive numbers.')
-        if not 0 < self.smoothing_par == float(self.smoothing_par):
-            raise ValueError('smoothing_par must be a positive number.')
+        if not all(0 < tol == float(tol) or tol is None for tol in
+                   [self.s2n_tol, self.median_tol, self.mean_tol, self.rms_tol]):
+            raise ValueError('Validation tolerances must be positive numbers.')
         if not 1 < self.n_fft == float(self.n_fft):
             raise ValueError('n_fft must be an number equal to or greater than 1.')
         if self.sig2noise_method not in ALLOWED_SIG2NOISE_METHODS:
@@ -684,6 +680,7 @@ class PIVGPU:
             field_mask = np.ones_like(x, dtype=DTYPE_f)
         self.field_mask_dl.append(gpuarray.to_gpu(field_mask))
 
+    # TODO use same mask convention as numpy etc.
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2)
@@ -871,8 +868,8 @@ def get_field_coords(field_shape, window_size, spacing):
     assert int(spacing) == spacing > 0, 'spacing must be a positive int.'
     m, n = field_shape
 
-    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n - 1), n, dtype=DTYPE_f), (m, 1))
-    y = np.tile(np.linspace(window_size / 2 + spacing * (m - 1), window_size / 2, m, dtype=DTYPE_f), (n, 1)).T
+    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n - 1), n), (m, 1))
+    y = np.tile(np.linspace(window_size / 2 + spacing * (m - 1), window_size / 2, m), (n, 1)).T
 
     return x, y
 
