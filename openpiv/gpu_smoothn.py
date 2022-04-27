@@ -1,14 +1,11 @@
-"""This module will contain a GPU-accelerated implementation of smoothn."""
-
 import logging
 import warnings
-from math import sqrt, pi, ceil
+from math import sqrt, log2, log10, ceil
 
 import numpy as np
-import numpy.linalg as linalg
-import scipy.optimize.lbfgsb as lbfgsb
+from scipy.optimize.lbfgsb import fmin_l_bfgs_b
 from scipy.fftpack.realtransforms import dct, idct
-import skcuda.fft as cufft
+from scipy.ndimage.morphology import distance_transform_edt
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
@@ -17,14 +14,19 @@ from pycuda.compiler import SourceModule
 # scikit-cuda gives an annoying warning everytime it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter('ignore', UserWarning)
+    import skcuda.fft as cufft
     from skcuda import misc as cumisc
-
-from openpiv.gpu_misc import _check_arrays
-
 cumisc.init()
+
 DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
+
+MAX_ROBUST_STEPS = 3
+ERR_P = 0.1
+N_P0 = 10
+COARSE_COEFFICIENTS = 10
+WEIGHT_METHODS = {'bisquare', 'talworth', 'cauchy'}
 
 
 def gpu_smoothn(f_d, **kwargs):
@@ -41,32 +43,16 @@ def gpu_smoothn(f_d, **kwargs):
         Float, same size as f_d. Smoothed field.
 
     """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    # _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
 
     f = f_d.get()
-    f_smooth_d = gpuarray.to_gpu(smoothn(f, **kwargs)[0].astype(DTYPE_f, order='C'))  # Smoothn returns F-ordered array.
+    f_smooth_d = gpuarray.to_gpu(smoothn2(f, **kwargs)[0])
 
     return f_smooth_d
 
 
-# TODO implement smooth order (m)
-def smoothn(
-        y,
-        w=None,
-        s=None,
-        robust=False,
-        max_iter=100,
-        tol_z=1e-3,
-        z0=None,
-        weight_str="bisquare",
-        spacing=None,
-        mask=None,
-        axis=None,
-        s0=None,
-        n_s0=10,
-        smooth_order=2,
-        **kwargs
-):
+def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
+             smooth_order=2, spacing=None, initial_guess=False):
     """Robust spline smoothing for 1-D to n-D data.
 
     smoothn provides a fast, automatized and robust discretized smoothing spline for data of any dimension. z =
@@ -80,7 +66,9 @@ def smoothn(
     ----------
     y : ndarray
         Input array can be numeric or logical. The returned array is of type double.
-    w : optional
+    mask : ndarray, optional
+        Locations where the data should be masked.
+    w : ndarray, optional
         Specifies a weighting array w of real positive values, that must have the same size as y. Note that a nil weight
         corresponds to a missing value.
     s : float, optional
@@ -93,23 +81,19 @@ def smoothn(
         Maximum number of iterations allowed (default = 100).
     tol_z : float, optional
         Termination tolerance on Z (default = 1e-3). TolZ must be in [0,1].
-    z0 : ndarray or None, optional
+    z0 : ndarray or list, optional
         Initial value for the iterative process (default = original data)
-    weight_str : {'bisquare', 'talworth', 'cauchy'}, optional
+    weight_method : {'bisquare', 'talworth', 'cauchy'}, optional
         Weight function for robust smoothing.
-    smooth_order : float, optional
-    spacing : ndarray, optional
-    mask : ndarray, optional
-        Locations where the data should be masked.
-    axis : optional
-        Axes along with to smooth.
-    s0 : float, optional
-    n_s0 : optional
-
+    smooth_order : {0, 1, 2}, optional
+        Order criterion.
+    spacing : ndarray or iterable, optional
+        Spacing between points in each dimension.
+    initial_guess : bool
 
     Returns
     -------
-    z : ndarray
+    z : ndarray or list
     s : float
     w_tot : ndarray
 
@@ -119,398 +103,623 @@ def smoothn(
 
     References
     ----------
-    Garcia D, Robust smoothing of gridded data in one and higher dimensions with missing values. Computational
-    Statistics & Data Analysis, 2010.
+    Garcia D. Robust smoothing of gridded data in one and higher dimensions with missing values. Computational
+    Statistics & Data Analysis. 2010.
     https://www.biomecardio.com/pageshtm/publi/csda10.pdf
     https://www.biomecardio.com/matlab/smoothn.html
     https://www.biomecardio.com/matlab/dctn.html
     https://www.biomecardio.com/matlab/idctn.html
 
     """
-    assert smooth_order == 2, 'smooth_order values other than 2 are not yet implemented.'
-    is_auto = not s
-    verbose = kwargs['verbose'] if 'verbose' in kwargs.items() else False
-
-    if isinstance(y, np.ma.masked_array):
-        mask = y.mask
-        y = np.array(y)
-
-    if mask is not None:
-        if w is not None:
-            w = np.array(w)
-            w[mask] = 0.0
-        y[mask] = np.nan
-
-    # Smoothness parameter and weights
-    if w is not None:
-        if np.any(w < 0):
-            raise ValueError('Weights must all be greater than or equal to 0.')
-        w = w / np.amax(w)
-    else:
-        w = np.ones(y.shape)
-
-    # sort axis
-    if axis is None:
-        axis = tuple(np.arange(y.ndim))
-
-    if y.size < 2:
+    n_y = len(y)
+    y0 = y[0]
+    y_shape = y0.shape
+    y_size = y0.size
+    y_ndim = y0.ndim
+    d_type = y0.dtype
+    if d_type != np.float32:
+        d_type = np.float64
+    if y_size < 2:
         z = y
-        w_tot = 0
+        w_tot = np.array(0)
         return z, s, w_tot
+    if not all([y[i].shape == y_shape for i in range(n_y)]):
+        raise ValueError('All arrays in y must have same shape.')
+    if not bool(robust) == robust * 1:
+        raise ValueError('bool must be a boolean.')
+    if not 0 < max_iter == int(max_iter):
+        raise ValueError('max_iter must be an integer.')
+    if not 0 < tol_z == float(tol_z):
+        raise ValueError('max_iter must be a number greater than zero.')
+    weight_method = weight_method.lower()
+    if weight_method not in WEIGHT_METHODS:
+        raise ValueError('max_iter must be a number.')
+    if int(smooth_order) != smooth_order not in {0, 1, 2}:
+        raise ValueError('smooth_order must be 0, 1 or 2.')
 
-    # "Weighting function" criterion
-    weight_str = weight_str.lower()
-
-    # Weights. Zero weights are assigned to not finite values (Inf or NaN),
-    # (Inf/NaN values = missing data).
-    is_finite = np.array(np.isfinite(y)).astype(bool)
-    nof = np.sum(is_finite)  # number of finite elements
-    w = w * is_finite
-
-    # Weighted or missing data?
-    is_weighted = np.any(w != 1)
-
-    if spacing is not None:
-        spacing = spacing / np.amax(spacing)
-    else:
-        spacing = np.ones(len(axis))
-
-    # Creation of the lambda_ tensor.
-    # lambda_ contains the eingenvalues of the difference matrix used in this
-    # penalized least squares process.
-    axis = tuple(np.array(axis).flatten())
-    lambda_ = np.zeros(y.shape)
-    for i in axis:
-        # create a 1 x d array (so e.g. [1,1] for a 2D case
-        siz0 = np.ones(y.ndim, dtype=int)
-        siz0[i] = y.shape[i]
-        # cos(pi*(reshape(1:y_shape(i),siz0)-1)/y_shape(i)))
-        # (arange(1,y_shape[i]+1).reshape(siz0) - 1.)/y_shape[i]
-        lambda_ = lambda_ + (np.cos(np.pi * (np.arange(1, y.shape[i] + 1) - 1.0) / y.shape[i]
-                                    ).reshape(siz0)) / spacing[i] ** 2
-    lambda_ = -2.0 * (len(axis) - lambda_)
-    # if not is_auto:
-    #     gamma = 1.0 / (1 + (s * abs(lambda_)) ** smooth_order)
-
-    # Upper and lower bound for the smoothness parameter
-    # The average leverage (h) is by definition in [0 1]. Weak smoothing occurs
-    # if h is close to 1, while over-smoothing appears when h is near 0. Upper
-    # and lower bounds for h are given to avoid under- or over-smoothing. See
-    # equation relating h to the smoothness parameter (Equation #12 in the
-    # referenced CSDA paper).
-    n = sum(y.shape) != 1  # tensor rank of the y-array
-    h_min = 1e-6
-    h_max = 0.99
-    # (h/n)**2 = (1 + a)/( 2 a)
-    # a = 1/(2 (h/n)**2 -1)
-    # where a = sqrt(1 + 16 s)
-    # (a**2 -1)/16
-    s_min_bnd = np.sqrt((((1 + np.sqrt(1 + 8 * h_max ** (2.0 / n))) / 4.0 / h_max ** (2.0 / n)) ** 2 - 1) / 16.0)
-    s_max_bnd = np.sqrt((((1 + np.sqrt(1 + 8 * h_min ** (2.0 / n))) / 4.0 / h_min ** (2.0 / n)) ** 2 - 1) / 16.0)
-
-    if is_auto:
-        xpost = np.array([(0.9 * np.log10(s_min_bnd) + np.log10(s_max_bnd) * 0.1)])
-    else:
-        xpost = np.array([np.log10(s)])
-
-    # Initialize before iterating.
-    w_tot = w
+    # Get mask.
+    if isinstance(y0, np.ma.masked_array):
+        mask = y0.mask
+        y = [y[i].data for i in range(n_y)]
+    if mask is not None:
+        if np.any(np.round(mask) != mask):
+            'mask must have boolean values.'
+        if mask.shape != y_shape:
+            raise ValueError('mask must be an ndarray with same shape as arrays in y.')
+        for i in range(n_y):
+            y[i][mask] = np.nan
 
     # Arbitrary values for missing y-data.
-    y[~is_finite] = 0
+    is_finite = np.isfinite(y[0])
+    for i in range(1, n_y):
+        is_finite = is_finite * np.isfinite(y[i])
+    num_finite = is_finite.sum()
+    for i in range(n_y):
+        y[i][~is_finite] = 0
+    # replace_non_finite(y, is_finite)
+
+    # Weights. Zero weights are assigned to not finite values (Inf/NaN values = missing data).
+    if w is not None:
+        w = w * is_finite
+        if w.shape != y_shape:
+            raise ValueError('w must be an ndarray with same shape as arrays in y.')
+        if np.any(w < 0):
+            raise ValueError('Weights must all be greater than or equal to zero.')
+        w = w / np.amax(w)
+    else:
+        w = np.ones(y_shape, dtype=d_type) * is_finite
+    is_weighted = np.any(w != 1)
+
+    # Relaxation factor: to speedup convergence.
+    relaxation_factor = 1 + 0.75 * is_weighted
 
     # Initial conditions for z.
     if is_weighted:
-        # With weighted/missing data an initial guess is provided to ensure faster convergence. For that purpose, a
+        # With weighted/missing data, an initial guess is provided to ensure faster convergence. For that purpose, a
         # nearest neighbor interpolation followed by a coarse smoothing are performed.
         if z0 is not None:  # an initial guess (z0) has been provided
+            if not isinstance(z0, list):
+                z0 = [z0]
+            if not len(z0) == n_y:
+                raise ValueError('z0 must have same number of components as y.')
+            if not all([z0[i].shape == y_shape for i in range(n_y)]):
+                raise ValueError('Arrays in z0 must all have same shape as arrays in y.')
             z = z0
         else:
-            z = y  # InitialGuess(y,is_finite);
+            if initial_guess:
+                z = _initial_guess(y)
+            else:
+                z = list(y)
     else:
-        z = np.zeros(y.shape)
+        z = [np.zeros(y_shape, dtype=d_type)] * n_y
 
-    # Error on p. Smoothness parameter s = 10^p.
-    errp = 0.1
-    # Relaxation factor rf: to speedup convergence.
-    rf = 1 + 0.75 * is_weighted
+    if spacing is not None:
+        spacing = np.array(spacing)
+        if spacing.size != y_ndim:
+            raise ValueError('spacing must be either None or an array-like with size == y.ndim')
+        if np.any(spacing < 0):
+            raise ValueError('spacing must all be greater than zero.')
+        spacing = np.array(spacing) / np.amax(spacing)
+    else:
+        spacing = np.ones(y_ndim)
 
-    # Main iterative process
-    robust_iterative_process = True
-    robust_step = 0
+    is_auto = not s
+    if not is_auto:
+        if not 0 < s == float(s):
+            raise ValueError('s must be a number greater than zero or None.')
+        p = log10(s)
+    else:
+        p = None
+
+    lambda_ = _lambda(y0, spacing) ** smooth_order
+    p_min, p_max = _smooth_bounds(y_shape, smooth_order)
+
+    # Main iterative process.
     iter_n = 0
-    while robust_iterative_process:
-        # Amount of weights (see the function GCVscore).
-        aow = np.sum(w_tot) / y.size  # 0 < aow <= 1
-        tol = 1.0
-        iter_n = 0
+    w_tot = w
+    for robust_step in range(MAX_ROBUST_STEPS):
+        w_mean = np.sum(w_tot) / y_size
 
-        while tol > tol_z and iter_n < max_iter:
-            iter_n += 1
+        for iter_n in range(max_iter):
             z0 = z
-            dct_y = dct_nd(w_tot * (y - z) + z, f=dct)
-            if verbose:
-                logging.info('tol {} iter_n {}'.format(tol, iter_n))
+            dct_y = [_dct_nd(w_tot * (y[i] - z[i]) + z[i], f=dct) for i in range(n_y)]
 
-            if is_auto and not np.remainder(np.log2(iter_n), 1):
-                # The generalized cross-validation (GCV) method is used.
-                # We seek the smoothing parameter s that minimizes the GCV
-                # score i.e. s = Argmin(GCVscore).
-                # Because this process is time-consuming, it is performed from
-                # time to time (when iter_n is a power of 2)
+            # The generalized cross-validation (GCV) method is used. We seek the smoothing parameter s that
+            # minimizes the GCV score i.e. s = Argmin(GCV_score). Because this process is time-consuming, it is
+            # performed from time to time (when iter_n is a power of 2).
+            if is_auto and not np.remainder(log2(iter_n + 1), 1):
+                # If no initial guess for s, span the possible range to get a reasonable starting point. Only need to do
+                # it once though. N_S0 is the number of samples used.
+                if not p:
+                    p_span = np.arange(N_P0) * (1 / (N_P0 - 1)) * (p_max - p_min) + p_min
+                    g = np.zeros_like(p_span)
+                    for i, p_i in enumerate(p_span):
+                        g[i] = _gcv(p_i, lambda_, w_mean, dct_y, is_finite, w_tot, y, num_finite)
 
-                # xpost,f,d = lbfgsb.fmin_l_bfgs_b(gcv,xpost,fprime=None,factr=10.,\
-                #   approx_grad=True,bounds=[(log10(s_min_bnd),log10(s_max_bnd))],\
-                #   args=(lambda_,aow,dct_y,is_finite,w_tot,y,nof,y_size))
+                    p = p_span[np.argmin(g)]
 
-                # if we have no clue what value of s to use, better span the
-                # possible range to get a reasonable starting point ...
-                # only need to do it once though. nS0 is the number of samples used
-                if not s0:
-                    ss = np.arange(n_s0) * (1.0 / (n_s0 - 1.0)) * (
-                            np.log10(s_max_bnd) - np.log10(s_min_bnd)
-                    ) + np.log10(s_min_bnd)
-                    g = np.zeros_like(ss)
-                    for i, p in enumerate(ss):
-                        g[i] = gcv(p, lambda_, aow, dct_y, is_finite, w_tot, y, nof, y.size, smooth_order)
-                        # print 10**p,g[i]
-                    xpost = [ss[g == np.amin(g)]]
-                    # logging.log('{} {} {} {} {}'.format(iter_n, tol, np.amin(g), xpost[0], s))
-                else:
-                    xpost = [s0]
-                xpost, f, d = lbfgsb.fmin_l_bfgs_b(
-                    gcv,
-                    np.asarray(xpost),
-                    fprime=None,
-                    factr=10.0,
-                    approx_grad=True,
-                    bounds=[(np.log10(s_min_bnd), np.log10(s_max_bnd))],
-                    args=(lambda_, aow, dct_y, is_finite, w_tot, y, nof, y.size, smooth_order)
-                )
-            s = 10 ** xpost[0]
-            # Update the value we use for the initial s estimate.
-            s0 = xpost[0]
+                # Estimate the smoothing parameter.
+                p, _, _ = fmin_l_bfgs_b(_gcv, np.array([p]), fprime=None, factr=10, approx_grad=True,
+                                        bounds=[(p_min, p_max)],
+                                        args=(lambda_, w_mean, dct_y, is_finite, w_tot, y, num_finite))
+                p = p[0]
 
-            gamma = 1.0 / (1 + (s * np.abs(lambda_)) ** smooth_order)
+            # Update z using the gamma coefficients.
+            s = 10 ** p
+            gamma = 1 / (1 + s * lambda_)
+            z = [relaxation_factor * _dct_nd(gamma * dct_y[i], f=idct) + (1 - relaxation_factor) * z[i]
+                 for i in range(n_y)]
 
-            z = rf * dct_nd(gamma * dct_y, f=idct) + (1 - rf) * z
-            # If no weighted/missing data => tol=0 (no iteration).
-            tol = is_weighted * linalg.norm(z0 - z) / linalg.norm(z)
+            # If not weighted/missing data => tol=0 (no iteration).
+            tol = is_weighted * np.linalg.norm([z0[i] - z[i] for i in range(n_y)]) / np.linalg.norm(z)
 
-        # Robust Smoothing: iteratively re-weighted process
+            if tol <= tol_z:
+                break
+
+        # Robust Smoothing: iteratively re-weighted process.
         if robust:
-            h = 1.0
-            for i in range(n):
-                # Average leverage.
-                h0 = np.sqrt(1 + 16.0 * s / spacing[i] ** (2 ** smooth_order))
-                h0 = np.sqrt(1 + h) / np.sqrt(2) / h0
-                h *= h0
-
-            # Take robust weights into account.
-            w_tot = w * robust_weights(y - z, is_finite, h, weight_str)
-
-            # Re-initialize for another iterative weighted process.
+            h = _leverage(s, smooth_order, spacing)
+            w_tot = w * _robust_weights(y, z, is_finite, h, weight_method)
             is_weighted = True
-            robust_step = robust_step + 1
-            robust_iterative_process = robust_step < 2  # 3 robust steps are enough.
         else:
-            robust_iterative_process = False
+            break
 
-    # Warning messages.
+    # Log warning messages.
     if is_auto:
-        if np.abs(np.log10(s) - np.log10(s_min_bnd)) < errp:
-            logging.warning('smoothn:SLowerBound\ns = {.3f} : the lower bound for s has been reached.'
-                            'Put s as an input variable if required.'.format(s))
-        elif np.abs(np.log10(s) - np.log10(s_max_bnd)) < errp:
-            logging.warning('smoothn:SUpperBound\ns = {.3f} : the lower bound for s has been reached.'
-                            'Put s as an input variable if required.'.format(s))
-    if iter_n == max_iter:
-        logging.warning('smoothn:MaxIter\nMaximum number of iterations ({:d}) has been exceeded.'
-                        'Increase max_iter option or decrease tol_z value.'.format(max_iter))
-    return z, s, w_tot
+        _s_bound_warning(s, p_min, p_max)
+    if iter_n == max_iter - 1:
+        _max_iter_warning(max_iter)
+
+    if d_type == np.float32:
+        assert z[0].dtype == np.float32
+
+    if n_y == 1:
+        z = z[0]
+
+    return z, s
 
 
-def gcv(p, lambda_, aow, dct_y, is_finite, w_tot, y, nof, noe, smooth_order):
-    # Search the smoothing parameter s that minimizes the GCV score
-    # ---
+def gpu_fft(f_d, norm='backward', full_frequency=False):
+    """Returns the 1D FFT of the input.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        1D data to be transformed, with serial data along rows.
+    norm : {'forward', 'backward', 'ortho'}
+        Normalization of the forward-backward transform pair.
+    full_frequency : bool
+        Whether to return the full or non-redundant Fourier coefficients.
+
+    Returns
+    -------
+    GPUArray
+
+    """
+    assert f_d.dtype == DTYPE_f
+    if f_d.ndim == 1:
+        f_d = f_d.reshape(1, f_d.size)
+    m, n = f_d.shape
+    assert n >= 2
+    scale = norm == 'forward'
+    fft_d = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
+
+    plan_forward = cufft.Plan((n,), DTYPE_f, DTYPE_c, batch=m)
+    cufft.fft(f_d, fft_d, plan_forward, scale=scale)
+
+    if norm == 'ortho':
+        fft_d = fft_d * DTYPE_f(1 / sqrt(n))
+
+    if full_frequency:
+        fft_d = _reflect_frequency_comp(fft_d, n)
+
+    return fft_d
+
+
+def gpu_ifft(f_d, norm='backward', inverse_width=None, full_frequency=False):
+    """Returns the 1D, inverse FFT of the input.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        1D data to be transformed, with serial data along rows.
+    norm : {'forward', 'backward', 'ortho'}
+        Normalization of the forward-backward transform pair.
+    inverse_width : int
+        Size of the inverse transform. This ensures that the forward-backward pair is the same size.
+    full_frequency : bool
+        Whether the transform data includes redundant frequencies.
+
+    Returns
+    -------
+    GPUArray
+
+    """
+    assert f_d.dtype == DTYPE_c
+    if f_d.ndim == 1:
+        f_d = f_d.reshape(1, f_d.size)
+    m, n = f_d.shape
+    assert n >= 2
+    scale = norm == 'backward'
+    if inverse_width is None:
+        inverse_width = (n - 1) * 2
+    if full_frequency:
+        frequency_width = inverse_width // 2 + 1
+        f_d = f_d[:, :frequency_width].copy()
+
+    ifft_d = gpuarray.empty((m, inverse_width), dtype=DTYPE_f)
+
+    plan_inverse = cufft.Plan((inverse_width,), DTYPE_c, DTYPE_f, batch=m)
+    cufft.ifft(f_d, ifft_d, plan_inverse, scale=scale)
+
+    if norm == 'ortho':
+        ifft_d = ifft_d * DTYPE_f(1 / sqrt(inverse_width))
+
+    return ifft_d
+
+
+def gpu_dct(f_d, norm='backward'):
+    assert f_d.dtype == DTYPE_f
+    if f_d.ndim == 1:
+        f_d = f_d.reshape(1, f_d.size)
+    m, n = f_d.shape
+    assert n >= 2
+
+    normal_factor = DTYPE_f(1 / n) if norm == 'forward' else DTYPE_f(2)
+
+    # w_d = cumath.exp(DTYPE_c(-1j * np.pi) * gpuarray.arange(n, dtype=DTYPE_f) / DTYPE_f(2 * n))
+    #
+    # # could extend the fft output rather than zero-pad (Mahkoul)
+    # data_d = _sift(f_d, 'forward')
+    # output_d = gpu_fft(data_d, norm='backward', full_frequency=True)
+    #
+    # dct_d0 = cumisc.multiply(output_d, w_d).real * normal_factor
+
+    freq_width = n // 2 + 1
+
+    # W-coefficients from Makhoul
+    w_real_d = gpuarray.to_gpu(np.cos(DTYPE_f(-np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                               * normal_factor)
+    w_imag_d = gpuarray.to_gpu(np.sin(DTYPE_f(np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                               * normal_factor)
+
+    # could extend the fft output rather than zero-pad (Mahkoul)
+    data_d = _sift(f_d, 'forward')
+    fft_data_d = gpu_fft(data_d, norm='backward', full_frequency=False)
+    fft_data_real_d = fft_data_d.real
+    fft_data_imag_d = fft_data_d.imag
+
+    # This could be done by a kernel to save two array definitions.
+    dct_positive_d = (cumisc.multiply(fft_data_real_d, w_real_d) + cumisc.multiply(fft_data_imag_d, w_imag_d))
+    dct_negative_d2 = (cumisc.multiply(fft_data_real_d, w_imag_d) - cumisc.multiply(fft_data_imag_d, w_real_d))
+    dct_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    dct_d[:, :freq_width] = dct_positive_d
+    dct_d[:, freq_width:] = _flip_frequency_real(dct_negative_d2, n - freq_width, offset=(n % 2) - 1)
+
+    # Use this after the next release of PyCUDA (2022).
+    # dct_d = gpuarray.concatenate(dct_positive_d, dct_negative_d2, axis=0)
+
+    if norm == 'ortho':
+        a = np.empty((n,), dtype=DTYPE_f)
+        a.fill(DTYPE_f(1 / sqrt(2 * n)))
+        a[0] = 1 / sqrt(4 * n)
+        a_d = gpuarray.to_gpu(a)
+
+        # a_d = gpuarray.empty((n,), dtype=DTYPE_f)
+        # a_d.fill(DTYPE_f(1 / sqrt(2 * n)))
+        # a_d[0] = np.array(1 / sqrt(4 * n), dtype=DTYPE_f)
+        dct_d = cumisc.multiply(dct_d, a_d)
+
+    return dct_d
+
+
+def gpu_idct(f_d, norm='backward'):
+    """Returns the 1D, type-II, inverse DCT of the input.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        1D data to be transformed, with serial data along rows.
+    norm : {'forward', 'backward', 'ortho'}
+        Normalization of the forward-backward transform pair.
+
+    Returns
+    -------
+    GPUArray
+
+    """
+    assert f_d.dtype == DTYPE_f
+    if f_d.ndim == 1:
+        f_d = f_d.reshape(1, f_d.size)
+    m, n = f_d.shape
+    assert n >= 2
+    scale = norm == 'backward'
+    freq_width = n // 2 + 1
+    normal_factor = DTYPE_f(1) if norm == 'forward' else DTYPE_f(0.5)
+
+    ifft_output_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    w_d = gpuarray.to_gpu(np.exp(DTYPE_c(1j * np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                          * normal_factor)
+
+    fft_data_flip = _flip_frequency_real(f_d, freq_width, left_pad=1)
+    ifft_input_d = cumisc.multiply(f_d[:, :freq_width].copy() - DTYPE_c(1j) * fft_data_flip, w_d)
+
+    plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
+    cufft.ifft(ifft_input_d, ifft_output_d, plan_inverse, scale=scale)
+    idct_d = _sift(ifft_output_d, 'backward')
+
+    if norm == 'ortho':
+        x_0 = f_d[:, 0].copy().reshape(m, 1)
+        idct_d = cumisc.add(DTYPE_f(sqrt(2 / n)) * idct_d, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0)
+
+    return idct_d
+
+
+def replace_non_finite(y, finite):
+    """Returns array with non-finite values replaced."""
+    # Nearest neighbor interpolation (in case of missing values).
+    missing = ~finite
+    if np.any(missing):
+        distance = distance_transform_edt(1 - finite)
+        y[missing] = y[distance[missing]]
+
+
+def _gcv(p, lambda_, w_mean, y_dct, is_finite, w, y, nof):
+    """Returns the smoothing parameter s that minimizes the GCV score."""
+    n_y = len(y)
+    y_size = y[0].size
     s = 10 ** p
-    gamma = 1.0 / (1 + (s * np.abs(lambda_)) ** smooth_order)
-    # --- rss = Residual sum-of-squares
-    if aow > 0.9:  # aow = 1 means that all the data are equally weighted
-        # very much faster: does not require any inverse DCT
-        rss = linalg.norm(dct_y * (gamma - 1.0)) ** 2
+    gamma = 1 / (1 + s * lambda_)
+
+    # w_mean = 1 means that all the data are equally weighted.
+    residual_sum_squares = 0
+    if w_mean > 0.9:
+        # Very much faster: does not require any inverse DCT.
+        for i in range(n_y):
+            residual_sum_squares += np.linalg.norm(y_dct[i] * (gamma - 1)) ** 2
     else:
-        # take account of the weights to calculate rss:
-        y_hat = dct_nd(gamma * dct_y, f=idct)
-        rss = linalg.norm(np.sqrt(w_tot[is_finite]) * (y[is_finite] - y_hat[is_finite])) ** 2
-    # ---
+        # Take account of the weights to calculate residual_sum_squares.
+        for i in range(n_y):
+            y_hat = _dct_nd(gamma * y_dct[i], f=idct)
+            residual_sum_squares += np.linalg.norm(np.sqrt(w[is_finite]) * (y[i][is_finite] - y_hat[is_finite])) ** 2
+
     tr_h = np.sum(gamma)
-    gcv_score = rss / float(nof) / (1.0 - tr_h / float(noe)) ** 2
+    gcv_score = residual_sum_squares / nof / (1 - tr_h / y_size) ** 2 / n_y  # divide by n_y to match scalar score.
+
     return gcv_score
 
 
-def robust_weights(r, i, h, w_str):
-    # weights for robust smoothing.
-    mad = np.median(np.abs(r[i] - np.median(r[i])))  # median absolute deviation
-    u = np.abs(r / (1.4826 * mad) / np.sqrt(1 - h))  # studentized residuals
-    if w_str == "cauchy":
-        c = 2.385
-        w = 1.0 / (1 + (u / c) ** 2)  # Cauchy weights
-    elif w_str == "talworth":
-        c = 2.795
-        w = u < c  # Talworth weights
-    else:
-        c = 4.685
-        w = (1 - (u / c) ** 2) ** 2.0 * ((u / c) < 1)  # bisquare weights
+def _robust_weights(y, z, is_finite, h, weight_str):
+    """Returns the weights for robust smoothing."""
+    r = np.stack(y, axis=0) - np.stack(z, axis=0)
+    marginal_median = np.median(r[:, is_finite])
+    vector_norm = _rms(r, axis=0)
+    median_absolute_deviation = np.median(_rms(r[:, is_finite] - marginal_median))
 
-    w[np.isnan(w)] = 0
+    # Compute studentized residuals.
+    u = vector_norm / (1.4826 * median_absolute_deviation) / np.sqrt(1 - h)
+
+    if weight_str == 'cauchy':
+        c = 2.385
+        w = 1 / (1 + (u / c) ** 2)  # Cauchy weights
+    elif weight_str == 'talworth':
+        c = 2.795
+        w = u < c
+    else:  # bisquare weights
+        c = 4.685
+        w = (1 - (u / c) ** 2) ** 2 * ((u / c) < 1)
+
     return w
 
 
-# TODO write InitialGuess function
+def _initial_guess(y):
+    """Returns initial guess for z using coarse, fast smoothing."""
+    n_y = len(y)
+    # Do smoothing with one-tenth of coefficients.
+    z_dct = [_dct_nd(y[i], f=dct) for i in range(n_y)]
+    num_dct = np.ceil(np.array(z_dct[0].shape) / COARSE_COEFFICIENTS).astype(int) + 1
+    coefficient_indexes = tuple([slice(n, None) for n in num_dct])
+    for i in range(n_y):
+        z_dct[i][coefficient_indexes] = 0
+    z = [_dct_nd(z_dct[i], f=idct) for i in range(n_y)]
+
+    return z
 
 
-# NB: filter is 2*I - (np.roll(I,-1) + np.roll(I,1))
-
-
-def dct_nd(data, f=dct):
+def _dct_nd(data, f=dct):
+    """Returns the nD dct."""
     nd = len(data.shape)
     if nd == 1:
         return f(data, norm='ortho', type=2)
     elif nd == 2:
         return f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T
-    elif nd == 3:
-        return f(
-            f(f(data, norm='ortho', type=2, axis=0), norm='ortho', type=2, axis=1), norm='ortho', type=2, axis=2)
+    else:
+        data_dct = data.copy()
+        for dim in range(nd):
+            data_dct = f(data_dct, norm='ortho', type=2, axis=dim)
+        return data_dct
 
 
-def gpu_forward_fft(data_d, norm='backward'):
-    assert data_d.dtype == DTYPE_f
-    if data_d.ndim == 1:
-        data_d = data_d.reshape(1, data_d.size)
-    m, n = data_d.shape
-    assert n >= 2
-    scale = norm == 'forward'
-    forward_fft_d = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
+def _lambda(y, spacing):
+    """Returns the lambda tensor. lambda_ contains the eigenvalues of the difference matrix used in this
+    penalized-least-squares process."""
+    y_shape = y.shape
+    y_ndim = y.ndim
+    d_type = y.dtype
 
-    plan_forward = cufft.Plan((n,), DTYPE_f, DTYPE_c, batch=m)
-    cufft.fft(data_d, forward_fft_d, plan_forward, scale=scale)
+    lambda_ = np.zeros(y_shape, dtype=d_type)
+    for k in range(y_ndim):
+        shape_k = np.ones(y_ndim, dtype=int)
+        shape_k[k] = y_shape[k]
+        lambda_ += (np.cos(np.pi * (np.arange(1, y_shape[k] + 1) - 1) / y_shape[k]) / spacing[k] ** 2).reshape(shape_k)
+    lambda_ = 2 * (y_ndim - lambda_)
 
-    if norm == 'ortho':
-        forward_fft_d = forward_fft_d * (1 / sqrt(n))
-
-    return forward_fft_d
-
-
-def gpu_inverse_fft(fft_data_d, inverse_length=None, norm='backward'):
-    assert fft_data_d.dtype == DTYPE_c
-    if fft_data_d.ndim == 1:
-        fft_data_d = fft_data_d.reshape(1, fft_data_d.size)
-    m, n = fft_data_d.shape
-    assert n >= 2
-    scale = norm == 'backward'
-    if inverse_length is None:
-        inverse_length = (n - 1) * 2
-
-    inverse_fft_d = gpuarray.empty((m, inverse_length), dtype=DTYPE_f)
-
-    plan_inverse = cufft.Plan((inverse_length,), DTYPE_c, DTYPE_f, batch=m)
-    cufft.ifft(fft_data_d, inverse_fft_d, plan_inverse, scale=scale)
-
-    if norm == 'ortho':
-        inverse_fft_d = inverse_fft_d * (1 / sqrt(inverse_length))
-
-    return inverse_fft_d
+    return lambda_
 
 
-def gpu_forward_dct(data_d, norm='backward'):
-    assert data_d.dtype == DTYPE_f
-    if data_d.ndim == 1:
-        data_d = data_d.reshape(1, data_d.size)
-    m, n = data_d.shape
-    scale = norm == 'forward'
-    assert n >= 2
+def _smooth_bounds(y_shape, smooth_order):
+    """Returns upper and lower bound for the smoothness parameter."""
+    h_min = 1e-3
+    h_max = 1 - h_min
 
-    # could extend the fft output rather than zero-pad (Mahkoul)
-    data_zp_d = gpuarray.zeros((m, 2 * n), dtype=DTYPE_f)
-    data_zp_d[:, :n] = data_d
+    # Tensor rank of the y-array.
+    rank_y = np.sum(np.array(y_shape) != 1)
 
-    output_d = gpuarray.empty((m, n + 1), dtype=DTYPE_c)
-    w_d = 2 * cumath.exp(-1j * pi * gpuarray.arange(n, dtype=DTYPE_f) / (2 * n))
+    if smooth_order == 0:  # Not recommended--only for numerical purposes.
+        p_min = log10(1 / h_max ** (1 / rank_y) - 1)
+        p_max = log10(1 / h_min ** (1 / rank_y) - 1)
+    elif smooth_order == 1:
+        p_min = log10((1 / (h_max ** (2 / rank_y)) - 1) / 4)
+        p_max = log10((1 / (h_min ** (2 / rank_y)) - 1) / 4)
+    else:
+        p_min = log10((((1 + sqrt(1 + 8 * h_max ** (2 / rank_y))) / 4 / h_max ** (2 / rank_y)) ** 2 - 1) / 16)
+        p_max = log10((((1 + sqrt(1 + 8 * h_min ** (2 / rank_y))) / 4 / h_min ** (2 / rank_y)) ** 2 - 1) / 16)
 
-    plan_forward = cufft.Plan(2 * n, DTYPE_f, DTYPE_c, batch=m)
-    cufft.fft(data_zp_d, output_d, plan_forward, scale=scale)
-
-    forward_dct_d = cumisc.multiply(output_d[:, :n].copy(), w_d).real
-
-    if norm == 'ortho':
-        a_d = gpuarray.zeros((n,), dtype=DTYPE_f) + (1 / sqrt(2 * n))
-        a_d[0] = np.array(1 / sqrt(4 * n), dtype=DTYPE_f)
-        forward_dct_d = cumisc.multiply(forward_dct_d, a_d)
-
-    return forward_dct_d
+    return p_min, p_max
 
 
-mod_dct = SourceModule("""
-__global__ void fft_flip(float *dest, float *src, int wd, int fl, int size)
-{
-    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t_idx >= size) {return;}
-    int row = t_idx / fl;
-    int col = t_idx % fl + 1;
+def _leverage(s, smooth_order, spacing):
+    """Returns average leverage.
 
-    dest[row * (fl + 1) + col] = src[row * wd + wd - col];
-}
-    __global__ void dct_sift(float *dest, float *src, int wd, int size)
+    The average leverage (h) is by definition in [0 1]. Weak smoothing occurs if h is close to 1, while over-smoothing
+    occurs when h is near 0. Upper and lower bounds for h are given to avoid under- or over-smoothing. See equation
+    relating h to the smoothness parameter (Equation #12 in the referenced CSDA paper).
+
+    """
+    ndim = len(spacing)
+    h = 1
+
+    if smooth_order == 0:  # Not recommended--only for numerical purposes.
+        for i in range(ndim):
+            h *= 1 / (1 + s / spacing[i])
+    elif smooth_order == 1:
+        for i in range(ndim):
+            h *= 1 / sqrt(1 + 4 * s / spacing[i] ** 2)
+    else:
+        for i in range(ndim):
+            h0 = sqrt(1 + 16 * s / spacing[i] ** 4)
+            h *= sqrt(1 + h0) / sqrt(2) / h0
+
+    return h
+
+
+def _norm(x, axis=0):
+    return np.sqrt(np.sum(x ** 2, axis=axis))
+
+
+def _rms(x, axis=0):
+    return np.sqrt(np.sum(x ** 2, axis=axis) / x.shape[axis])
+
+
+def _s_bound_warning(s, p_min, p_max):
+    if np.abs(log10(s) - p_min) < ERR_P:
+        logging.info('The lower bound for s ({:.3f}) has been reached. '
+                     'Put s as an input variable if required.'.format(10 ** p_min))
+    elif np.abs(log10(s) - p_max) < ERR_P:
+        logging.info('The upper bound for s ({:.3f}) has been reached. '
+                     'Put s as an input variable if required.'.format(10 ** p_max))
+
+
+def _max_iter_warning(max_iter):
+    logging.info('The maximum number of iterations ({:d}) has been exceeded. '
+                 'Increase max_iter option or decrease tol_z value.'.format(max_iter))
+
+
+mod_sift = SourceModule("""
+    __global__ void forward_sift(float *dest, float *src, int wd, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
     int row = t_idx / wd;
     int col = t_idx % wd;
 
-    if (col % 2 == 0) {dest[row * wd + col] = src[row * wd + col / 2];}
-    else {dest[row * wd + col] = src[row * wd + wd - 1 - col / 2];}
+    dest[row * wd + col] = src[(row * wd + (col <= (wd - 1) / 2) * (2 * col)
+                                         + (col >= (wd + 1) / 2) * (2 * wd - 2 * col - 1))];
+}
+
+    __global__ void backward_sift(float *dest, float *src, int wd, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+    int row = t_idx / wd;
+    int col = t_idx % wd;
+
+    dest[row * wd + col] = src[row * wd + (col % 2 == 0) * (col / 2) + (col % 2 == 1) * (wd - 1 - col / 2)];
 }
 """)
 
 
-def gpu_inverse_dct(dct_data_d, norm='backward'):
-    assert dct_data_d.dtype == DTYPE_f
-    if dct_data_d.ndim == 1:
-        dct_data_d = dct_data_d.reshape(1, dct_data_d.size)
-    m, n = dct_data_d.shape
-    assert n >= 2
-    scale = norm == 'backward'
-    frequency_width = n // 2
-    size_i_flip = DTYPE_i(m * frequency_width)
-    size_i = DTYPE_i(m * n)
+def _sift(f_d, direction):
+    """Returns sifted frequencies from inverse transform data (Makhoul)."""
+    m, n = f_d.shape
+    size_i = DTYPE_i(f_d.size)
 
-    idct_output_d = gpuarray.empty((m, n), dtype=DTYPE_f)
-    inverse_dct_d = gpuarray.empty((m, n), dtype=DTYPE_f)
-    w_d = 0.5 * cumath.exp(1j * pi * gpuarray.arange(frequency_width + 1, dtype=DTYPE_f) / (2 * n))
-    fft_data_flip = gpuarray.zeros((m, frequency_width + 1), dtype=DTYPE_f)
+    f_sifted = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = 32
-    x_blocks_flip = ceil(size_i_flip / block_size)
     x_blocks = ceil(size_i / block_size)
-    fft_flip = mod_dct.get_function('fft_flip')
-    dct_sift = mod_dct.get_function('dct_sift')
+    if direction == 'forward':
+        sift = mod_sift.get_function('forward_sift')
+    else:
+        sift = mod_sift.get_function('backward_sift')
+    sift(f_sifted, f_d, DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    fft_flip(fft_data_flip, dct_data_d, DTYPE_i(n), DTYPE_i(frequency_width), size_i_flip, block=(block_size, 1, 1),
-             grid=(x_blocks_flip, 1))
+    return f_sifted
 
-    idct_input_d = cumisc.multiply(dct_data_d[:, :frequency_width + 1].copy() - 1j * fft_data_flip, w_d)
 
-    plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
-    cufft.ifft(idct_input_d, idct_output_d, plan_inverse, scale=scale)
+mod_flip = SourceModule("""
+__global__ void flip_frequency(float *dest, float *src, int offset, int left_pad, int f_width, int wd, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+    int row = t_idx / (f_width - left_pad);
+    int col = t_idx % (f_width - left_pad);
 
-    dct_sift(inverse_dct_d, idct_output_d, DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    dest[row * f_width + col + left_pad] = src[row * wd + wd - col - 1 + offset];
+}
+""")
 
-    if norm == 'forward':
-        inverse_dct_d = inverse_dct_d * 2
-    if norm == 'ortho':
-        x_0 = cumisc.multiply(dct_data_d[:, 0].copy().reshape(m, 1), gpuarray.ones_like(inverse_dct_d, dtype=DTYPE_f))
 
-        inverse_dct_d = (inverse_dct_d * 2 - x_0) / sqrt(2 * n) + x_0 / sqrt(n)
+def _flip_frequency_real(f_d, flip_width, offset=0, left_pad=0):
+    """Returns the frequency spectrum with indexing flipped along rows."""
+    m, n = f_d.shape
+    assert flip_width == int(flip_width) and left_pad == int(left_pad)
+    size_i = DTYPE_i(m * (flip_width - left_pad))
 
-    return inverse_dct_d
+    f_flip_d = gpuarray.zeros((m, flip_width), dtype=DTYPE_f)
+
+    block_size = 32
+    x_blocks = ceil(size_i / block_size)
+    flip_frequency = mod_flip.get_function('flip_frequency')
+    flip_frequency(f_flip_d, f_d, DTYPE_i(offset), DTYPE_i(left_pad), DTYPE_i(flip_width), DTYPE_i(n), size_i,
+                   block=(block_size, 1, 1), grid=(x_blocks, 1))
+
+    return f_flip_d
+
+
+def _flip_frequency_comp(f_d, flip_width, offset=0, left_pad=0):
+    """Returns the frequency spectrum with indexing flipped along rows."""
+    f_flip_real_d = _flip_frequency_real(f_d.real, flip_width, offset, left_pad)
+    f_flip_imag_d = _flip_frequency_real(f_d.imag, flip_width, offset, left_pad)
+
+    f_flip_d = f_flip_real_d - DTYPE_c(1j) * f_flip_imag_d
+
+    return f_flip_d
+
+
+def _reflect_frequency_comp(f_d, full_width):
+    """Returns the full set of transform coefficients from a non-redundant set"""
+    m, n = f_d.shape
+    assert full_width > n
+    flip_width = full_width - n
+    offset = (full_width % 2) - 1
+
+    f_reflect_d = gpuarray.empty((m, full_width), dtype=DTYPE_c)
+    f_reflect_d[:, :n] = f_d
+    f_reflect_d[:, n:] = _flip_frequency_comp(f_d, flip_width, offset=offset)
+
+    # Use this for next release of PyCUDA (2022).
+    # f_flip_d = _flip_frequency_complex(f_d, flip_width)
+    # f_reflect_d = gpuarray.concatenate(f_d, f_flip_d, axis=0)
+
+    return f_reflect_d
