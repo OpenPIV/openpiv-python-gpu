@@ -59,7 +59,7 @@ def gpu_smoothn(*f_d, **kwargs):
 
 
 def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
-             smooth_order=2, spacing=None, initial_guess=False):
+             smooth_order=2, spacing=None):
     """Robust spline smoothing for 1-D to n-D data.
 
     smoothn provides a fast, automatized and robust discretized smoothing spline for data of any dimension. z =
@@ -96,7 +96,6 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
         Order criterion.
     spacing : ndarray or iterable, optional
         Spacing between points in each dimension.
-    initial_guess : bool
 
     Returns
     -------
@@ -193,10 +192,7 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
                 raise ValueError('Arrays in z0 must all have same shape as arrays in y.')
             z = z0
         else:
-            if initial_guess:
-                z = _initial_guess(y)
-            else:
-                z = list(y)
+            z = _initial_guess(y)
     else:
         z = [np.zeros(y_shape, dtype=d_type)] * n_y
 
