@@ -190,6 +190,22 @@ def test_gpu_scalar_mod():
     assert np.array_equal(r_cpu, r_gpu)
 
 
+# def test_neighbours_present():
+#
+#     assert
+#
+#
+# def test_neighbours():
+#
+#     assert
+#
+#
+#
+# def test_gpu_validation():
+#     u = np.ones()
+#
+#     assert
+
 # INTEGRATION TESTS
 @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):
@@ -251,14 +267,6 @@ def test_extended_search_area():
 
     assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
-
-
-def test_asymmetric_windows():
-    pass
-
-
-def test_odd_windows():
-    pass
 
 
 @pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
