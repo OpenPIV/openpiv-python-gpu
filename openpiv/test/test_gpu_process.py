@@ -14,7 +14,7 @@ from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_misc as gpu_misc
-from openpiv.gpu_smoothn import gpu_smoothn
+import openpiv.gpu_validation as gpu_validation
 
 pyximport.install(setup_args={'include_dirs': np.get_include()}, language_level=3)
 
@@ -78,7 +78,7 @@ def test_gpu_mask():
     frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_f)
     mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
 
-    frame_masked = frame * mask.astype(DTYPE_f)
+    frame_masked = frame * (1 - mask.astype(DTYPE_f))
 
     frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d.astype(DTYPE_f)).get()
 
@@ -191,20 +191,23 @@ def test_gpu_scalar_mod():
 
 
 # def test_neighbours_present():
+#     m, n = _test_size_small
+#     neighbours_present0 = np.ones(m, n, 8, dtype=DTYPE_i)
 #
-#     assert
+#     mask = np.zeros(_test_size_small)
+#     mask[4, 4] = 0
+#     mask_d = gpuarray.to_gpu(mask)
+#
+#     neighbours_present = gpu_validation._gpu_find_neighbours(mask).get()
+#
+#     assert np.equal(neighbours_present, neighbours_present0)
 #
 #
-# def test_neighbours():
-#
-#     assert
-#
-#
-#
-# def test_gpu_validation():
+# def test_gpu_median_validation():
 #     u = np.ones()
 #
-#     assert
+#     pass
+
 
 # INTEGRATION TESTS
 @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))

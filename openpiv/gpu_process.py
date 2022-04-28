@@ -508,20 +508,19 @@ class PIVGPU:
         self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
         self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
 
+        self.mask = None
         self.x = self.y = None
         self._nb_iter = sum(self.ws_iters)
         self._im_mask_d = None
-        self._field_mask = None
         self._x_dl = self._y_dl = None
         self._window_size_l = None
         self._spacing_l = None
         self._field_shape_l = None
-        self._field_mask_dl = None
+        self._mask_dl = None
         self._corr = None
         self._sig2noise_d = None
 
         self._check_inputs()
-        self._invert_mask()
         self._set_geometry()
 
     def __call__(self, frame_a, frame_b):
@@ -594,10 +593,6 @@ class PIVGPU:
         return self.x, self.y
 
     @property
-    def mask(self):
-        return 1 - self._field_mask
-
-    @property
     def s2n(self):
         if self._sig2noise_d is not None:
             sig2noise_d = self._sig2noise_d
@@ -609,18 +604,13 @@ class PIVGPU:
         """Frees correlation data from GPU."""
         self._corr = None
 
-    def _invert_mask(self):
-        """Inverts the image mask to agree to simplify future computations."""
-        if self.im_mask is not None:
-            self.im_mask = 1 - self.im_mask
-
     def _set_geometry(self):
         """Creates the geometric parameters for the field at each iteration."""
         self._spacing_l = []
         self._field_shape_l = []
         self._x_dl = []
         self._y_dl = []
-        self._field_mask_dl = []
+        self._mask_dl = []
 
         self._window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
                                for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
@@ -633,19 +623,19 @@ class PIVGPU:
             self._x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
             self._y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
 
-            field_mask = self._mask_field(x, y)
-            self._field_mask_dl.append(gpuarray.to_gpu(field_mask))
+            mask = self._mask_field(x, y)
+            self._mask_dl.append(gpuarray.to_gpu(mask))
 
             if k == self._nb_iter - 1:
                 self.x = x
                 self.y = y
-                self._field_mask = field_mask
+                self.mask = mask
 
     def _mask_field(self, x, y):
         if self.im_mask is not None:
             field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
         else:
-            field_mask = np.ones_like(x, dtype=DTYPE_f)
+            field_mask = np.zeros_like(x, dtype=DTYPE_f)
 
         return field_mask
 
@@ -693,11 +683,11 @@ class PIVGPU:
     def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d):
         """Updates the velocity values after each iteration."""
         if dp_x_d == dp_y_d is None:
-            u_d = gpu_mask(j_peak_d, self._field_mask_dl[self._k])
-            v_d = gpu_mask(i_peak_d, self._field_mask_dl[self._k])
+            u_d = gpu_mask(j_peak_d, self._mask_dl[self._k])
+            v_d = gpu_mask(i_peak_d, self._mask_dl[self._k])
         else:
-            u_d = _gpu_update_field(dp_x_d, j_peak_d, self._field_mask_dl[self._k])
-            v_d = _gpu_update_field(dp_y_d, i_peak_d, self._field_mask_dl[self._k])
+            u_d = _gpu_update_field(dp_x_d, j_peak_d, self._mask_dl[self._k])
+            v_d = _gpu_update_field(dp_y_d, i_peak_d, self._mask_dl[self._k])
 
         return u_d, v_d
 
@@ -893,7 +883,7 @@ __global__ void mask_frame_gpu(float *frame_masked, float *frame, float *mask, i
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] > 0.0f);
+    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] == 0.0f);
 }
 """)
 
@@ -1839,7 +1829,7 @@ __global__ void update_values(float *f_new, float *f_old, float *peak, float *ma
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * mask[t_idx];
+    f_new[t_idx] = (f_old[t_idx] + peak[t_idx]) * (1 - mask[t_idx]);
 }
 """)
 
