@@ -67,8 +67,8 @@ mod_replace_nan_f = SourceModule("""
     if(t_idx >= size) {return;}
     float value = f[t_idx];
 
-    // Check for NaNs. The comparison is True for NaNs.
-    if (value != value) {f[t_idx] = 0.0f;}
+    // Check for NaNs. The comparison is False for NaNs.
+    f[t_idx] = value * (value == value);
 }
 """)
 
@@ -88,6 +88,37 @@ def gpu_remove_nan_f(f_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     index_update = mod_replace_nan_f.get_function('replace_nan_f')
+    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+
+
+mod_replace_negative_f = SourceModule("""
+    __global__ void replace_negative_f(float *f, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(t_idx >= size) {return;}
+    float value = f[t_idx];
+
+    // Check for negative values.
+    f[t_idx] = value * (value > 0);
+}
+""")
+
+
+def gpu_remove_negative_f(f_d):
+    """Replaces all negative values from array with zeros.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        nd float.
+
+    """
+    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    size_i = DTYPE_i(f_d.size)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    index_update = mod_replace_negative_f.get_function('replace_negative_f')
     index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 

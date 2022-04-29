@@ -53,6 +53,7 @@
 - [ ] explicitly define float type literals to avoid casting down from double
 - [ ] use const int literals
 - [ ] ensure memory accesses are coherent
+- [ ] Parallelize code where the same kernel is invoked twice
 
 ## Features
 - [x] dismantle the F-structure so that others can more easily contribute

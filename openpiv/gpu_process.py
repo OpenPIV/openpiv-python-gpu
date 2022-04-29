@@ -20,7 +20,7 @@ from pycuda.compiler import SourceModule
 
 from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f
+from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 with warnings.catch_warnings():
@@ -167,13 +167,13 @@ class GPUCorrelation:
             'Recommended value is 2.'
 
         # Set all negative values in correlation peaks to zero.
-        corr_peak1_d = gpu_mask(self.corr_peak1_d)
+        gpu_remove_negative_f(self.corr_peak1_d)
 
         # Compute signal-to-noise ratio by the chosen method.
         if subpixel_method == 'peak2mean':
-            sig2noise_d = _peak2mean(self.correlation_d, corr_peak1_d)
+            sig2noise_d = _peak2mean(self.correlation_d, self.corr_peak1_d)
         elif subpixel_method == 'peak2energy':
-            sig2noise_d = _peak2energy(self.correlation_d, corr_peak1_d)
+            sig2noise_d = _peak2energy(self.correlation_d, self.corr_peak1_d)
         else:
             corr_peak2_d = self._get_second_peak_height(self.correlation_d, mask_width)
             sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
@@ -490,7 +490,7 @@ class PIVGPU:
         self.ws_iters = (window_size_iters,) if isinstance(window_size_iters, int) else tuple(window_size_iters)
         self.overlap_ratio = float(overlap_ratio)
         self.dt = dt
-        self.im_mask = mask.astype(DTYPE_f) if mask is not None else None
+        self.im_mask = mask.astype(DTYPE_i) if mask is not None else None
         self.deform = deform
         self.smooth = smooth
         self.nb_validation_iter = nb_validation_iter
@@ -631,11 +631,11 @@ class PIVGPU:
 
     def _mask_field(self, x, y):
         if self.im_mask is not None:
-            field_mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
+            mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
         else:
-            field_mask = np.zeros_like(x, dtype=DTYPE_f)
+            mask = np.zeros_like(x, dtype=DTYPE_i)
 
-        return field_mask
+        return mask
 
     def _mask_image(self, frame_a, frame_b):
         """Mask the images before sending to device."""
@@ -663,14 +663,8 @@ class PIVGPU:
             if self.extend_ratio is not None:
                 extended_size = int(self._window_size_l[self._k] * self.extend_ratio)
         else:
-            _check_arrays(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, ndim=2)
-            m, n = dp_x_d.shape
-
-            # Compute the shift.
-            shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
-            shift_d[0, :, :] = dp_x_d
-            shift_d[1, :, :] = dp_y_d
-            # shift_d = gpuarray.stack(dp_x_d, dp_y_d, axis=0)  # This should work in latest version of PyCUDA.
+            # Get the shift.
+            shift_d = _shift(dp_x_d, dp_y_d)
 
             # Compute the strain rate.
             if self.deform:
@@ -691,7 +685,6 @@ class PIVGPU:
 
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
         """Return velocity fields with outliers removed."""
-        _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f, ndim=2)
         size = u_d.size
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
@@ -875,18 +868,18 @@ def get_field_coords(field_shape, window_size, spacing):
 
 
 mod_mask = SourceModule("""
-__global__ void mask_frame_gpu(float *frame_masked, float *frame, float *mask, int size)
+__global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
 {
     // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] == 0.0f);
+    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] == 0);
 }
 """)
 
 
-def gpu_mask(f_d, mask_d=None):
+def gpu_mask(f_d, mask_d):
     """Mask a float-type array with an int type-array.
 
     Parameters
@@ -894,7 +887,7 @@ def gpu_mask(f_d, mask_d=None):
     f_d : GPUArray
         nD float, frame to be masked.
     mask_d : GPUArray or None, optional
-        nD int, mask to apply to frame. 1s are values to keep.
+        nD int, mask to apply to frame. 0s are values to keep.
 
     Returns
     -------
@@ -902,9 +895,8 @@ def gpu_mask(f_d, mask_d=None):
         nD int, masked field.
 
     """
-    if mask_d is None:
-        mask_d = f_d
-    _check_arrays(f_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_d.size)
+    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
     size_i = DTYPE_i(f_d.size)
 
     frame_masked_d = gpuarray.empty_like(mask_d, dtype=DTYPE_f)
@@ -1437,7 +1429,7 @@ def _cross_correlate(win_a_d, win_b_d):
     _check_arrays(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
     n_windows, fft_ht, fft_wd = win_a_d.shape
 
-    win_i_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd), DTYPE_f)
+    win_cross_correlate_d = gpuarray.empty((n_windows, fft_ht, fft_wd), DTYPE_f)
     win_a_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
     win_b_fft_d = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
 
@@ -1448,13 +1440,13 @@ def _cross_correlate(win_a_d, win_b_d):
 
     # Multiply the FFTs.
     win_a_fft_d = win_a_fft_d.conj()
-    tmp_d = win_b_fft_d * win_a_fft_d
+    win_fft_product_d = win_b_fft_d * win_a_fft_d
 
     # Inverse transform.
     plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
-    cufft.ifft(tmp_d, win_i_fft_d, plan_inverse, True)
+    cufft.ifft(win_fft_product_d, win_cross_correlate_d, plan_inverse, True)
 
-    return win_i_fft_d
+    return win_cross_correlate_d
 
 
 mod_index_update = SourceModule("""
@@ -1691,7 +1683,7 @@ def _peak2energy(correlation_d, corr_peak1_d):
     window_size = wd * ht
 
     # Remove negative correlation values.
-    correlation_d = gpu_mask(correlation_d)
+    gpu_remove_negative_f(correlation_d)
 
     corr_reshape = correlation_d.reshape(n_windows, window_size)
     corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
@@ -1705,7 +1697,7 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     _check_arrays(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
 
     # Remove negative peaks.
-    corr_peak2_d = gpu_mask(corr_peak2_d)
+    gpu_remove_negative_f(corr_peak2_d)
 
     sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
 
@@ -1820,8 +1812,21 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
     return correlation_masked_d
 
 
+def _shift(dp_x_d, dp_y_d):
+    """Returns the combined shift array."""
+    _check_arrays(dp_x_d, dp_y_d, array_type=gpuarray.GPUArray, shape=dp_x_d.shape, dtype=DTYPE_f, ndim=2)
+    m, n = dp_x_d.shape
+
+    shift_d = gpuarray.empty((2, m, n), dtype=DTYPE_f)
+    shift_d[0, :, :] = dp_x_d
+    shift_d[1, :, :] = dp_y_d
+    # shift_d = gpuarray.stack(dp_x_d, dp_y_d, axis=0)  # This should work in latest version of PyCUDA.
+
+    return shift_d
+
+
 mod_update = SourceModule("""
-__global__ void update_values(float *f_new, float *f_old, float *peak, float *mask, int size)
+__global__ void update_values(float *f_new, float *f_old, float *peak, int *mask, int size)
 {
     // u_new : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1842,7 +1847,7 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
     peak_d : GPUArray
         nD float, location of peaks.
     mask_d : GPUArray
-        nD float, mask.
+        nD int, mask.
 
     Returns
     -------
@@ -1850,7 +1855,8 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
         3D float.
 
     """
-    _check_arrays(dp_d, peak_d, mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=dp_d.size)
+    _check_arrays(dp_d, peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=dp_d.size)
+    _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=dp_d.size)
     size_i = DTYPE_i(dp_d.size)
 
     f_d = gpuarray.empty_like(dp_d, dtype=DTYPE_f)

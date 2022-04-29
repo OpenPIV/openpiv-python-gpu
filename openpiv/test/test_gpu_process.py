@@ -78,9 +78,9 @@ def test_gpu_mask():
     frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_f)
     mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
 
-    frame_masked = frame * (1 - mask.astype(DTYPE_f))
+    frame_masked = frame * (1 - mask)
 
-    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d.astype(DTYPE_f)).get()
+    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d).get()
 
     assert np.array_equal(frame_masked, frame_masked_gpu)
 
@@ -162,7 +162,7 @@ def test_mask_rms():
     assert np.allclose(correlation_stack_masked_cpu, correlation_stack_masked_gpu, _identity_tolerance)
 
 
-def test_gpu_replace_nan():
+def test_gpu_replace_nan_f():
     a = np.ones(4, dtype=DTYPE_f)
     a[1] = np.nan
     a[2] = np.inf
@@ -170,6 +170,19 @@ def test_gpu_replace_nan():
 
     b_cpu = np.nan_to_num(a, nan=0, posinf=np.inf)
     gpu_misc.gpu_remove_nan_f(a_d)
+    b_gpu = a_d.get()
+
+    assert np.array_equal(b_cpu, b_gpu)
+
+
+def test_gpu_replace_negative_f():
+    a = np.ones(4, dtype=DTYPE_f)
+    a[1] = -1
+    a_d = gpuarray.to_gpu(a)
+
+    a[a < 0] = 0
+    b_cpu = a
+    gpu_misc.gpu_remove_negative_f(a_d)
     b_gpu = a_d.get()
 
     assert np.array_equal(b_cpu, b_gpu)
