@@ -575,14 +575,12 @@ class PIVGPU:
                 v_previous_d = v_d
                 dp_x_d, dp_y_d = self._get_next_iteration_prediction(u_d, v_d)
 
-                logging.info('[DONE]--Going to iteration {}.'.format(k + 1))
+                logging.info('Going to iteration {}.'.format(k + 1))
 
         u_last_d = u_d
         v_last_d = v_d
         u = (u_last_d / DTYPE_f(self.dt)).get()
         v = (v_last_d / DTYPE_f(-self.dt)).get()
-
-        logging.info('[DONE.]\n')
 
         self._corr.free_data()
 
@@ -708,15 +706,15 @@ class PIVGPU:
                                                                  mean_tol=self.mean_tol, rms_tol=self.rms_tol)
 
             # Do the validation.
-            n_val = size - int(gpuarray.sum(val_locations_d).get())
+            n_val = int(gpuarray.sum(val_locations_d).get())
+            # assert int(gpuarray.sum(val_locations_d).get()) > 0
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
-
-                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d,
-                                                     v_mean_d, val_locations_d)
-                logging.info('[DONE.]')
+                u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d,
+                                                     val_locations_d)
             else:
                 logging.info('No invalid vectors.')
+                break
 
         return u_d, v_d
 
@@ -726,8 +724,8 @@ class PIVGPU:
 
         # First iteration, just replace with mean velocity.
         if self._k == 0:
-            u_d = gpuarray.if_positive(val_locations_d, u_d, u_mean_d)
-            v_d = gpuarray.if_positive(val_locations_d, v_d, v_mean_d)
+            u_d = gpuarray.if_positive(val_locations_d, u_mean_d, u_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_mean_d, v_d)
 
         # Case if different dimensions: interpolation using previous iteration.
         elif self._k > 0 and self._field_shape_l[self._k] != self._field_shape_l[self._k - 1]:
@@ -738,8 +736,8 @@ class PIVGPU:
 
         # Case if same dimensions.
         elif self._k > 0 and self._field_shape_l[self._k] == self._field_shape_l[self._k - 1]:
-            u_d = gpuarray.if_positive(val_locations_d, u_d, u_previous_d)
-            v_d = gpuarray.if_positive(val_locations_d, v_d, v_previous_d)
+            u_d = gpuarray.if_positive(val_locations_d, u_previous_d, u_d)
+            v_d = gpuarray.if_positive(val_locations_d, v_previous_d, v_d)
 
         return u_d, v_d
 
@@ -768,9 +766,9 @@ class PIVGPU:
 
         try:
             normalized_residual = sqrt(int(gpuarray.sum(i_peak_d ** 2 + j_peak_d ** 2).get()) / i_peak_d.size) / 0.5
-            logging.info('[DONE]--Normalized residual : {}.'.format(normalized_residual))
+            logging.info('Normalized residual : {}.'.format(normalized_residual))
         except OverflowError:
-            logging.warning('[DONE]--Overflow in residuals.')
+            logging.warning('Overflow in residuals.')
             normalized_residual = np.nan
 
         return normalized_residual
@@ -1874,6 +1872,6 @@ def _interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
     f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
 
     # Replace vectors at validation locations.
-    f1_val_d = gpuarray.if_positive(val_locations_d, f1_d, f1_val_d)
+    f1_val_d = gpuarray.if_positive(val_locations_d, f1_val_d, f1_d)
 
     return f1_val_d

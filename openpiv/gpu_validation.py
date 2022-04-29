@@ -106,21 +106,21 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, mask_d=None, validation_method='m
 
 
 mod_validation = SourceModule("""
-__global__ void neighbour_validation(int *val_list, float *f, float *f_mean, float *f_fluc, float tol, int size)
+__global__ void neighbour_validation(int *val_locations, float *f, float *f_mean, float *f_fluc, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
     // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-    val_list[t_idx] = val_list[t_idx] * (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) < tol);
+    val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) >= tol);
 }
 
-__global__ void local_validation(int *val_list, float *sig2noise, float tol, int size)
+__global__ void local_validation(int *val_locations, float *f, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    val_list[t_idx] = val_list[t_idx] * (sig2noise[t_idx] > tol);
+    val_locations[t_idx] = val_locations[t_idx] || (f[t_idx] <= tol);
 }
 """)
 
@@ -131,7 +131,7 @@ def _local_validation(f_d, tol, val_locations_d=None):
     tol_f = DTYPE_f(tol)
 
     if val_locations_d is None:
-        val_locations_d = gpuarray.ones_like(f_d)
+        val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
 
     block_size = 32
     grid_size = ceil(size_i / block_size)
@@ -147,7 +147,7 @@ def _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, tol, val_locations_d=Non
     tol_f = DTYPE_f(tol)
 
     if val_locations_d is None:
-        val_locations_d = gpuarray.ones_like(f_d)
+        val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
 
     block_size = 32
     grid_size = ceil(size_i / block_size)

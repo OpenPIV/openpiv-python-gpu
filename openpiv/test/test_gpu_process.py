@@ -201,8 +201,8 @@ def test_gpu_scalar_mod():
 #     neighbours_present = gpu_validation._gpu_find_neighbours(mask).get()
 #
 #     assert np.equal(neighbours_present, neighbours_present0)
-#
-#
+
+
 # def test_gpu_median_validation():
 #     u = np.ones()
 #
