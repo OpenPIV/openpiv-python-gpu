@@ -31,12 +31,12 @@ COARSE_COEFFICIENTS = 10
 WEIGHT_METHODS = {'bisquare', 'talworth', 'cauchy'}
 
 
-def gpu_smoothn(*f_d, **kwargs):
+def gpu_smoothn(*f_dl, **kwargs):
     """Smooths a scalar field stored as a GPUArray.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f_dl : GPUArray
         Field to be smoothed.
 
     Returns
@@ -45,17 +45,17 @@ def gpu_smoothn(*f_d, **kwargs):
         Float, same size as f_d. Smoothed field.
 
     """
-    _check_arrays(*f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    n = len(f_d)
+    _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    n = len(f_dl)
 
-    f = [array.get() for array in f_d]
+    f = [f_d.get() for f_d in f_dl]
     f_smooth = smoothn2(*f, **kwargs)[0]
     if n == 1:
-        f_smooth_d = gpuarray.to_gpu(f_smooth)
+        f_smooth_dl = gpuarray.to_gpu(f_smooth)
     else:
-        f_smooth_d = [gpuarray.to_gpu(array) for array in f_smooth]
+        f_smooth_dl = [gpuarray.to_gpu(array) for array in f_smooth]
 
-    return f_smooth_d
+    return f_smooth_dl
 
 
 def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',

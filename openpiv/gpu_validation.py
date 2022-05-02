@@ -9,7 +9,7 @@ import pycuda.gpuarray as gpuarray
 # import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu_misc import _check_arrays
+from openpiv.gpu_misc import _check_arrays, gpu_mask
 
 # Define 32-bit types
 DTYPE_i = np.int32
@@ -23,13 +23,13 @@ MEAN_TOL = 2
 RMS_TOL = 2
 
 
-def gpu_validation(u_d, v_d, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
+def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
                    s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
     """Returns an array indicating which indices need to be validated.
 
     Parameters
     ----------
-    u_d, v_d : GPUArray
+    f_dl : GPUArray
         2D float, velocity fields to be validated.
     sig2noise_d : GPUArray, optional
         1D or 2D float, signal-to-noise ratio of each velocity.
@@ -51,58 +51,58 @@ def gpu_validation(u_d, v_d, sig2noise_d=None, mask_d=None, validation_method='m
     val_locations : GPUArray
         2D int, array of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means
         no correction is needed.
-    u_median_d, v_median_d : GPUArray
+    f_median_d : GPUArray or list
         2D float, mean of the velocities surrounding each point in this iteration.
 
     """
-    # 'mean' in this function refers to either the mean or median estimators of the average.
-    _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
+    n_y = len(f_dl)
+    f_shape = f_dl[0].shape
+    f_size = f_dl[0].size
+    _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=f_shape, ndim=2)
     if sig2noise_d is not None:
-        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=u_d.size)
+        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_size)
     if mask_d is not None:
-        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape)
+        _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f_shape)
     val_locations_d = None
-    u_mean_d = v_mean_d = None
-
-    # Compute the median velocities to be returned.
-    neighbours_present_d = _gpu_find_neighbours(u_d.shape)
-    u_neighbours_d = _gpu_get_neighbours(u_d, neighbours_present_d)
-    v_neighbours_d = _gpu_get_neighbours(v_d, neighbours_present_d)
-    u_median_d = _gpu_median_velocity(u_neighbours_d, neighbours_present_d)
-    v_median_d = _gpu_median_velocity(v_neighbours_d, neighbours_present_d)
-
-    # Compute the mean velocities if they are needed.
-    if 'mean_velocity' in validation_method or 'rms_velocity' in validation_method:
-        u_mean_d = _gpu_mean_velocity(u_neighbours_d, neighbours_present_d)
-        v_mean_d = _gpu_mean_velocity(v_neighbours_d, neighbours_present_d)
 
     if 's2n' in validation_method:
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
-
         val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
 
-    if 'median_velocity' in validation_method:
-        u_median_fluc_d = _gpu_median_fluc(u_median_d, u_neighbours_d, neighbours_present_d)
-        v_median_fluc_d = _gpu_median_fluc(v_median_d, v_neighbours_d, neighbours_present_d)
+    # Compute the median velocities to be returned.
+    neighbours_present_d = _gpu_find_neighbours1(f_dl[0].shape, mask_d)
 
-        val_locations_d = _neighbour_validation(u_d, u_median_d, u_median_fluc_d, median_tol, val_locations_d)
-        val_locations_d = _neighbour_validation(v_d, v_median_d, v_median_fluc_d, median_tol, val_locations_d)
+    f_median_dl = []
+    for f_d in f_dl:
+        f_neighbours_d = _gpu_get_neighbours1(f_d, neighbours_present_d)
+        f_median_d = _gpu_median_velocity(f_neighbours_d, neighbours_present_d)
+        f_mean_d = None
 
-    if 'mean_velocity' in validation_method:
-        u_mean_fluc_d = _gpu_mean_fluc(u_mean_d, u_neighbours_d, neighbours_present_d)
-        v_mean_fluc_d = _gpu_mean_fluc(v_mean_d, v_neighbours_d, neighbours_present_d)
+        if 'median_velocity' in validation_method:
+            f_median_fluc_d = _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d)
+            val_locations_d = _neighbour_validation(f_d, f_median_d, f_median_fluc_d, median_tol, val_locations_d)
 
-        val_locations_d = _neighbour_validation(u_d, u_mean_d, u_mean_fluc_d, mean_tol, val_locations_d)
-        val_locations_d = _neighbour_validation(v_d, v_mean_d, v_mean_fluc_d, mean_tol, val_locations_d)
+        # Compute the mean velocities if they are needed.
+        if 'mean_velocity' in validation_method or 'rms_velocity' in validation_method:
+            f_mean_d = _gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
 
-    if 'rms_velocity' in validation_method:
-        u_rms_d = _gpu_rms(u_mean_d, u_neighbours_d, neighbours_present_d)
-        v_rms_d = _gpu_rms(v_mean_d, v_neighbours_d, neighbours_present_d)
+        if 'mean_velocity' in validation_method:
+            f_mean_fluc_d = _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d)
+            val_locations_d = _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, mean_tol, val_locations_d)
 
-        val_locations_d = _neighbour_validation(u_d, u_mean_d, u_rms_d, rms_tol, val_locations_d)
-        val_locations_d = _neighbour_validation(v_d, v_mean_d, v_rms_d, rms_tol, val_locations_d)
+        if 'rms_velocity' in validation_method:
+            f_rms_d = _gpu_rms(f_mean_d, f_neighbours_d, neighbours_present_d)
+            val_locations_d = _neighbour_validation(f_d, f_mean_d, f_rms_d, rms_tol, val_locations_d)
 
-    return val_locations_d, u_median_d, v_median_d
+        f_median_dl.append(f_median_d)
+
+    if mask_d is not None:
+        val_locations_d = gpu_mask(val_locations_d, mask_d)
+
+    if n_y == 1:
+        f_median_dl = f_median_dl[0]
+
+    return val_locations_d, f_median_dl
 
 
 mod_validation = SourceModule("""
@@ -112,7 +112,7 @@ __global__ void neighbour_validation(int *val_locations, float *f, float *f_mean
     if (t_idx >= size) {return;}
 
     // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-    val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) >= tol);
+    val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) > tol);
 }
 
 __global__ void local_validation(int *val_locations, float *f, float tol, int size)
@@ -207,15 +207,13 @@ __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
 """)
 
 
-def _gpu_find_neighbours(shape, mask_d=None):
+def _gpu_find_neighbours(shape):
     """An array that stores if a point has neighbours in a 3x3 grid surrounding it.
 
     Parameters
     ----------
     shape : tuple
         Int, number of rows and columns at each iteration.
-    mask_d : GPUArray
-        2D int, masked values.
 
     Returns
     -------
@@ -225,8 +223,6 @@ def _gpu_find_neighbours(shape, mask_d=None):
     """
     m, n = shape
     size_i = DTYPE_i(m * n)
-    if mask_d is None:
-        pass
 
     neighbours_present_d = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
 
@@ -268,8 +264,230 @@ def _gpu_get_neighbours(f_d, neighbours_present_d):
     return neighbours_d
 
 
+mod_neighbours1 = SourceModule("""
+__global__ void find_neighbours1(int *np, int *mask, int n, int m, int size)
+{
+    // np : neighbours_present
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    int row_zero = (t_idx >= n);
+    int row_max = (t_idx < n * (m - 1));
+    int col_zero = (t_idx % n > 0);
+    int col_max = (t_idx % n < n - 1);
+
+    // Top Row.
+    np[t_idx * 8 + 0] = row_zero * col_zero * (1 - mask[(t_idx - n - 1) * row_zero * col_zero]);
+    np[t_idx * 8 + 1] = row_zero * (1 - mask[(t_idx - n) * row_zero]);
+    np[t_idx * 8 + 2] = row_zero * col_max * (1 - mask[(t_idx - n + 1) * row_zero * col_max]);
+
+    // Middle row.
+    np[t_idx * 8 + 3] = col_zero * (1 - mask[(t_idx - 1) * col_zero]);
+    np[t_idx * 8 + 4] = col_max * (1 - mask[(t_idx + 1) * col_max]);
+
+    // Bottom row.
+    np[t_idx * 8 + 5] = row_max * col_zero * (1 - mask[(t_idx + n - 1) * row_max * col_zero]);
+    np[t_idx * 8 + 6] = row_max * (1 - mask[(t_idx + n) * row_max]);
+    np[t_idx * 8 + 7] = row_max * col_max * (1 - mask[(t_idx + n + 1) * row_max * col_max]);
+}
+
+__global__ void get_neighbours1(float *nb, int *np, float *f, int n, int size)
+{
+    // nb - values of the neighbouring points
+    // np - 1 if there is a neighbour, 0 if no neighbour
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // get neighbouring values
+    nb[t_idx * 8 + 0] = f[(t_idx - n - 1) * np[t_idx * 8 + 0]] * np[t_idx * 8 + 0];
+    nb[t_idx * 8 + 1] = f[(t_idx - n) * np[t_idx * 8 + 1]] * np[t_idx * 8 + 1];
+    nb[t_idx * 8 + 2] = f[(t_idx - n + 1) * np[t_idx * 8 + 2]] * np[t_idx * 8 + 2];
+
+    nb[t_idx * 8 + 3] = f[(t_idx - 1) * np[t_idx * 8 + 3]] * np[t_idx * 8 + 3];
+    nb[t_idx * 8 + 4] = f[(t_idx + 1) * np[t_idx * 8 + 4]] * np[t_idx * 8 + 4];
+
+    nb[t_idx * 8 + 5] = f[(t_idx + n - 1) * np[t_idx * 8 + 5]] * np[t_idx * 8 + 5];
+    nb[t_idx * 8 + 6] = f[(t_idx + n) * np[t_idx * 8 + 6]] * np[t_idx * 8 + 6];
+    nb[t_idx * 8 + 7] = f[(t_idx + n + 1) * np[t_idx * 8 + 7]]  * np[t_idx * 8 + 7];
+}
+""")
+
+
+def _gpu_find_neighbours1(shape, mask_d=None):
+    """An array that stores if a point has neighbours in a 3x3 grid surrounding it.
+
+    Parameters
+    ----------
+    shape : tuple
+        Int, number of rows and columns at each iteration.
+    mask_d : GPUArray
+        2D int, masked values.
+
+    Returns
+    -------
+    GPUArray
+        4D (m, n, 8), whether the point in the field has neighbours.
+
+    """
+    m, n = shape
+    size_i = DTYPE_i(m * n)
+    if mask_d is None:
+        mask_d = gpuarray.zeros((m, n), dtype=DTYPE_i)
+
+    neighbours_present_d = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    find_neighbours = mod_neighbours1.get_function('find_neighbours1')
+    find_neighbours(neighbours_present_d, mask_d, DTYPE_i(n), DTYPE_i(m), size_i, block=(block_size, 1, 1),
+                    grid=(grid_size, 1))
+
+    return neighbours_present_d
+
+
+def _gpu_get_neighbours1(f_d, neighbours_present_d):
+    """An array that stores the values of the velocity of the surrounding neighbours.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        2D float, values from which to get neighbours.
+    neighbours_present_d : GPUArray
+        4D int (m, n, 8), locations where neighbours exist.
+
+    Returns
+    -------
+    GPUArray
+        4D float (m, n, 8), values of u and v of the neighbours of a point.
+
+    """
+    m, n = f_d.shape
+    size_i = DTYPE_i(f_d.size)
+
+    neighbours_d = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size * 8)
+    get_u_neighbours = mod_neighbours1.get_function('get_neighbours1')
+    get_u_neighbours(neighbours_d, neighbours_present_d, f_d, DTYPE_i(n), size_i, block=(block_size, 1, 1),
+                     grid=(grid_size, 1))
+
+    return neighbours_d
+
+
+mod_neighbours2 = SourceModule("""
+__global__ void find_neighbours2(int *np, int *mask, int n, int m, int size)
+{
+    // np : neighbours_present
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    int row_zero = (t_idx >= n);
+    int row_max = (t_idx < n * (m - 1));
+    int col_zero = (t_idx % n > 0);
+    int col_max = (t_idx % n < n - 1);
+
+    // Top Row.
+    np[t_idx * 8 + 0] = row_zero * col_zero * (1 - mask[(t_idx - n - 1) * row_zero * col_zero]);
+    np[t_idx * 8 + 1] = row_zero * (1 - mask[(t_idx - n) * row_zero]);
+    np[t_idx * 8 + 2] = row_zero * col_max * (1 - mask[(t_idx - n + 1) * row_zero * col_max]);
+
+    // Middle row.
+    np[t_idx * 8 + 3] = col_zero * (1 - mask[(t_idx - 1) * col_zero]);
+    np[t_idx * 8 + 4] = col_max * (1 - mask[(t_idx + 1) * col_max]);
+
+    // Bottom row.
+    np[t_idx * 8 + 5] = row_max * col_zero * (1 - mask[(t_idx + n - 1) * row_max * col_zero]);
+    np[t_idx * 8 + 6] = row_max * (1 - mask[(t_idx + n) * row_max]);
+    np[t_idx * 8 + 7] = row_max * col_max * (1 - mask[(t_idx + n + 1) * row_max * col_max]);
+}
+
+__global__ void get_neighbours2(float *nb, int *np, float *f, int n, int size)
+{
+    // nb - values of the neighbouring points
+    // np - 1 if there is a neighbour, 0 if no neighbour
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // get neighbouring values
+    nb[t_idx * 8 + 0] = f[(t_idx - n - 1) * np[t_idx * 8 + 0]] * np[t_idx * 8 + 0];
+    nb[t_idx * 8 + 1] = f[(t_idx - n) * np[t_idx * 8 + 1]] * np[t_idx * 8 + 1];
+    nb[t_idx * 8 + 2] = f[(t_idx - n + 1) * np[t_idx * 8 + 2]] * np[t_idx * 8 + 2];
+
+    nb[t_idx * 8 + 3] = f[(t_idx - 1) * np[t_idx * 8 + 3]] * np[t_idx * 8 + 3];
+    nb[t_idx * 8 + 4] = f[(t_idx + 1) * np[t_idx * 8 + 4]] * np[t_idx * 8 + 4];
+
+    nb[t_idx * 8 + 5] = f[(t_idx + n - 1) * np[t_idx * 8 + 5]] * np[t_idx * 8 + 5];
+    nb[t_idx * 8 + 6] = f[(t_idx + n) * np[t_idx * 8 + 6]] * np[t_idx * 8 + 6];
+    nb[t_idx * 8 + 7] = f[(t_idx + n + 1) * np[t_idx * 8 + 7]]  * np[t_idx * 8 + 7];
+}
+""")
+
+
+def _gpu_find_neighbours2(shape, mask_d=None):
+    """An array that stores if a point has neighbours in a 3x3 grid surrounding it.
+
+    Parameters
+    ----------
+    shape : tuple
+        Int, number of rows and columns at each iteration.
+    mask_d : GPUArray
+        2D int, masked values.
+
+    Returns
+    -------
+    GPUArray
+        4D (m, n, 8), whether the point in the field has neighbours.
+
+    """
+    m, n = shape
+    size_i = DTYPE_i(m * n * 8)
+    if mask_d is None:
+        mask_d = gpuarray.zeros((m, n), dtype=DTYPE_i)
+
+    neighbours_present_d = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    find_neighbours = mod_neighbours2.get_function('find_neighbours2')
+    find_neighbours(neighbours_present_d, mask_d, DTYPE_i(n), DTYPE_i(m), size_i, block=(block_size, 1, 1),
+                    grid=(grid_size, 1))
+
+    return neighbours_present_d
+
+
+def _gpu_get_neighbours2(f_d, neighbours_present_d):
+    """An array that stores the values of the velocity of the surrounding neighbours.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        2D float, values from which to get neighbours.
+    neighbours_present_d : GPUArray
+        4D int (m, n, 8), locations where neighbours exist.
+
+    Returns
+    -------
+    GPUArray
+        4D float (m, n, 8), values of u and v of the neighbours of a point.
+
+    """
+    m, n = f_d.shape
+    size_i = DTYPE_i(f_d.size)
+
+    neighbours_d = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    get_u_neighbours = mod_neighbours1.get_function('get_neighbours1')
+    get_u_neighbours(neighbours_d, neighbours_present_d, f_d, DTYPE_i(n), size_i, block=(block_size, 1, 1),
+                     grid=(grid_size, 1))
+
+    return neighbours_d
+
+
 mod_median_velocity = SourceModule("""
-// device-side function to swap elements of two arrays
+// device-side function to swap elements of two arrays.
 __device__ void swap(float *A, int a, int b)
 {
     float tmp_A = A[a];
@@ -277,7 +495,7 @@ __device__ void swap(float *A, int a, int b)
     A[b] = tmp_A;
 }
 
-// device-side function to compare and swap elements of two arrays
+// device-side function to compare and swap elements of two arrays.
 __device__ void compare(float *A, float *B, int a, int b)
 {
     if (B[a] < B[b])
@@ -292,7 +510,7 @@ __device__ void compare(float *A, float *B, int a, int b)
     }
 }
 
-// device-side function to do an 8-wire sorting network
+// device-side function to do an 8-wire sorting network.
 __device__ void sort(float *A, float *B)
 {
     compare(A, B, 0, 1);
@@ -318,12 +536,12 @@ __device__ void sort(float *A, float *B)
 
 __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 {
-    // nb - values of the neighbouring points
-    // np - 1 if there is a neighbour, 0 if no neighbour
+    // nb - values of the neighbouring points.
+    // np - 1 if there is a neighbour, 0 if no neighbour.
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    // loop through neighbours to populate an array to sort
+    // Loop through neighbours to populate an array to sort.
     int i;
     int j = 0;
     float A[8];
@@ -332,13 +550,13 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
         A[j] = nb[t_idx * 8 + i];
         B[j++] = np[t_idx * 8 + i];
     }
-    // sort the array
+    // Sort the array.
     sort(A, B);
 
-    // count the neighbouring points
+    // Count the neighbouring points.
     int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
 
-    // return the median
+    // Return the median.
     if (N % 2 == 0) {f_median[t_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
     else {f_median[t_idx] = A[N / 2];}
 }
@@ -352,7 +570,7 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
 
     float f_m = f_median[t_idx];
 
-    // loop through neighbours to populate an array to sort
+    // Loop through neighbours to populate an array to sort.
     int i;
     int j = 0;
     float A[8];
@@ -361,13 +579,13 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
         A[j] = fabsf(nb[t_idx * 8 + i] - f_m);
         B[j++] = np[t_idx * 8 + i];
     }
-    // sort the array
+    // Sort the array
     sort(A, B);
 
-    // count the neighbouring points
+    // Count the neighbouring points.
     int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
 
-    // return the median
+    // Return the median.
     if (N % 2 == 0) {f_median_fluc[t_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
     else {f_median_fluc[t_idx] = A[N / 2];}
 }

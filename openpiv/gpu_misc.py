@@ -13,6 +13,63 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
+mod_mask = SourceModule("""
+__global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
+{
+    // frame_masked : output argument
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0);
+}
+
+__global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
+{
+    // frame_masked : output argument
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0);
+}
+""")
+
+
+def gpu_mask(f_d, mask_d):
+    """Mask an array.
+
+    Parameters
+    ----------
+    f_d : GPUArray
+        nD float, frame to be masked.
+    mask_d : GPUArray or None, optional
+        nD int, mask to apply to frame. 0s are values to keep.
+
+    Returns
+    -------
+    GPUArray
+        nD int, masked field.
+
+    """
+    _check_arrays(f_d, array_type=gpuarray.GPUArray)
+    _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
+    d_type = f_d.dtype
+    size_i = DTYPE_i(f_d.size)
+
+    f_masked_d = gpuarray.empty_like(f_d)
+
+    block_size = 32
+    grid_size = ceil(size_i / block_size)
+    if d_type == DTYPE_f:
+        mask_gpu = mod_mask.get_function('gpu_mask_f')
+    elif d_type == DTYPE_i:
+        mask_gpu = mod_mask.get_function('gpu_mask_i')
+    else:
+        raise ValueError('Wrong data type for f_d.')
+    mask_gpu(f_masked_d, f_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+
+    return f_masked_d
+
+
 mod_scalar_mod = SourceModule("""
 __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
 {

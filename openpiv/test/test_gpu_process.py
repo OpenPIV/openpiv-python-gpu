@@ -24,7 +24,8 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 # dirs
-_fixture_dir = './openpiv/test/fixtures/'
+_fixture_dir = './openpiv/test/temp/'
+_temp_dir = './openpiv/test/temp/'
 
 # synthetic image parameters
 _image_size_rectangle = (1024, 1024)
@@ -36,7 +37,7 @@ _identity_tolerance = 1e-6
 _trim_slice = slice(2, -2, 1)
 
 # test parameters
-_test_size_tiny = (4, 4)
+_test_size_tiny = (8, 8)
 _test_size_small = (16, 16)
 _test_size_medium = (64, 64)
 _test_size_large = (256, 256)
@@ -203,23 +204,88 @@ def test_gpu_scalar_mod():
     assert np.array_equal(r_cpu, r_gpu)
 
 
-# def test_neighbours_present():
-#     m, n = _test_size_small
-#     neighbours_present0 = np.ones(m, n, 8, dtype=DTYPE_i)
-#
-#     mask = np.zeros(_test_size_small)
-#     mask[4, 4] = 0
-#     mask_d = gpuarray.to_gpu(mask)
-#
-#     neighbours_present = gpu_validation._gpu_find_neighbours(mask).get()
-#
-#     assert np.equal(neighbours_present, neighbours_present0)
+def test_find_neighbours():
+    m, n = _test_size_small
+    neighbours_present0 = np.ones((m, n, 8), dtype=DTYPE_i)
+    neighbours_present0[0, :, :3] = 0
+    neighbours_present0[-1, :, 5:] = 0
+    neighbours_present0[:, 0, 0] = 0
+    neighbours_present0[:, 0, 3] = 0
+    neighbours_present0[:, 0, 5] = 0
+    neighbours_present0[:, -1, 2] = 0
+    neighbours_present0[:, -1, 4] = 0
+    neighbours_present0[:, -1, 7] = 0
+    neighbours_present0[5, 5, 0] = 0
+    neighbours_present0[5, 4, 1] = 0
+    neighbours_present0[5, 3, 2] = 0
+    neighbours_present0[4, 5, 3] = 0
+    neighbours_present0[4, 3, 4] = 0
+    neighbours_present0[3, 5, 5] = 0
+    neighbours_present0[3, 4, 6] = 0
+    neighbours_present0[3, 3, 7] = 0
+
+    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
+    mask[4, 4] = 1
+    mask_d = gpuarray.to_gpu(mask)
+
+    # neighbours_present0 = gpu_validation._gpu_find_neighbours((m, n)).get()
+    neighbours_present1 = gpu_validation._gpu_find_neighbours1((m, n), mask_d).get()
+
+    assert np.allclose(neighbours_present1, neighbours_present0)
 
 
-# def test_gpu_median_validation():
-#     u = np.ones()
-#
-#     pass
+def test_get_neighbours():
+    m, n = _test_size_small
+    u = np.ones(_test_size_small, dtype=DTYPE_f)
+    u[4, 4] = 1000
+    u_d = gpuarray.to_gpu(u)
+
+    neighbours0 = np.ones((m, n, 8), dtype=DTYPE_i)
+    neighbours0[0, :, :3] = 0
+    neighbours0[-1, :, 5:] = 0
+    neighbours0[:, 0, 0] = 0
+    neighbours0[:, 0, 3] = 0
+    neighbours0[:, 0, 5] = 0
+    neighbours0[:, -1, 2] = 0
+    neighbours0[:, -1, 4] = 0
+    neighbours0[:, -1, 7] = 0
+    neighbours0[5, 5, 0] = 0
+    neighbours0[5, 4, 1] = 0
+    neighbours0[5, 3, 2] = 0
+    neighbours0[4, 5, 3] = 0
+    neighbours0[4, 3, 4] = 0
+    neighbours0[3, 5, 5] = 0
+    neighbours0[3, 4, 6] = 0
+    neighbours0[3, 3, 7] = 0
+
+    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
+    mask[4, 4] = 1
+    mask_d = gpuarray.to_gpu(mask)
+
+    neighbours_present1_d = gpu_validation._gpu_find_neighbours1((m, n), mask_d)
+    neighbours1 = gpu_validation._gpu_get_neighbours1(u_d, neighbours_present1_d).get()
+
+    assert np.allclose(neighbours1, neighbours0)
+
+
+def test_gpu_median_validation():
+    u = np.ones(_test_size_small, DTYPE_f)
+    u[4, 4] = 1000
+    u[4, 3] = 1.21
+    u[4, 5] = 1.19
+    u_d = gpuarray.to_gpu(u)
+
+    mask = np.zeros(_test_size_small).astype(DTYPE_i)
+    mask[4, 4] = 1
+    mask_d = gpuarray.to_gpu(mask)
+
+    val_locations0 = np.zeros(_test_size_small, DTYPE_i)
+    val_locations0[4, 3] = 1
+
+    val_locations1_d, _ = gpu_validation.gpu_validation(u_d, mask_d=mask_d)
+    val_locations1 = val_locations1_d.get()
+
+    assert np.allclose(val_locations1, val_locations0)
 
 
 # INTEGRATION TESTS
@@ -405,7 +471,7 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
             }
 
     """Ensures the results of the GPU algorithm remains unchanged."""
-    file_str = _fixture_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
+    file_str = _temp_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
                                                                   str(nb_validation_iter))
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
@@ -413,6 +479,7 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     # # save the results to a numpy file.
     # if not os.path.isdir(_fixture_dir):
     #     os.mkdir(_fixture_dir)
+    # print('WARNING: SAVING COMPARISON DATA.')
     # np.savez(file_str, u=u, v=v)
 
     # load the results for comparison

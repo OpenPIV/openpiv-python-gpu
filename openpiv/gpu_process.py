@@ -20,7 +20,7 @@ from pycuda.compiler import SourceModule
 
 from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f
+from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f, gpu_mask
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 with warnings.catch_warnings():
@@ -693,10 +693,11 @@ class PIVGPU:
 
         for i in range(self.nb_validation_iter):
             # Get list of places that need to be validated.
-            val_locations_d, u_mean_d, v_mean_d = gpu_validation(u_d, v_d, self._sig2noise_d, None,
-                                                                 self.validation_method,
-                                                                 s2n_tol=self.s2n_tol, median_tol=self.median_tol,
-                                                                 mean_tol=self.mean_tol, rms_tol=self.rms_tol)
+            val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=None,
+                                                        validation_method=self.validation_method,
+                                                        s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+                                                        mean_tol=self.mean_tol, rms_tol=self.rms_tol)
+            u_mean_d, v_mean_d = f_mean_dl
 
             # Do the validation.
             n_val = int(gpuarray.sum(val_locations_d).get())
@@ -865,48 +866,6 @@ def get_field_coords(field_shape, window_size, spacing):
     y = np.tile(np.linspace(window_size / 2 + spacing * (m - 1), window_size / 2, m), (n, 1)).T
 
     return x, y
-
-
-mod_mask = SourceModule("""
-__global__ void mask_frame_gpu(float *frame_masked, float *frame, int *mask, int size)
-{
-    // frame_masked : output argument
-    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t_idx >= size) {return;}
-
-    frame_masked[t_idx] = frame[t_idx] * (mask[t_idx] == 0);
-}
-""")
-
-
-def gpu_mask(f_d, mask_d):
-    """Mask a float-type array with an int type-array.
-
-    Parameters
-    ----------
-    f_d : GPUArray
-        nD float, frame to be masked.
-    mask_d : GPUArray or None, optional
-        nD int, mask to apply to frame. 0s are values to keep.
-
-    Returns
-    -------
-    GPUArray
-        nD int, masked field.
-
-    """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
-    size_i = DTYPE_i(f_d.size)
-
-    frame_masked_d = gpuarray.empty_like(mask_d, dtype=DTYPE_f)
-
-    block_size = 32
-    grid_size = ceil(size_i / block_size)
-    mask_frame_gpu = mod_mask.get_function('mask_frame_gpu')
-    mask_frame_gpu(frame_masked_d, f_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-
-    return frame_masked_d
 
 
 mod_strain = SourceModule("""
