@@ -206,6 +206,11 @@ def test_gpu_scalar_mod():
 
 def test_find_neighbours():
     m, n = _test_size_small
+
+    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
+    mask[4, 4] = 1
+    mask_d = gpuarray.to_gpu(mask)
+
     neighbours_present0 = np.ones((m, n, 8), dtype=DTYPE_i)
     neighbours_present0[0, :, :3] = 0
     neighbours_present0[-1, :, 5:] = 0
@@ -224,14 +229,9 @@ def test_find_neighbours():
     neighbours_present0[3, 4, 6] = 0
     neighbours_present0[3, 3, 7] = 0
 
-    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
-    mask[4, 4] = 1
-    mask_d = gpuarray.to_gpu(mask)
+    neighbours_present_gpu = gpu_validation._gpu_find_neighbours((m, n), mask_d).get()
 
-    # neighbours_present0 = gpu_validation._gpu_find_neighbours((m, n)).get()
-    neighbours_present1 = gpu_validation._gpu_find_neighbours1((m, n), mask_d).get()
-
-    assert np.allclose(neighbours_present1, neighbours_present0)
+    assert np.allclose(neighbours_present0, neighbours_present_gpu)
 
 
 def test_get_neighbours():
@@ -239,6 +239,10 @@ def test_get_neighbours():
     u = np.ones(_test_size_small, dtype=DTYPE_f)
     u[4, 4] = 1000
     u_d = gpuarray.to_gpu(u)
+
+    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
+    mask[4, 4] = 1
+    mask_d = gpuarray.to_gpu(mask)
 
     neighbours0 = np.ones((m, n, 8), dtype=DTYPE_i)
     neighbours0[0, :, :3] = 0
@@ -258,14 +262,10 @@ def test_get_neighbours():
     neighbours0[3, 4, 6] = 0
     neighbours0[3, 3, 7] = 0
 
-    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
-    mask[4, 4] = 1
-    mask_d = gpuarray.to_gpu(mask)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours((m, n), mask_d)
+    neighbours_gpu = gpu_validation._gpu_get_neighbours(u_d, neighbours_present_d).get()
 
-    neighbours_present1_d = gpu_validation._gpu_find_neighbours1((m, n), mask_d)
-    neighbours1 = gpu_validation._gpu_get_neighbours1(u_d, neighbours_present1_d).get()
-
-    assert np.allclose(neighbours1, neighbours0)
+    assert np.allclose(neighbours0, neighbours_gpu)
 
 
 def test_gpu_median_validation():
@@ -283,9 +283,9 @@ def test_gpu_median_validation():
     val_locations0[4, 3] = 1
 
     val_locations1_d, _ = gpu_validation.gpu_validation(u_d, mask_d=mask_d)
-    val_locations1 = val_locations1_d.get()
+    val_locations_gpu = val_locations1_d.get()
 
-    assert np.allclose(val_locations1, val_locations0)
+    assert np.allclose(val_locations0, val_locations_gpu)
 
 
 # INTEGRATION TESTS
