@@ -668,6 +668,7 @@ class PIVGPU:
 
             # Compute the strain rate.
             if self.deform:
+                # strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
                 strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
 
         return extended_size, shift_d, strain_d
@@ -868,45 +869,24 @@ def get_field_coords(field_shape, window_size, spacing):
     return x, y
 
 
-mod_strain = SourceModule("""
-__global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n)
+mod_strain1 = SourceModule("""
+__global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n, int size)
 {
     // strain : output argument
+    // gradient_axis : d/dx = 0, d/dy = 1
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int size = m * n;
-    if (t_idx >= size) {return;}
-    int row = t_idx / n;
-    int col = t_idx % n;
+    if (t_idx >= size * 2) {return;}
 
-    // x-axis
-    // first column
-    if (col == 0) {
-        strain[row * n] = (u[row * n + 1] - u[row * n]) / h;  // u_x
-        strain[size * 2 + row * n] = (v[row * n + 1] - v[row * n]) / h;  // v_x
-    // last column
-    } else if (col == n - 1) {
-        strain[(row + 1) * n - 1] = (u[(row + 1) * n - 1] - u[(row + 1) * n - 2]) / h;  // u_x
-        strain[size * 2 + (row + 1) * n - 1] = (v[(row + 1) * n - 1] - v[(row + 1) * n - 2]) / h;  // v_x
-    // main body
-    } else {
-        strain[row * n + col] = (u[row * n + col + 1] - u[row * n + col - 1]) / 2 / h;  // u_x
-        strain[size * 2 + row * n + col] = (v[row * n + col + 1] - v[row * n + col - 1]) / 2 / h;  // v_x
-    }
+    int gradient_axis = t_idx / size;
+    int row = t_idx % size / n;
+    int col = t_idx % size % n;
+    int interior = ((row > 0) * (row < m - 1) || (gradient_axis == 0)) * ((col > 0) * (col < n - 1) || gradient_axis);
 
-    // y-axis
-    // first row
-    if (row == 0) {
-        strain[size + col] = (u[n + col] - u[col]) / h;  // u_y
-        strain[size * 3 + col] = (v[n + col] - v[col]) / h;  // v_y
-    // last row
-    } else if (row == m - 1) {
-        strain[size + n * (m - 1) + col] = (u[n * (m - 1) + col] - u[n * (m - 2) + col]) / h;  // u_y
-        strain[size * 3 + n * (m - 1) + col] = (v[n * (m - 1) + col] - v[n * (m - 2) + col]) / h;  // v_y
-    // main body
-    } else {
-        strain[size + row * n + col] = (u[(row + 1) * n + col] - u[(row - 1) * n + col]) / 2 / h;  // u_y
-        strain[size * 3 + row * n + col] = (v[(row + 1) * n + col] - v[(row - 1) * n + col]) / 2 / h;  // v_y
-    }
+    int idx0 = (row - (row > 0) * (gradient_axis)) * n + col - (col > 0) * (gradient_axis == 0);
+    int idx1 = (row + (row < m - 1) * (gradient_axis)) * n + col + (col < n - 1) * (gradient_axis == 0);
+
+    strain[size * gradient_axis + row * n + col] = (u[idx1] - u[idx0]) / (1 + interior) / h;
+    strain[size * (gradient_axis + 2) + row * n + col] = (v[idx1] - v[idx0]) / (1 + interior) / h;
 }
 """)
 
@@ -929,14 +909,15 @@ def gpu_strain(u_d, v_d, spacing=1):
     """
     _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f)
     assert spacing > 0, 'Spacing must be greater than 0.'
-
     m, n = u_d.shape
+    size_i = DTYPE_i(u_d.size)
+
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
     block_size = 32
-    n_blocks = int((m * n) // block_size + 1)
-    strain_gpu = mod_strain.get_function('strain_gpu')
-    strain_gpu(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), block=(block_size, 1, 1),
+    n_blocks = ceil(size_i * 2 / block_size)
+    strain_gpu = mod_strain1.get_function('strain_gpu')
+    strain_gpu(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), size_i, block=(block_size, 1, 1),
                grid=(n_blocks, 1))
 
     return strain_d

@@ -176,8 +176,8 @@ __global__ void find_neighbours(int *np, int *mask, int n, int m, int size)
 
 __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
 {
-    // nb - values of the neighbouring points
-    // np - 1 if there is a neighbour, 0 if no neighbour
+    // nb : values of the neighbouring points
+    // np : 1 if there is a neighbour, 0 if no neighbour
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
     
@@ -306,8 +306,8 @@ __device__ void sort(float *A, float *B)
 
 __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 {
-    // nb - values of the neighbouring points.
-    // np - 1 if there is a neighbour, 0 if no neighbour.
+    // nb : values of the neighbouring points.
+    // np : 1 if there is a neighbour, 0 if no neighbour.
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -333,8 +333,8 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 
 __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, int *np, int size)
 {
-    // nb - value of the neighbouring points
-    // np - 1 if there is a neighbour, 0 if no neighbour
+    // nb : value of the neighbouring points
+    // np : 1 if there is a neighbour, 0 if no neighbour
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -447,8 +447,8 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
 
 __global__ void mean_fluc(float *f_fluc, float *f_mean, float *nb, int *np, int size)
 {
-    // nb - value of the neighbouring points
-    // np - 1 if there is a neighbour, 0 if no neighbour
+    // nb : value of the neighbouring points
+    // np : 1 if there is a neighbour, 0 if no neighbour
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -538,8 +538,8 @@ def _gpu_mean_fluc(f_mean_d, neighbours_d, neighbours_present_d):
 mod_rms = SourceModule("""
 __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
 {
-    // nb - value of the neighbouring points
-    // np - 1 if there is a neighbour, 0 if no neighbour
+    // nb : value of the neighbouring points
+    // np : 1 if there is a neighbour, 0 if no neighbour
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
