@@ -24,8 +24,8 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 # dirs
-_fixture_dir = './openpiv/test/temp/'
-_temp_dir = './openpiv/test/temp/'
+_fixture_dir = './temp/'
+_temp_dir = './temp/'
 
 # synthetic image parameters
 _image_size_rectangle = (1024, 1024)
@@ -456,8 +456,8 @@ def test_gpu_piv_benchmark_oop(benchmark):
 @pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
 def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
     """This test checks that the output remains the same."""
-    frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
-    frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
+    frame_a = imread('../data/test1/exp1_001_a.bmp')
+    frame_b = imread('../data/test1/exp1_001_b.bmp')
     args = {'mask': None,
             'window_size_iters': window_size_iters,
             'min_window_size': min_window_size,
@@ -472,7 +472,7 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
 
     """Ensures the results of the GPU algorithm remains unchanged."""
     file_str = _temp_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
-                                                                  str(nb_validation_iter))
+                                                               str(nb_validation_iter))
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 

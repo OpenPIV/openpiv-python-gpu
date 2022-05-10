@@ -4,8 +4,8 @@ All identifiers ending with '_d' exist on the GPU and not the CPU. The GPU is re
 "_d" signifies that it is a device variable. Please adhere to this standard as it makes developing and debugging much
 easier. Note that all data must 32-bit at most to be stored on GPUs. Numpy types should be always 32-bit for
 compatibility with GPU. Scalars should be python int type in general to work as function arguments. C-type scalars or
-arrays that are arguments to GPU kernels should be identified with ending in either _i or _f. The block argument to GPU
-kernels should have size of at least 32 to avoid wasting GPU resources. E.g. (32, 1, 1), (8, 8, 1), etc.
+arrays that are arguments to GPU kernels should be identified with ending in either _i or _f. The block-size argument to
+GPU kernels should be at least 32 to avoid wasting GPU resources--e.g. (32, 1, 1), (8, 8, 1), etc.
 
 """
 import logging
@@ -36,7 +36,7 @@ DTYPE_c = np.complex64
 
 ALLOWED_SUBPIXEL_METHODS = {'gaussian', 'parabolic', 'centroid'}
 ALLOWED_SIG2NOISE_METHODS = {'peak2peak', 'peak2mean', 'peak2energy'}
-SMOOTHING_PAR = 0.5
+SMOOTHING_PAR = None
 N_FFT = 2
 SUBPIXEL_METHOD = 'gaussian'
 SIG2NOISE_METHOD = 'peak2peak'
@@ -577,10 +577,8 @@ class PIVGPU:
 
                 logging.info('Going to iteration {}.'.format(k + 1))
 
-        u_last_d = u_d
-        v_last_d = v_d
-        u = (u_last_d / DTYPE_f(self.dt)).get()
-        v = (v_last_d / DTYPE_f(-self.dt)).get()
+        u = (u_d / DTYPE_f(self.dt)).get()
+        v = (v_d / DTYPE_f(-self.dt)).get()
 
         self._corr.free_data()
 
@@ -668,7 +666,6 @@ class PIVGPU:
 
             # Compute the strain rate.
             if self.deform:
-                # strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
                 strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
 
         return extended_size, shift_d, strain_d
@@ -687,6 +684,7 @@ class PIVGPU:
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
         """Return velocity fields with outliers removed."""
         size = u_d.size
+        val_locations_d = None
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
@@ -702,7 +700,6 @@ class PIVGPU:
 
             # Do the validation.
             n_val = int(gpuarray.sum(val_locations_d).get())
-            # assert int(gpuarray.sum(val_locations_d).get()) > 0
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
                 u_d, v_d = self._gpu_replace_vectors(u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d,
@@ -710,6 +707,10 @@ class PIVGPU:
             else:
                 logging.info('No invalid vectors.')
                 break
+
+        # Smooth the validated field
+        if self.smooth:
+            u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, w=(1 - val_locations_d))
 
         return u_d, v_d
 
@@ -741,16 +742,13 @@ class PIVGPU:
         _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
         # Interpolate if dimensions do not agree.
         if self._window_size_l[self._k + 1] != self._window_size_l[self._k]:
-            u_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
-                                  self._y_dl[self._k + 1], u_d)
-            v_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
-                                  self._y_dl[self._k + 1], v_d)
-
-        if self.smooth:
-            dp_x_d, dp_y_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par)
+            dp_x_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
+                                     self._y_dl[self._k + 1], u_d)
+            dp_y_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
+                                     self._y_dl[self._k + 1], v_d)
         else:
-            dp_x_d = u_d.copy()
-            dp_y_d = v_d.copy()
+            dp_x_d = u_d
+            dp_y_d = v_d
 
         return dp_x_d, dp_y_d
 
@@ -869,22 +867,25 @@ def get_field_coords(field_shape, window_size, spacing):
     return x, y
 
 
-mod_strain1 = SourceModule("""
+mod_strain = SourceModule("""
 __global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n, int size)
 {
     // strain : output argument
-    // gradient_axis : d/dx = 0, d/dy = 1
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size * 2) {return;}
 
+    // gradient_axis : d/dx = 0, d/dy = 1
     int gradient_axis = t_idx / size;
     int row = t_idx % size / n;
     int col = t_idx % size % n;
+    // Use first order differencing on edges.
     int interior = ((row > 0) * (row < m - 1) || (gradient_axis == 0)) * ((col > 0) * (col < n - 1) || gradient_axis);
 
+    // Get the indexes of the neighbouring points.
     int idx0 = (row - (row > 0) * (gradient_axis)) * n + col - (col > 0) * (gradient_axis == 0);
     int idx1 = (row + (row < m - 1) * (gradient_axis)) * n + col + (col < n - 1) * (gradient_axis == 0);
 
+    // Do the differencing.
     strain[size * gradient_axis + row * n + col] = (u[idx1] - u[idx0]) / (1 + interior) / h;
     strain[size * (gradient_axis + 2) + row * n + col] = (v[idx1] - v[idx0]) / (1 + interior) / h;
 }
@@ -916,7 +917,7 @@ def gpu_strain(u_d, v_d, spacing=1):
 
     block_size = 32
     n_blocks = ceil(size_i * 2 / block_size)
-    strain_gpu = mod_strain1.get_function('strain_gpu')
+    strain_gpu = mod_strain.get_function('strain_gpu')
     strain_gpu(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), size_i, block=(block_size, 1, 1),
                grid=(n_blocks, 1))
 

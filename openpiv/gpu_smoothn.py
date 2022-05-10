@@ -37,7 +37,7 @@ def gpu_smoothn(*f_dl, **kwargs):
     Parameters
     ----------
     f_dl : GPUArray
-        Field to be smoothed.
+        nD float, field to be smoothed.
 
     Returns
     -------
@@ -48,8 +48,13 @@ def gpu_smoothn(*f_dl, **kwargs):
     _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     n = len(f_dl)
 
+    # Get data from GPUArrays.
     f = [f_d.get() for f_d in f_dl]
-    f_smooth = smoothn2(*f, **kwargs)[0]
+    for key, value in kwargs.items():
+        if isinstance(value, gpuarray.GPUArray):
+            kwargs[key] = value.get()
+
+    f_smooth = smoothn(*f, **kwargs)[0]
     if n == 1:
         f_smooth_dl = gpuarray.to_gpu(f_smooth)
     else:
@@ -58,8 +63,8 @@ def gpu_smoothn(*f_dl, **kwargs):
     return f_smooth_dl
 
 
-def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
-             smooth_order=2, spacing=None):
+def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
+            smooth_order=2, spacing=None):
     """Robust spline smoothing for 1-D to n-D data.
 
     smoothn provides a fast, automatized and robust discretized smoothing spline for data of any dimension. z =
@@ -144,16 +149,11 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
         raise ValueError('smooth_order must be 0, 1 or 2.')
 
     # Get mask.
+    is_masked_array = False
     if isinstance(y0, np.ma.masked_array):
-        mask = y0.mask
+        is_masked_array = True
+        mask = y0.mask if mask is not None else mask
         y = [y[i].data for i in range(n_y)]
-    if mask is not None:
-        if np.any(np.round(mask) != mask):
-            'mask must have boolean values.'
-        if mask.shape != y_shape:
-            raise ValueError('mask must be an ndarray with same shape as arrays in y.')
-        for i in range(n_y):
-            y[i][mask] = np.nan
 
     # Arbitrary values for missing y-data.
     is_finite = np.isfinite(y[0])
@@ -161,25 +161,30 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
         is_finite = is_finite * np.isfinite(y[i])
     num_finite = is_finite.sum()
     for i in range(n_y):
-        y[i][~is_finite] = 0
-    # replace_non_finite(y, is_finite)
+        replace_non_finite(y[i], is_finite, spacing)
 
     # Weights. Zero weights are assigned to not finite values (Inf/NaN values = missing data).
     if w is not None:
-        w = w * is_finite
+        w *= is_finite
         if w.shape != y_shape:
             raise ValueError('w must be an ndarray with same shape as arrays in y.')
         if np.any(w < 0):
             raise ValueError('Weights must all be greater than or equal to zero.')
-        w = w / np.amax(w)
+        w = DTYPE_f(w)
+        w = (w / np.amax(w))
     else:
         w = np.ones(y_shape, dtype=d_type) * is_finite
-    is_weighted = np.any(w != 1)
 
-    # Relaxation factor: to speedup convergence.
-    relaxation_factor = 1 + 0.75 * is_weighted
+    # Apply mask to weights
+    if mask is not None:
+        if np.any(np.round(mask) != mask):
+            'mask must have boolean values.'
+        if mask.shape != y_shape:
+            raise ValueError('mask must be an ndarray with same shape as arrays in y.')
+        w *= (1 - mask)
 
     # Initial conditions for z.
+    is_weighted = np.any(w != 1)
     if is_weighted:
         # With weighted/missing data, an initial guess is provided to ensure faster convergence. For that purpose, a
         # nearest neighbor interpolation followed by a coarse smoothing are performed.
@@ -209,15 +214,19 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
 
     # With s given as an argument, it will not be found by GCV-optimization.
     is_auto = not s
+    p = p_max = p_min = None
     if not is_auto:
         if not 0 < s == float(s):
             raise ValueError('s must be a number greater than zero or None.')
         p = log10(s)
     else:
-        p = None
+        p_min, p_max = _smooth_bounds(y_shape, smooth_order)
 
+    # Relaxation factor to speedup convergence.
+    relaxation_factor = 1 + 0.75 * is_weighted
+
+    # Create the eigenvalues.
     lambda_ = _lambda(y0, spacing) ** smooth_order
-    p_min, p_max = _smooth_bounds(y_shape, smooth_order)
 
     # Main iterative process.
     iter_n = 0
@@ -274,6 +283,13 @@ def smoothn2(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100,
         _s_bound_warning(s, p_min, p_max)
     if iter_n == max_iter - 1:
         _max_iter_warning(max_iter)
+
+    # Re-mask the array.
+    if is_masked_array:
+        z = [np.ma.masked_array(array, mask=mask) for array in z]
+    elif mask is not None:
+        for i in range(n_y):
+            z[i] *= (1 - mask)
 
     if d_type == np.float32:
         assert z[0].dtype == np.float32
@@ -449,13 +465,14 @@ def gpu_idct(f_d, norm='backward'):
     return idct_d
 
 
-def replace_non_finite(y, finite):
+def replace_non_finite(y, finite, spacing):
     """Returns array with non-finite values replaced."""
     # Nearest neighbor interpolation (in case of missing values).
     missing = ~finite
     if np.any(missing):
-        distance = distance_transform_edt(1 - finite)
-        y[missing] = y[distance[missing]]
+        nearest_neighbour = distance_transform_edt(missing, sampling=spacing, return_distances=False,
+                                                   return_indices=True)
+        y[missing] = y[nearest_neighbour[0], nearest_neighbour[1]][missing]
 
 
 def _gcv(p, lambda_, w_mean, y_dct, is_finite, w, y, nof):
@@ -527,7 +544,7 @@ def _dct_nd(data, f=dct):
     if nd == 1:
         return f(data, norm='ortho', type=2)
     elif nd == 2:
-        return f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T
+        return np.ascontiguousarray(f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T)
     else:
         data_dct = data.copy()
         for dim in range(nd):
@@ -703,7 +720,7 @@ def _flip_frequency_comp(f_d, flip_width, offset=0, left_pad=0):
 
 
 def _reflect_frequency_comp(f_d, full_width):
-    """Returns the full set of transform coefficients from a non-redundant set"""
+    """Returns the full set of transform coefficients from a non-redundant set."""
     m, n = f_d.shape
     assert full_width > n
     flip_width = full_width - n
