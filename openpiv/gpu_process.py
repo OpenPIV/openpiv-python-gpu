@@ -666,7 +666,7 @@ class PIVGPU:
 
             # Compute the strain rate.
             if self.deform:
-                strain_d = gpu_strain(dp_x_d, dp_y_d, self._spacing_l[self._k])
+                strain_d = gpu_strain(dp_x_d, dp_y_d, self._mask_dl[self._k], self._spacing_l[self._k])
 
         return extended_size, shift_d, strain_d
 
@@ -685,14 +685,14 @@ class PIVGPU:
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
+        mask_d = self._mask_dl[self._k]
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
                                                          mask_width=self.sig2noise_width)
 
         for i in range(self.nb_validation_iter):
-            # Get list of places that need to be validated.
-            val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=None,
+            val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=mask_d,
                                                         validation_method=self.validation_method,
                                                         s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                                         mean_tol=self.mean_tol, rms_tol=self.rms_tol)
@@ -710,7 +710,7 @@ class PIVGPU:
 
         # Smooth the validated field
         if self.smooth:
-            u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, w=(1 - val_locations_d))
+            u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, mask=mask_d, w=(1 - val_locations_d))
 
         return u_d, v_d
 
@@ -868,7 +868,7 @@ def get_field_coords(field_shape, window_size, spacing):
 
 
 mod_strain = SourceModule("""
-__global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, int n, int size)
+__global__ void strain_gpu(float *strain, float *u, float *v, int *mask, float h, int m, int n, int size)
 {
     // strain : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -878,27 +878,36 @@ __global__ void strain_gpu(float *strain, float *u, float *v, float h, int m, in
     int gradient_axis = t_idx / size;
     int row = t_idx % size / n;
     int col = t_idx % size % n;
+    int idx = row * n + col;
+    
     // Use first order differencing on edges.
     int interior = ((row > 0) * (row < m - 1) || (gradient_axis == 0)) * ((col > 0) * (col < n - 1) || gradient_axis);
 
     // Get the indexes of the neighbouring points.
-    int idx0 = (row - (row > 0) * (gradient_axis)) * n + col - (col > 0) * (gradient_axis == 0);
-    int idx1 = (row + (row < m - 1) * (gradient_axis)) * n + col + (col < n - 1) * (gradient_axis == 0);
+    int idx0 = idx - (row > 0) * (gradient_axis) * n - (col > 0) * (gradient_axis == 0);
+    int idx1 = idx + (row < m - 1) * (gradient_axis) * n + (col < n - 1) * (gradient_axis == 0);
+
+    // Revert to first order differencing where field is masked.
+    interior = interior * (mask[idx0] == 0) * (mask[idx1] == 0);
+    idx0 = idx0 * (mask[idx0] == 0) + idx * mask[idx0];
+    idx1 = idx1 * (mask[idx1] == 0) + idx * mask[idx1];
 
     // Do the differencing.
-    strain[size * gradient_axis + row * n + col] = (u[idx1] - u[idx0]) / (1 + interior) / h;
-    strain[size * (gradient_axis + 2) + row * n + col] = (v[idx1] - v[idx0]) / (1 + interior) / h;
+    strain[size * gradient_axis + idx] = (u[idx1] - u[idx0]) / (1 + interior) / h;
+    strain[size * (gradient_axis + 2) + idx] = (v[idx1] - v[idx0]) / (1 + interior) / h;
 }
 """)
 
 
-def gpu_strain(u_d, v_d, spacing=1):
-    """Computes the full strain rate tensor.
+def gpu_strain(u_d, v_d, mask_d=None, spacing=1):
+    """Computes the full 2D strain rate tensor.
 
     Parameters
     ----------
     u_d, v_d : GPUArray
         2D float, velocity fields.
+    mask_d : GPUArray
+        Mask for the vector field.
     spacing : float, optional
         Spacing between nodes.
 
@@ -912,13 +921,17 @@ def gpu_strain(u_d, v_d, spacing=1):
     assert spacing > 0, 'Spacing must be greater than 0.'
     m, n = u_d.shape
     size_i = DTYPE_i(u_d.size)
+    if mask_d is not None:
+        _check_arrays(mask_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_i)
+    else:
+        mask_d = gpuarray.zeros_like(u_d, dtype=DTYPE_i)
 
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
     block_size = 32
     n_blocks = ceil(size_i * 2 / block_size)
     strain_gpu = mod_strain.get_function('strain_gpu')
-    strain_gpu(strain_d, u_d, v_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), size_i, block=(block_size, 1, 1),
+    strain_gpu(strain_d, u_d, v_d, mask_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), size_i, block=(block_size, 1, 1),
                grid=(n_blocks, 1))
 
     return strain_d
