@@ -52,8 +52,8 @@ of the GPU-accelerated modules, see the notebooks below.
 ## Demo notebooks 
 
 Two tutorial notebooks demonstrate the usage of the GPU-accelerated functions:
-- [Basic tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Basic.ipynb)
-- [Advanced tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Advanced.ipynb)
+- [Basic tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
+- [Advanced tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
 
 Notebooks for the CPU-bound PIV-functions are available in another repository:
 - [openpiv-python-examples](https://github.com/OpenPIV/openpiv-python-examples)
