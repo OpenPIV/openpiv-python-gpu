@@ -1,13 +1,5 @@
 from os import path
 from setuptools import setup, find_packages
-from setuptools.extension import Extension
-from Cython.Build import cythonize
-from Cython.Distutils import build_ext
-import numpy
-
-# gather extensions
-extensions = []
-extensions = cythonize(extensions, include_path=[numpy.get_include()], compiler_directives={'language_level': "3"})
 
 # read the contents of your README file
 this_directory = path.abspath(path.dirname(__file__))
@@ -17,7 +9,6 @@ with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 setup(
     name="OpenPIV",
     version='0.23.8',
-    ext_modules=extensions,
     packages=find_packages(),
     include_package_data=True,
     long_description=long_description,
@@ -28,7 +19,6 @@ setup(
         'numpy'
     ],
     install_requires=[
-        'cython',
         'numpy',
         'imageio',
         'matplotlib>=3',
@@ -39,6 +29,8 @@ setup(
         'pytest',
         'watermark',
         'tqdm'
+        'skcuda'
+        'pycuda'
     ],
     classifiers=[
         # PyPI-specific version type. The number specified here is a magic

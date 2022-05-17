@@ -11,7 +11,7 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from gpu_misc import _check_arrays
+from openpiv.gpu_misc import _check_arrays
 
 # scikit-cuda gives an annoying warning everytime it's imported.
 with warnings.catch_warnings():
