@@ -1,10 +1,8 @@
-import os
 import numpy as np
 import pytest
 from math import sqrt
 
 import pycuda.gpuarray as gpuarray
-import pyximport
 import scipy.interpolate as interp
 from skimage.util import random_noise
 from skimage import img_as_ubyte
@@ -15,8 +13,6 @@ from scipy.fft import fftshift
 import openpiv.gpu_process as gpu_process
 import openpiv.gpu_misc as gpu_misc
 import openpiv.gpu_validation as gpu_validation
-
-pyximport.install(setup_args={'include_dirs': np.get_include()}, language_level=3)
 
 # GLOBAL VARIABLES
 # datatypes used in gpu_process
@@ -75,17 +71,6 @@ def generate_cpu_gpu_pair(size, magnitude=1, dtype=DTYPE_f):
 
 
 # UNIT TESTS
-def test_gpu_mask():
-    frame, frame_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_f)
-    mask, mask_d = generate_cpu_gpu_pair(_test_size_small, magnitude=2, dtype=DTYPE_i)
-
-    frame_masked = frame * (1 - mask)
-
-    frame_masked_gpu = gpu_process.gpu_mask(frame_d, mask_d).get()
-
-    assert np.array_equal(frame_masked, frame_masked_gpu)
-
-
 def test_gpu_gradient():
     u, u_d = generate_cpu_gpu_pair(_test_size_small)
     v, v_d = generate_cpu_gpu_pair(_test_size_small)
@@ -161,47 +146,6 @@ def test_mask_rms():
     correlation_stack_masked_gpu = gpu_process._gpu_mask_rms(correlation_stack_d, corr_peak_d).get()
 
     assert np.allclose(correlation_stack_masked_cpu, correlation_stack_masked_gpu, _identity_tolerance)
-
-
-def test_gpu_replace_nan_f():
-    a = np.ones(4, dtype=DTYPE_f)
-    a[1] = np.nan
-    a[2] = np.inf
-    a_d = gpuarray.to_gpu(a)
-
-    b_cpu = np.nan_to_num(a, nan=0, posinf=np.inf)
-    gpu_misc.gpu_remove_nan_f(a_d)
-    b_gpu = a_d.get()
-
-    assert np.array_equal(b_cpu, b_gpu)
-
-
-def test_gpu_replace_negative_f():
-    a = np.ones(4, dtype=DTYPE_f)
-    a[1] = -1
-    a_d = gpuarray.to_gpu(a)
-
-    a[a < 0] = 0
-    b_cpu = a
-    gpu_misc.gpu_remove_negative_f(a_d)
-    b_gpu = a_d.get()
-
-    assert np.array_equal(b_cpu, b_gpu)
-
-
-def test_gpu_scalar_mod():
-    f = np.arange(10, dtype=DTYPE_i)
-    f_d = gpuarray.to_gpu(f)
-    m = 2
-
-    i_cpu = f // m
-    r_cpu = f % m
-    i_d, r_d = gpu_process.gpu_scalar_mod_i(f_d, m)
-    i_gpu = i_d.get()
-    r_gpu = r_d.get()
-
-    assert np.array_equal(i_cpu, i_gpu)
-    assert np.array_equal(r_cpu, r_gpu)
 
 
 def test_find_neighbours():
