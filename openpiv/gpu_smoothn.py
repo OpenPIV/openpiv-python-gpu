@@ -161,7 +161,7 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
         is_finite = is_finite * np.isfinite(y[i])
     num_finite = is_finite.sum()
     for i in range(n_y):
-        replace_non_finite(y[i], is_finite, spacing)
+        replace_non_finite(y[i], finite=is_finite, spacing=spacing)
 
     # Weights. Zero weights are assigned to not finite values (Inf/NaN values = missing data).
     if w is not None:
@@ -220,7 +220,7 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
             raise ValueError('s must be a number greater than zero or None.')
         p = log10(s)
     else:
-        p_min, p_max = _smooth_bounds(y_shape, smooth_order)
+        p_min, p_max = _p_bounds(y_shape, smooth_order)
 
     # Relaxation factor to speedup convergence.
     relaxation_factor = 1 + 0.75 * is_weighted
@@ -465,18 +465,38 @@ def gpu_idct(f_d, norm='backward'):
     return idct_d
 
 
-def replace_non_finite(y, finite, spacing):
-    """Returns array with non-finite values replaced."""
-    # Nearest neighbor interpolation (in case of missing values).
+def replace_non_finite(y, finite=None, spacing=None):
+    """Returns array with non-finite values replaced using nearest-neighbour interpolation.
+
+    Parameters
+    ----------
+    y : ndarray
+        1D data to be transformed, with serial data along rows.
+    finite : ndarray, optional
+        nD bool, locations in y to replace values.
+    spacing: float or iterable, optional
+        Spacing between grid points along each axis.
+
+    """
+    assert finite.dtype == bool
+    y_ndim = y.ndim
+
+    if finite is None:
+        finite = np.isfinite(y)
     missing = ~finite
+
     if np.any(missing):
         nearest_neighbour = distance_transform_edt(missing, sampling=spacing, return_distances=False,
                                                    return_indices=True)
-        y[missing] = y[nearest_neighbour[0], nearest_neighbour[1]][missing]
+        if y_ndim == 1:
+            neighbour_index = nearest_neighbour.squeeze()
+        else:
+            neighbour_index = tuple(nearest_neighbour[i] for i in range(nearest_neighbour.shape[0]))
+        y[missing] = y[neighbour_index][missing]
 
 
 def _gcv(p, lambda_, w_mean, y_dct, is_finite, w, y, nof):
-    """Returns the smoothing parameter s that minimizes the GCV score."""
+    """Returns the GCV score for given p-value and y-data."""
     n_y = len(y)
     y_size = y[0].size
     s = 10 ** p
@@ -569,13 +589,14 @@ def _lambda(y, spacing):
     return lambda_
 
 
-def _smooth_bounds(y_shape, smooth_order):
+def _p_bounds(y_shape, smooth_order):
     """Returns upper and lower bound for the smoothness parameter."""
     h_min = 1e-3
     h_max = 1 - h_min
 
     # Tensor rank of the y-array.
     rank_y = np.sum(np.array(y_shape) != 1)
+    # rank_y = np.array(y_shape).squeeze().ndim
 
     if smooth_order == 0:  # Not recommended--only for numerical purposes.
         p_min = log10(1 / h_max ** (1 / rank_y) - 1)
