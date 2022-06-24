@@ -710,7 +710,8 @@ class PIVGPU:
 
         # Smooth the validated field
         if self.smooth:
-            u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, mask=mask_d, w=(1 - val_locations_d))
+            w_d = (1 - val_locations_d) if val_locations_d is not None else None
+            u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, mask=mask_d, w=w_d)
 
         return u_d, v_d
 
