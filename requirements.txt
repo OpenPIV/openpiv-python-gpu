@@ -2,7 +2,6 @@ attrs
 backcall
 certifi
 cycler
-Cython
 decorator
 gitdb
 GitPython
@@ -31,6 +30,7 @@ Pygments
 pyparsing
 pytest
 pytest-benchmark
+pytest-regressions
 python-dateutil
 PyWavelets
 scikit-image
