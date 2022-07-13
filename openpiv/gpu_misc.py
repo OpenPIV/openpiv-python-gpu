@@ -118,14 +118,15 @@ def gpu_scalar_mod_i(f_d, m):
 
 
 mod_replace_nan_f = SourceModule("""
-    __global__ void replace_nan_f(float *f, int size)
+#include <math.h>
+
+__global__ void replace_nan_f(float *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if(t_idx >= size) {return;}
-    float value = f[t_idx];
-
-    // Check for NaNs. The comparison is False for NaNs.
-    f[t_idx] = value * (value == value);
+    if (t_idx >= size) {return;}
+    
+    // Check for NaNs.
+    //if (std::isnan(f[t_idx])) {f[t_idx] = 0;}
 }
 """)
 
@@ -144,15 +145,15 @@ def gpu_remove_nan_f(f_d):
 
     block_size = 32
     grid_size = ceil(size_i / block_size)
-    index_update = mod_replace_nan_f.get_function('replace_nan_f')
-    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_nan = mod_replace_nan_f.get_function('replace_nan_f')
+    replace_nan(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 mod_replace_negative_f = SourceModule("""
-    __global__ void replace_negative_f(float *f, int size)
+__global__ void replace_negative_f(float *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if(t_idx >= size) {return;}
+    if (t_idx >= size) {return;}
     float value = f[t_idx];
 
     // Check for negative values.
@@ -175,8 +176,8 @@ def gpu_remove_negative_f(f_d):
 
     block_size = 32
     grid_size = ceil(size_i / block_size)
-    index_update = mod_replace_negative_f.get_function('replace_negative_f')
-    index_update(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_negative = mod_replace_negative_f.get_function('replace_negative_f')
+    replace_negative(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
