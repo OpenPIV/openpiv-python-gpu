@@ -2,10 +2,8 @@
 from math import ceil
 
 import numpy as np
-# Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
-# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
 # Define 32-bit types.
@@ -20,7 +18,7 @@ __global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0);
+    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0.0f);
 }
 
 __global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
@@ -29,7 +27,7 @@ __global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0);
+    f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0.0f);
 }
 """)
 
@@ -126,7 +124,7 @@ __global__ void replace_nan_f(float *f, int size)
     if (t_idx >= size) {return;}
     
     // Check for NaNs.
-    //if (std::isnan(f[t_idx])) {f[t_idx] = 0;}
+    if (std::isnan(f[t_idx])) {f[t_idx] = 0.0f;}
 }
 """)
 
@@ -157,7 +155,7 @@ __global__ void replace_negative_f(float *f, int size)
     float value = f[t_idx];
 
     // Check for negative values.
-    f[t_idx] = value * (value > 0);
+    f[t_idx] = value * (value > 0.0f);
 }
 """)
 
@@ -182,6 +180,8 @@ def gpu_remove_negative_f(f_d):
 
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
+    if not all([array.flags.c_contiguous for array in arrays]):
+        raise ValueError('{} input(s) must be C-contiguous.'.format(len(arrays)))
     if array_type is not None:
         if not all([isinstance(array, array_type) for array in arrays]):
             raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
@@ -197,3 +197,25 @@ def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, s
     if size is not None:
         if not all([array.size == size for array in arrays]):
             raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
+
+
+def _check_arrays1(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
+    """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
+    for array in arrays:
+        if not array.flags.c_contiguous:
+            raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
+        if array_type is not None:
+            if not isinstance(array, array_type):
+                raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
+        if dtype is not None:
+            if not array.dtype == dtype:
+                raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
+        if shape is not None:
+            if not array.shape == shape:
+                raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
+        if ndim is not None:
+            if not array.ndim == ndim:
+                raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
+        if size is not None:
+            if not array.size == size:
+                raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
