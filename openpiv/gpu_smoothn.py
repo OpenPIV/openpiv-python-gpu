@@ -4,7 +4,7 @@ from math import sqrt, log2, log10, ceil
 
 import numpy as np
 from scipy.optimize.lbfgsb import fmin_l_bfgs_b
-from scipy.fftpack.realtransforms import dct, idct
+from scipy.fft import dct, idct
 from scipy.ndimage.morphology import distance_transform_edt
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
@@ -232,11 +232,11 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
     iter_n = 0
     w_tot = w
     for robust_step in range(MAX_ROBUST_STEPS):
-        w_mean = np.sum(w_tot) / y_size
+        w_mean = np.mean(w)
 
         for iter_n in range(max_iter):
             z0 = z
-            dct_y = [_dct_nd(w_tot * (y[i] - z[i]) + z[i], f=dct) for i in range(n_y)]
+            y_dct = [_dct_nd(w_tot * (y[i] - z[i]) + z[i], f=dct) for i in range(n_y)]
 
             # The generalized cross-validation (GCV) method is used. We seek the smoothing parameter s that
             # minimizes the GCV score i.e. s = Argmin(GCV_score). Because this process is time-consuming, it is
@@ -248,20 +248,20 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
                     p_span = np.arange(N_P0) * (1 / (N_P0 - 1)) * (p_max - p_min) + p_min
                     g = np.zeros_like(p_span)
                     for i, p_i in enumerate(p_span):
-                        g[i] = _gcv(p_i, lambda_, w_mean, dct_y, is_finite, w_tot, y, num_finite)
+                        g[i] = _gcv(p_i, y, y_dct, w_tot, lambda_, is_finite, w_mean, num_finite)
 
                     p = p_span[np.argmin(g)]
 
                 # Estimate the smoothing parameter.
                 p, _, _ = fmin_l_bfgs_b(_gcv, np.array([p]), fprime=None, factr=10, approx_grad=True,
                                         bounds=[(p_min, p_max)],
-                                        args=(lambda_, w_mean, dct_y, is_finite, w_tot, y, num_finite))
+                                        args=(y, y_dct, w_tot, lambda_, is_finite, w_mean, num_finite))
                 p = p[0]
 
             # Update z using the gamma coefficients.
             s = 10 ** p
             gamma = 1 / (1 + s * lambda_)
-            z = [relaxation_factor * _dct_nd(gamma * dct_y[i], f=idct) + (1 - relaxation_factor) * z[i]
+            z = [relaxation_factor * _dct_nd(gamma * y_dct[i], f=idct) + (1 - relaxation_factor) * z[i]
                  for i in range(n_y)]
 
             # If not weighted/missing data => tol=0 (no iteration).
@@ -272,7 +272,7 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
 
         # Robust Smoothing: iteratively re-weighted process.
         if robust:
-            h = _leverage(s, smooth_order, spacing)
+            h = _leverage(s, spacing, smooth_order)
             w_tot = w * _robust_weights(y, z, is_finite, h, weight_method)
             is_weighted = True
         else:
@@ -495,101 +495,27 @@ def replace_non_finite(y, finite=None, spacing=None):
         y[missing] = y[neighbour_index][missing]
 
 
-def _gcv(p, lambda_, w_mean, y_dct, is_finite, w, y, nof):
-    """Returns the GCV score for given p-value and y-data."""
-    n_y = len(y)
-    y_size = y[0].size
-    s = 10 ** p
-    gamma = 1 / (1 + s * lambda_)
-
-    # w_mean == 1 means that all the data are equally weighted.
-    residual_sum_squares = 0
-    if w_mean > 0.9:
-        # Very much faster: does not require any inverse DCT.
-        for i in range(n_y):
-            residual_sum_squares += np.linalg.norm(y_dct[i] * (gamma - 1)) ** 2
-    else:
-        # Take account of the weights to calculate residual_sum_squares.
-        for i in range(n_y):
-            y_hat = _dct_nd(gamma * y_dct[i], f=idct)
-            residual_sum_squares += np.linalg.norm(np.sqrt(w[is_finite]) * (y[i][is_finite] - y_hat[is_finite])) ** 2
-
-    tr_h = np.sum(gamma)
-    gcv_score = residual_sum_squares / nof / (1 - tr_h / y_size) ** 2 / n_y  # divide by n_y to match scalar score.
-
-    return gcv_score
-
-
-def _robust_weights(y, z, is_finite, h, weight_str):
-    """Returns the weights for robust smoothing."""
-    r = np.stack(y, axis=0) - np.stack(z, axis=0)
-    marginal_median = np.median(r[:, is_finite])
-    vector_norm = _rms(r, axis=0)
-    median_absolute_deviation = np.median(_rms(r[:, is_finite] - marginal_median))
-
-    # Compute studentized residuals.
-    u = vector_norm / (1.4826 * median_absolute_deviation) / np.sqrt(1 - h)
-
-    if weight_str == 'cauchy':
-        c = 2.385
-        w = 1 / (1 + (u / c) ** 2)  # Cauchy weights
-    elif weight_str == 'talworth':
-        c = 2.795
-        w = u < c
-    else:  # bisquare weights
-        c = 4.685
-        w = (1 - (u / c) ** 2) ** 2 * ((u / c) < 1)
-
-    return w
-
-
 def _initial_guess(y):
     """Returns initial guess for z using coarse, fast smoothing."""
+    assert isinstance(y, list) or isinstance(y, tuple)
     n_y = len(y)
 
-    # Do smoothing with one-tenth of coefficients.
+    # Forward transform.
     z_dct = [_dct_nd(y[i], f=dct) for i in range(n_y)]
     num_dct = np.ceil(np.array(z_dct[0].shape) / COARSE_COEFFICIENTS).astype(int) + 1
+
+    # Keep one-tenth of data.
     coefficient_indexes = tuple([slice(n, None) for n in num_dct])
     for i in range(n_y):
         z_dct[i][coefficient_indexes] = 0
+
+    # Backwards transform.
     z = [_dct_nd(z_dct[i], f=idct) for i in range(n_y)]
 
     return z
 
 
-def _dct_nd(data, f=dct):
-    """Returns the nD dct."""
-    nd = len(data.shape)
-    if nd == 1:
-        return f(data, norm='ortho', type=2)
-    elif nd == 2:
-        return np.ascontiguousarray(f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T)
-    else:
-        data_dct = data.copy()
-        for dim in range(nd):
-            data_dct = f(data_dct, norm='ortho', type=2, axis=dim)
-        return data_dct
-
-
-def _lambda(y, spacing):
-    """Returns the lambda tensor. lambda_ contains the eigenvalues of the difference matrix used in this
-    penalized-least-squares process."""
-    y_shape = y.shape
-    y_ndim = y.ndim
-    d_type = y.dtype
-
-    lambda_ = np.zeros(y_shape, dtype=d_type)
-    for k in range(y_ndim):
-        shape_k = np.ones(y_ndim, dtype=int)
-        shape_k[k] = y_shape[k]
-        lambda_ += (np.cos(np.pi * (np.arange(1, y_shape[k] + 1) - 1) / y_shape[k]) / spacing[k] ** 2).reshape(shape_k)
-    lambda_ = 2 * (y_ndim - lambda_)
-
-    return lambda_
-
-
-def _p_bounds(y_shape, smooth_order):
+def _p_bounds(y_shape, smooth_order=2):
     """Returns upper and lower bound for the smoothness parameter."""
     h_min = 1e-3
     h_max = 1 - h_min
@@ -611,7 +537,71 @@ def _p_bounds(y_shape, smooth_order):
     return p_min, p_max
 
 
-def _leverage(s, smooth_order, spacing):
+def _lambda(y, spacing):
+    """Returns the lambda tensor. lambda_ contains the eigenvalues of the difference matrix used in this
+    penalized-least-squares process."""
+    y_shape = y.shape
+    y_ndim = y.ndim
+    d_type = y.dtype
+
+    lambda_ = np.zeros(y_shape, dtype=d_type)
+    for k in range(y_ndim):
+        shape_k = np.ones(y_ndim, dtype=int)
+        shape_k[k] = y_shape[k]
+        lambda_ += (np.cos(np.pi * (np.arange(1, y_shape[k] + 1) - 1) / y_shape[k]) / spacing[k] ** 2).reshape(shape_k)
+    lambda_ = 2 * (y_ndim - lambda_)
+
+    return lambda_
+
+
+def _dct_nd(data, f=dct):
+    """Returns the nD dct.
+
+    Output must be C-contiguous to transfer back to GPU properly.
+
+    """
+    ndim = data.ndim
+
+    if ndim == 1:
+        data_dct = f(data, norm='ortho', type=2)
+    elif ndim == 2:
+        data_dct = np.ascontiguousarray(f(f(data, norm='ortho', type=2).T, norm='ortho', type=2).T)
+    else:
+        data_dct = data.copy()
+        for dim in range(ndim):
+            data_dct = f(data_dct, norm='ortho', type=2, axis=dim)
+
+    return data_dct
+
+
+def _gcv(p, y, y_dct, w, lambda_, is_finite, w_mean, nof):
+    """Returns the GCV score for given p-value and y-data."""
+    assert isinstance(y, list)
+    n_y = len(y)
+    y_size = y[0].size
+    s = 10 ** p
+    gamma = 1 / (1 + s * lambda_)
+
+    # w_mean == 1 means that all the data are equally weighted.
+    residual_sum_squares = 0
+    if w_mean > 0.9:
+        # Very much faster: does not require any inverse DCT.
+        for i in range(n_y):
+            residual_sum_squares += np.linalg.norm(y_dct[i] * (gamma - 1)) ** 2
+    else:
+        # Take account of the weights to calculate residual_sum_squares.
+        for i in range(n_y):
+            y_hat = _dct_nd(gamma * y_dct[i], f=idct)
+            residual_sum_squares += np.linalg.norm(np.sqrt(w[is_finite]) * (y[i][is_finite] - y_hat[is_finite])) ** 2
+
+    tr_h = np.sum(gamma)
+    # Divide by n_y to match score of scalar field.
+    gcv_score = residual_sum_squares / nof / (1 - tr_h / y_size) ** 2 / n_y
+
+    return float(gcv_score)
+
+
+def _leverage(s, spacing, smooth_order=2):
     """Returns average leverage.
 
     The average leverage (h) is by definition in [0 1]. Weak smoothing occurs if h is close to 1, while over-smoothing
@@ -619,6 +609,7 @@ def _leverage(s, smooth_order, spacing):
     relating h to the smoothness parameter (Equation #12 in the referenced CSDA paper).
 
     """
+    assert s > 0
     ndim = len(spacing)
     h = 1
 
@@ -633,7 +624,32 @@ def _leverage(s, smooth_order, spacing):
             h0 = sqrt(1 + 16 * s / spacing[i] ** 4)
             h *= sqrt(1 + h0) / sqrt(2) / h0
 
-    return h
+    return float(h)
+
+
+def _robust_weights(y, z, is_finite, h, weight_str='bisquare'):
+    """Returns the weights for robust smoothing."""
+    assert weight_str in WEIGHT_METHODS
+
+    r = np.stack(y, axis=0) - np.stack(z, axis=0)
+    marginal_median = np.median(r[:, is_finite])
+    vector_norm = _rms(r, axis=0)
+    median_absolute_deviation = np.median(_rms(r[:, is_finite] - marginal_median))
+
+    # Compute studentized residuals.
+    u = vector_norm / (1.4826 * median_absolute_deviation) / np.sqrt(1 - h)
+
+    if weight_str == 'cauchy':
+        c = 2.385
+        w = 1 / (1 + (u / c) ** 2)
+    elif weight_str == 'talworth':
+        c = 2.795
+        w = u < c
+    else:  # Bisquare weights.
+        c = 4.685
+        w = (1 - (u / c) ** 2) ** 2 * ((u / c) < 1)
+
+    return w
 
 
 def _norm(x, axis=0):
@@ -741,7 +757,7 @@ def _flip_frequency_comp(f_d, flip_width, offset=0, left_pad=0):
 
 
 def _reflect_frequency_comp(f_d, full_width):
-    """Returns the full set of transform coefficients from a non-redundant set."""
+    """Returns the full series of transform coefficients from a non-redundant series."""
     m, n = f_d.shape
     assert full_width > n
     flip_width = full_width - n
@@ -751,7 +767,7 @@ def _reflect_frequency_comp(f_d, full_width):
     f_reflect_d[:, :n] = f_d
     f_reflect_d[:, n:] = _flip_frequency_comp(f_d, flip_width, offset=offset)
 
-    # Use this for next release of PyCUDA (2022).
+    # Use this for next release of PyCUDA (2022), after testing.
     # f_flip_d = _flip_frequency_complex(f_d, flip_width)
     # f_reflect_d = gpuarray.concatenate(f_d, f_flip_d, axis=0)
 
