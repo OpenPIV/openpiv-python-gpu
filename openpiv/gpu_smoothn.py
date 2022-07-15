@@ -415,7 +415,7 @@ def gpu_dct(y_d, norm='backward'):
     dct_negative_d2 = (cumisc.multiply(fft_data_real_d, w_imag_d) - cumisc.multiply(fft_data_imag_d, w_real_d))
     y_dct_d = gpuarray.empty((m, n), dtype=DTYPE_f)
     y_dct_d[:, :freq_width] = dct_positive_d
-    y_dct_d[:, freq_width:] = _flip_frequency_real(dct_negative_d2, n - freq_width, offset=(n % 2) - 1)
+    y_dct_d[:, freq_width:] = _flip_frequency_real(dct_negative_d2, n - freq_width, offset=1 - n % 2)
 
     # Use this after the next release of PyCUDA (2022) and after testing:
     # y_dct_d = gpuarray.concatenate(dct_positive_d, dct_negative_d2, axis=0)
@@ -737,8 +737,8 @@ __global__ void flip_frequency(float *dest, float *src, int offset, int left_pad
     int row = t_idx / (y_width - left_pad);
     int col = t_idx % (y_width - left_pad);
 
-    dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 + offset];
-    //dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 - offset];
+    //dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 + offset];
+    dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 - offset];
 }
 """)
 
@@ -747,7 +747,7 @@ def _flip_frequency_real(y_d, flip_width, offset=0, left_pad=0):
     """Returns subset of the frequency spectrum with indexing flipped along rows."""
     m, n = y_d.shape
     assert flip_width == int(flip_width) and offset == int(offset) and left_pad == int(left_pad)
-    # assert flip_width - left_pad <= n - offset
+    assert flip_width - left_pad <= n - offset
     size_i = DTYPE_i(m * (flip_width - left_pad))
 
     y_flipped_d = gpuarray.zeros((m, flip_width), dtype=DTYPE_f)
@@ -776,7 +776,7 @@ def _reflect_frequency_comp(y_d, full_width):
     m, n = y_d.shape
     assert full_width // 2 + 1 == n
     flip_width = full_width - n
-    offset = (full_width % 2) - 1
+    offset = 1 - full_width % 2
 
     y_reflected_d = gpuarray.empty((m, full_width), dtype=DTYPE_c)
     y_reflected_d[:, :n] = y_d

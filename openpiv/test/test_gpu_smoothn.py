@@ -208,7 +208,7 @@ def test_dct_order_forward(shape, direction, ndarrays_regression):
 
 
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
-@pytest.mark.parametrize('offset', [0, -1])
+@pytest.mark.parametrize('offset', [0, 1])
 @pytest.mark.parametrize('left_pad', [0, 1])
 def test_flip_frequency_real(shape, offset, left_pad):
     m, n = shape
@@ -216,16 +216,16 @@ def test_flip_frequency_real(shape, offset, left_pad):
     y_d = gpuarray.to_gpu(y)
 
     flip_width = n - 1
-    y_flipped = np.flip(y, axis=1)[:, -offset:-offset + flip_width - left_pad]
+    y_flipped = np.flip(y, axis=1)[:, offset:offset + flip_width - left_pad]
     z = gpu_smoothn._flip_frequency_real(y_d, flip_width=flip_width, offset=offset, left_pad=left_pad).get()
 
     if left_pad > 0:
         assert np.all(z[:, :left_pad] == 0)
-    assert np.array_equal(z[:, left_pad:], np.flip(y, axis=1)[:, -offset:-offset + flip_width - left_pad])
+    assert np.array_equal(z[:, left_pad:], y_flipped)
 
 
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
-@pytest.mark.parametrize('offset', [0, -1])
+@pytest.mark.parametrize('offset', [0, 1])
 @pytest.mark.parametrize('left_pad', [0, 1])
 def test_flip_frequency_comp(shape, offset, left_pad):
     m, n = shape
@@ -233,7 +233,7 @@ def test_flip_frequency_comp(shape, offset, left_pad):
     y_d = gpuarray.to_gpu(y)
 
     flip_width = n - 1
-    y_flipped = np.flip(y, axis=1)[:, -offset:-offset + flip_width - left_pad].conj()
+    y_flipped = np.flip(y, axis=1)[:, offset:offset + flip_width - left_pad].conj()
     z = gpu_smoothn._flip_frequency_comp(y_d, flip_width=flip_width, offset=offset, left_pad=left_pad).get()
 
     if left_pad > 0:
@@ -244,12 +244,12 @@ def test_flip_frequency_comp(shape, offset, left_pad):
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
 def test_reflect_frequency_comp(shape):
     m, n = shape
-    frequency_width = n // 2 + 1
-    y = generate_array((m, frequency_width), magnitude=2, offset=-1) + 1j * generate_array((m, n // 2 + 1), magnitude=2,
-                                                                                           offset=-1, seed=1)
+    freq_width = n // 2 + 1
+    y = generate_array((m, freq_width), magnitude=2, offset=-1) + 1j * generate_array((m, freq_width), magnitude=2,
+                                                                                      offset=-1, seed=1)
     y_d = gpuarray.to_gpu(y)
 
-    y_full = np.hstack([y, np.flip(y[:, 1:n - frequency_width + 1], axis=1).conj()])
+    y_full = np.hstack([y, np.flip(y[:, 1:n - freq_width + 1], axis=1).conj()])
     z = gpu_smoothn._reflect_frequency_comp(y_d, full_width=n).get()
 
     assert np.array_equal(y_full, z)
