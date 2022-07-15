@@ -12,17 +12,17 @@ DTYPE_f = np.float32
 
 
 # SCRIPTS
-def generate_array(shape, magnitude=1, d_type=DTYPE_f, seed=0):
+def generate_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
     np.random.seed(seed)
-    f = (np.random.random(shape) * magnitude).astype(d_type)
+    f = (np.random.random(shape) * magnitude - offset).astype(d_type)
 
     return f
 
 
-def generate_np_gpu_array_pair(shape, magnitude=1, d_type=DTYPE_f, seed=0):
+def generate_np_gpu_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_array(shape, magnitude=magnitude, d_type=d_type, seed=seed)
+    f = generate_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
@@ -32,13 +32,13 @@ def generate_np_gpu_array_pair(shape, magnitude=1, d_type=DTYPE_f, seed=0):
 def test_gpu_mask():
     shape = (16, 16)
 
-    f, f_d = generate_np_gpu_array_pair(shape, magnitude=2, d_type=DTYPE_f)
+    f, f_d = generate_np_gpu_array_pair(shape, magnitude=2, offset=-1, d_type=DTYPE_f)
     mask, mask_d = generate_np_gpu_array_pair(shape, magnitude=2, d_type=DTYPE_i)
 
     f_masked = f * (1 - mask)
     f_masked_gpu = gpu_misc.gpu_mask(f_d, mask_d).get()
 
-    assert np.array_equal(f_masked, f_masked_gpu)
+    assert np.array_equal(f_masked_gpu, f_masked)
 
 
 @pytest.mark.parametrize('divisor', [1, 2, 3])
@@ -48,14 +48,14 @@ def test_gpu_scalar_mod_i(divisor):
 
     f, f_d = generate_np_gpu_array_pair(shape, magnitude=10, d_type=DTYPE_i)
 
-    i_cpu = f // m
-    r_cpu = f % m
+    i = f // m
+    r = f % m
     i_d, r_d = gpu_misc.gpu_scalar_mod_i(f_d, m)
     i_gpu = i_d.get()
     r_gpu = r_d.get()
 
-    assert np.array_equal(i_cpu, i_gpu)
-    assert np.array_equal(r_cpu, r_gpu)
+    assert np.array_equal(i_gpu, i)
+    assert np.array_equal(r_gpu, r)
 
 
 def test_gpu_replace_nan_f():
@@ -70,17 +70,17 @@ def test_gpu_replace_nan_f():
     gpu_misc.gpu_remove_nan_f(f_d)
     f_finite_gpu = f_d.get()
 
-    assert np.array_equal(f_finite, f_finite_gpu)
+    assert np.array_equal(f_finite_gpu, f_finite)
 
 
 def test_gpu_replace_negative_f():
     shape = (16, 16)
 
-    f = generate_array(shape, magnitude=2, d_type=DTYPE_f) - 1
+    f = generate_array(shape, magnitude=2, offset=-1, d_type=DTYPE_f) - 1
     f_d = gpuarray.to_gpu(f)
 
     f[f < 0] = 0
     gpu_misc.gpu_remove_negative_f(f_d)
     f_positive_gpu = f_d.get()
 
-    assert np.array_equal(f, f_positive_gpu)
+    assert np.array_equal(f_positive_gpu, f)
