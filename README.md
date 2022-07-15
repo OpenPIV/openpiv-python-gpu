@@ -52,8 +52,8 @@ of the GPU-accelerated modules, see the notebooks below.
 ## Demo notebooks 
 
 Two tutorial notebooks demonstrate the usage of the GPU-accelerated functions:
-- [Basic tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
-- [Advanced tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
+- [Basic tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
+- [Advanced tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
 
 Notebooks for the CPU-bound PIV-functions are available in another repository:
 - [openpiv-python-examples](https://github.com/OpenPIV/openpiv-python-examples)
@@ -64,6 +64,7 @@ Notebooks for the CPU-bound PIV-functions are available in another repository:
 1. [OpenPIV team](https://groups.google.com/forum/#!forum/openpiv-users)
 2. [Cameron Dallas](https://github.com/CameronDallas5000)
 3. [Alex Liberzon](https://github.com/alexlib)
+4. [Eric Yang](https://github.com/ericyang125)
 
 Copyright statement: `smoothn.py` is a Python version of `smoothn.m` originally created by
 [D. Garcia](https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn), written by Prof. Lewis, and available on
