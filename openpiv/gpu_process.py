@@ -207,15 +207,8 @@ class GPUCorrelation:
         # Buffer is used to shift the extended windows an additional amount.
         buffer = -((self.extended_size - self.window_size) // 2)
 
-        if shift_d is not None:
-            # Use translating windows.
-            win_a_d = _gpu_window_slice_deform(frame_a_d, self.window_size, self.spacing, 0, -0.5, shift_d, strain_d)
-            win_b_d = _gpu_window_slice_deform(frame_b_d, self.extended_size, self.spacing, buffer, 0.5, shift_d,
-                                               strain_d)
-        else:
-            # Use non-translating windows.
-            win_a_d = _gpu_window_slice(frame_a_d, self.window_size, self.spacing, 0)
-            win_b_d = _gpu_window_slice(frame_b_d, self.extended_size, self.spacing, buffer)
+        win_a_d = _gpu_window_slice(frame_a_d, self.window_size, self.spacing, 0, -0.5, shift_d, strain_d)
+        win_b_d = _gpu_window_slice(frame_b_d, self.extended_size, self.spacing, buffer, 0.5, shift_d, strain_d)
 
         return win_a_d, win_b_d
 
@@ -1168,49 +1161,7 @@ __global__ void window_slice_deform(float *output, float *input, float *shift, f
 """)
 
 
-def _gpu_window_slice(frame_d, window_size, spacing, buffer):
-    """Creates a 3D array stack of all the interrogation windows.
-
-    Parameters
-    -----------
-    frame_d : GPUArray
-        2D int, frame to create windows from.
-    window_size : int
-        Side dimension of the square interrogation windows
-    spacing : int
-        Spacing between vectors of the velocity field.
-    buffer : int or tuple
-        Adjustment to location of windows from left/top vectors to edge of frame.
-
-    Returns
-    -------
-    GPUArray
-        3D float, interrogation windows stacked on each other.
-
-    """
-    _check_arrays(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    assert buffer == int(buffer)
-    if isinstance(buffer, int):
-        buffer_x_i = buffer_y_i = DTYPE_i(buffer)
-    else:
-        buffer_x_i, buffer_y_i = DTYPE_i(buffer)
-    ht, wd = frame_d.shape
-    m, n = get_field_shape((ht, wd), window_size, spacing)
-    n_windows = m * n
-
-    win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
-
-    block_size = 8
-    grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_window_slice.get_function('window_slice')
-    window_slice_deform(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n),
-                        DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
-                        grid=(int(n_windows), grid_size, grid_size))
-
-    return win_d
-
-
-def _gpu_window_slice_deform(frame_d, window_size, spacing, buffer, dt, shift_d, strain_d=None):
+def _gpu_window_slice(frame_d, window_size, spacing, buffer, dt=0, shift_d=None, strain_d=None):
     """Creates a 3D array stack of all the interrogation windows using shift and strain.
 
     Parameters
@@ -1238,7 +1189,8 @@ def _gpu_window_slice_deform(frame_d, window_size, spacing, buffer, dt, shift_d,
 
     """
     _check_arrays(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    assert 0 <= buffer == int(buffer)
+    assert buffer == int(buffer)
+    assert -1 <= dt <= 1
     if isinstance(buffer, int):
         buffer_x_i = buffer_y_i = DTYPE_i(buffer)
     else:
@@ -1249,16 +1201,24 @@ def _gpu_window_slice_deform(frame_d, window_size, spacing, buffer, dt, shift_d,
 
     win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
 
-    do_deform = DTYPE_i(strain_d is not None)
-    if not do_deform:
-        strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
-
     block_size = 8
     grid_size = ceil(window_size / block_size)
-    window_slice_deform = mod_window_slice.get_function('window_slice_deform')
-    window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
-                        DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd),
-                        DTYPE_i(ht), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+    if shift_d is not None:
+        _check_arrays(shift_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+        do_deform = DTYPE_i(strain_d is not None)
+        if not do_deform:
+            strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
+        else:
+            _check_arrays(strain_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+        window_slice_deform = mod_window_slice.get_function('window_slice_deform')
+        window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
+                            DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd),
+                            DTYPE_i(ht), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+    else:
+        window_slice = mod_window_slice.get_function('window_slice')
+        window_slice(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n),
+                     DTYPE_i(wd), DTYPE_i(ht), block=(block_size, block_size, 1),
+                     grid=(int(n_windows), grid_size, grid_size))
 
     return win_d
 
