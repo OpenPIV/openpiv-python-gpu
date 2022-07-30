@@ -11,8 +11,7 @@ from imageio import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
-import openpiv.gpu_misc as gpu_misc
-import openpiv.gpu_validation as gpu_validation
+from openpiv.test.test_gpu_misc import generate_np_gpu_array_pair
 
 # GLOBAL VARIABLES
 # datatypes used in gpu_process
@@ -20,7 +19,6 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 # dirs
-_fixture_dir = './temp/'
 _temp_dir = './temp/'
 
 # synthetic image parameters
@@ -64,6 +62,7 @@ def create_pair_roll(image_size, roll_shift):
 
 def generate_cpu_gpu_pair(size, magnitude=1, dtype=DTYPE_f):
     """Returns a pair of cpu and gpu arrays with random values."""
+    np.random.seed(0)
     cpu_array = (np.random.random(size) * magnitude).astype(dtype)
     gpu_array = gpuarray.to_gpu(cpu_array)
 
@@ -85,7 +84,8 @@ def test_gpu_gradient():
     assert np.array_equal(v_y, strain_gpu[3])
 
 
-def test_gpu_interpolate():
+@pytest.mark.parametrize('mask_d', [None, gpuarray.zeros((7, 7), dtype=DTYPE_i)])
+def test_gpu_interpolate(mask_d):
     ws0 = 16
     spacing0 = 8
     ws1 = 8
@@ -108,10 +108,38 @@ def test_gpu_interpolate():
     interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
     f1 = np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0)  # interp2d returns interpolation results with increasing y
 
-    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
+    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
     f1_gpu = f1_d.get()
 
     assert np.allclose(f1, f1_gpu, _identity_tolerance)
+
+
+def test_gpu_interpolate_mask(ndarrays_regression):
+    ws0 = 16
+    spacing0 = 8
+    ws1 = 8
+    spacing1 = 4
+    n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
+    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
+    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
+    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
+    x0 = x0.astype(DTYPE_f)
+    y0 = y0.astype(DTYPE_f)
+    x1 = x1.astype(DTYPE_f)
+    y1 = y1.astype(DTYPE_f)
+
+    f0, f0_d = generate_cpu_gpu_pair((n_row0, n_col0))
+    mask_d = gpuarray.zeros((n_row0, n_col0), dtype=DTYPE_i)
+    mask_d[4:7, 4:7] = np.ones((3, 3), dtype=DTYPE_i)
+
+    x0_d = gpuarray.to_gpu(x0[0, :])
+    x1_d = gpuarray.to_gpu(x1[0, :])
+    y0_d = gpuarray.to_gpu(y0[:, 0])
+    y1_d = gpuarray.to_gpu(y1[:, 0])
+
+    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
+    f1_gpu = f1_d.get()
+    ndarrays_regression.check({'f1': f1_d.get()})
 
 
 def test_gpu_ftt_shift():
@@ -146,90 +174,6 @@ def test_mask_rms():
     correlation_stack_masked_gpu = gpu_process._gpu_mask_rms(correlation_stack_d, corr_peak_d).get()
 
     assert np.allclose(correlation_stack_masked_cpu, correlation_stack_masked_gpu, _identity_tolerance)
-
-
-def test_find_neighbours():
-    m, n = _test_size_small
-
-    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
-    mask[4, 4] = 1
-    mask_d = gpuarray.to_gpu(mask)
-
-    neighbours_present0 = np.ones((m, n, 8), dtype=DTYPE_i)
-    neighbours_present0[0, :, :3] = 0
-    neighbours_present0[-1, :, 5:] = 0
-    neighbours_present0[:, 0, 0] = 0
-    neighbours_present0[:, 0, 3] = 0
-    neighbours_present0[:, 0, 5] = 0
-    neighbours_present0[:, -1, 2] = 0
-    neighbours_present0[:, -1, 4] = 0
-    neighbours_present0[:, -1, 7] = 0
-    neighbours_present0[5, 5, 0] = 0
-    neighbours_present0[5, 4, 1] = 0
-    neighbours_present0[5, 3, 2] = 0
-    neighbours_present0[4, 5, 3] = 0
-    neighbours_present0[4, 3, 4] = 0
-    neighbours_present0[3, 5, 5] = 0
-    neighbours_present0[3, 4, 6] = 0
-    neighbours_present0[3, 3, 7] = 0
-
-    neighbours_present_gpu = gpu_validation._gpu_find_neighbours((m, n), mask_d).get()
-
-    assert np.allclose(neighbours_present0, neighbours_present_gpu)
-
-
-def test_get_neighbours():
-    m, n = _test_size_small
-    u = np.ones(_test_size_small, dtype=DTYPE_f)
-    u[4, 4] = 1000
-    u_d = gpuarray.to_gpu(u)
-
-    mask = np.zeros(_test_size_small, dtype=DTYPE_i)
-    mask[4, 4] = 1
-    mask_d = gpuarray.to_gpu(mask)
-
-    neighbours0 = np.ones((m, n, 8), dtype=DTYPE_i)
-    neighbours0[0, :, :3] = 0
-    neighbours0[-1, :, 5:] = 0
-    neighbours0[:, 0, 0] = 0
-    neighbours0[:, 0, 3] = 0
-    neighbours0[:, 0, 5] = 0
-    neighbours0[:, -1, 2] = 0
-    neighbours0[:, -1, 4] = 0
-    neighbours0[:, -1, 7] = 0
-    neighbours0[5, 5, 0] = 0
-    neighbours0[5, 4, 1] = 0
-    neighbours0[5, 3, 2] = 0
-    neighbours0[4, 5, 3] = 0
-    neighbours0[4, 3, 4] = 0
-    neighbours0[3, 5, 5] = 0
-    neighbours0[3, 4, 6] = 0
-    neighbours0[3, 3, 7] = 0
-
-    neighbours_present_d = gpu_validation._gpu_find_neighbours((m, n), mask_d)
-    neighbours_gpu = gpu_validation._gpu_get_neighbours(u_d, neighbours_present_d).get()
-
-    assert np.allclose(neighbours0, neighbours_gpu)
-
-
-def test_gpu_median_validation():
-    u = np.ones(_test_size_small, DTYPE_f)
-    u[4, 4] = 1000
-    u[4, 3] = 1.21
-    u[4, 5] = 1.19
-    u_d = gpuarray.to_gpu(u)
-
-    mask = np.zeros(_test_size_small).astype(DTYPE_i)
-    mask[4, 4] = 1
-    mask_d = gpuarray.to_gpu(mask)
-
-    val_locations0 = np.zeros(_test_size_small, DTYPE_i)
-    val_locations0[4, 3] = 1
-
-    val_locations1_d, _ = gpu_validation.gpu_validation(u_d, mask_d=mask_d)
-    val_locations_gpu = val_locations1_d.get()
-
-    assert np.allclose(val_locations0, val_locations_gpu)
 
 
 # INTEGRATION TESTS
@@ -394,49 +338,51 @@ def test_gpu_piv_benchmark_oop(benchmark):
             piv_gpu(frame_a, frame_b)
 
 
-# # sweep the input variables to ensure everything is same
-# @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
-# @pytest.mark.parametrize('min_window_size', [8, 16])
-# @pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
-# def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter):
-#     """This test checks that the output remains the same."""
-#     frame_a = imread('../data/test1/exp1_001_a.bmp')
-#     frame_b = imread('../data/test1/exp1_001_b.bmp')
-#     args = {'mask': None,
-#             'window_size_iters': window_size_iters,
-#             'min_window_size': min_window_size,
-#             'overlap_ratio': 0.5,
-#             'dt': 1,
-#             'deform': True,
-#             'smooth': True,
-#             'nb_validation_iter': nb_validation_iter,
-#             'validation_method': 'median_velocity',
-#             'smoothing_par': 0.5
-#             }
-#
-#     """Ensures the results of the GPU algorithm remains unchanged."""
-#     file_str = _temp_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
-#                                                                str(nb_validation_iter))
-#
-#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-#
-#     # # save the results to a numpy file.
-#     # if not os.path.isdir(_fixture_dir):
-#     #     os.mkdir(_fixture_dir)
-#     # print('WARNING: SAVING COMPARISON DATA.')
-#     # np.savez(file_str, u=u, v=v)
-#
-#     # load the results for comparison
-#     with np.load(file_str + '.npz') as data:
-#         u0 = data['u']
-#         v0 = data['v']
-#
-#     if not np.allclose(u, u0, atol=_identity_tolerance) or not np.allclose(v, v0, atol=_identity_tolerance):
-#         u_debug = u - u0
-#         v_debug = v - v0
-#         print(np.max(u_debug))
-#         print(np.max(v_debug))
-#
-#     # compare with the previous results
-#     assert np.allclose(u, u0, atol=_identity_tolerance)
-#     assert np.allclose(v, v0, atol=_identity_tolerance)
+# sweep the input variables to ensure everything is same
+@pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
+@pytest.mark.parametrize('min_window_size', [8, 16])
+@pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
+def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndarrays_regression):
+    """This test checks that the output remains the same."""
+    frame_a = imread('../data/test1/exp1_001_a.bmp')
+    frame_b = imread('../data/test1/exp1_001_b.bmp')
+    args = {'mask': None,
+            'window_size_iters': window_size_iters,
+            'min_window_size': min_window_size,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': nb_validation_iter,
+            'validation_method': 'median_velocity',
+            'smoothing_par': 0.5
+            }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+    ndarrays_regression.check({'u': u, 'v': v})
+
+    # """Ensures the results of the GPU algorithm remains unchanged."""
+    # file_str = _temp_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
+    #                                                            str(nb_validation_iter))
+
+    # # save the results to a numpy file.
+    # if not os.path.isdir(_fixture_dir):
+    #     os.mkdir(_fixture_dir)
+    # print('WARNING: SAVING COMPARISON DATA.')
+    # np.savez(file_str, u=u, v=v)
+
+    # # load the results for comparison
+    # with np.load(file_str + '.npz') as data:
+    #     u0 = data['u']
+    #     v0 = data['v']
+    #
+    # if not np.allclose(u, u0, atol=_identity_tolerance) or not np.allclose(v, v0, atol=_identity_tolerance):
+    #     u_debug = u - u0
+    #     v_debug = v - v0
+    #     print(np.max(u_debug))
+    #     print(np.max(v_debug))
+    #
+    # # compare with the previous results
+    # assert np.allclose(u, u0, atol=_identity_tolerance)
+    # assert np.allclose(v, v0, atol=_identity_tolerance)

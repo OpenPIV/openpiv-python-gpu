@@ -191,7 +191,7 @@ def test_robust_weights(shape, weight_method, ndarrays_regression):
 
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize('direction', ['forward', 'backward'])
-def test_dct_order_forward(shape, direction, ndarrays_regression):
+def test_dct_order_forward(shape, direction):
     m, n = shape
     y = generate_array(shape, magnitude=2, offset=-1)
     y_d = gpuarray.to_gpu(y)

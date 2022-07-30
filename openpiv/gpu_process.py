@@ -993,32 +993,67 @@ __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid, floa
     float x = (x_grid[x_idx] - buffer_x) / spacing_x;
     float y = (y_grid[y_idx] - buffer_y) / spacing_y;
 
-    // Find limits of domain.
-    if (x < 0) {x = 0;
-    } else if (x > wd - 1) {x = wd - 1;}
-    if (y < 0) {y = 0;
-    } else if (y > ht - 1) {y = ht - 1;}
+    // Coerce interpolation point to within limits of domain.
+    x = x * (x >= 0.0f && x <= wd - 1) + (wd - 1) * (x > wd - 1);
+    y = y * (y >= 0.0f && y <= ht - 1) + (ht - 1) * (y > ht - 1);
 
-    // Do bilinear interpolation.
-    int x1 = floorf(x);
+    // Get neighbouring points.
+    int x1 = floorf(x) - (x == wd - 1);
     int x2 = x1 + 1;
-    int y1 = floorf(y);
+    int y1 = floorf(y) - (y == ht - 1);
     int y2 = y1 + 1;
 
-    // Terms of the bilinear interpolation.
-    float f11 = f0[(y1 * wd + x1)];
-    float f21 = f0[(y1 * wd + x2)];
-    float f12 = f0[(y2 * wd + x1)];
-    float f22 = f0[(y2 * wd + x2)];
+    // Apply the mapping.
+    f1[t_idx] = (x2 - x) * (y2 - y) * f0[y1 * wd + x1]  // f11
+                + (x - x1) * (y2 - y) * f0[y1 * wd + x2]  // f21
+                + (x2 - x) * (y - y1) * f0[y2 * wd + x1]  // f12
+                + (x - x1) * (y - y1) * f0[y2 * wd + x2];  // f22
+}
 
-    // Apply the mapping. Multiply by outside_range to set values outside the window to zero.
-    f1[t_idx] = f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22 * (x - x1)
-                * (y - y1);
+__global__ void bilinear_interpolation_mask(float *f1, float *f0, float *x_grid, float *y_grid, int *mask,
+                    float buffer_x, float buffer_y, float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // Map indices to old mesh coordinates.
+    int x_idx = t_idx % n;
+    int y_idx = t_idx / n;
+    float x = (x_grid[x_idx] - buffer_x) / spacing_x;
+    float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+
+    // Coerce interpolation point to within limits of domain.
+    x = x * (x >= 0.0f && x <= wd - 1) + (wd - 1) * (x > wd - 1);
+    y = y * (y >= 0.0f && y <= ht - 1) + (ht - 1) * (y > ht - 1);
+
+    // Get neighbouring points.
+    int x1 = floorf(x) - (x == wd - 1);
+    int x2 = x1 + 1;
+    int y1 = floorf(y) - (y == ht - 1);
+    int y2 = y1 + 1;
+
+    // Get masked values.
+    int m11 = mask[y1 * wd + x1];
+    int m21 = mask[y1 * wd + x2];
+    int m12 = mask[y2 * wd + x1];
+    int m22 = mask[y2 * wd + x2];
+    int m_y1 = m11 && m21;
+    int m_y2 = m12 && m22;
+
+    // Apply the mapping along x-axis.
+    float f_y1 = ((x2 - x) * (!m11 && !m21) + (!m11 && m21)) * f0[y1 * wd + x1]  // f11
+                 + ((x - x1) * (!m11 && !m21) + (m11 && !m21)) * f0[y1 * wd + x2]; // f21
+    float f_y2 = ((x2 - x) * (!m12 && !m22) + (!m12 && m22)) * f0[y2 * wd + x1] // f12
+                 + ((x - x1) * (!m12 && !m22) + (m12 && !m22)) * f0[y2 * wd + x2]; // f22
+
+    // Apply the mapping along y-axis.
+    f1[t_idx] = ((y2 - y) * (!m_y1 && !m_y2) + (!m_y1 && m_y2)) * f_y1
+                + ((y - y1) * (!m_y1 && !m_y2) + (m_y1 && !m_y2)) * f_y2;
 }
 """)
 
 
-def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
+def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     """Performs an interpolation of a field from one mesh to another.
 
     The implementation requires that the mesh spacing is uniform. The spacing can be different in x and y directions.
@@ -1031,6 +1066,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
         1D float, grid coordinates of the field to be interpolated.
     f0_d : GPUArray
         2D float, field to be interpolated.
+    mask_d : GPUArray
+        2D float, mask array.
 
     Returns
     -------
@@ -1056,9 +1093,15 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d):
 
     block_size = 32
     grid_size = ceil(size_i / block_size)
-    interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
-    interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i, DTYPE_i(n),
-                    size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    if mask_d is not None:
+        _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f0_d.shape)
+        interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation_mask')
+        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, mask_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i,
+                        DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    else:
+        interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
+        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i,
+                        DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return f1_d
 
@@ -1145,17 +1188,13 @@ __global__ void window_slice_deform(float *output, float *input, float *shift, f
 
     // Find limits of domain.
     int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-
+    
     if (inside_domain) {
-    // Terms of the bilinear interpolation.
-    float f11 = input[(y1 * wd + x1)];
-    float f21 = input[(y1 * wd + x2)];
-    float f12 = input[(y2 * wd + x1)];
-    float f22 = input[(y2 * wd + x2)];
-
     // Apply the mapping.
-    output[w_range] = (f11 * (x2 - x) * (y2 - y) + f21 * (x - x1) * (y2 - y) + f12 * (x2 - x) * (y - y1) + f22
-                      * (x - x1) * (y - y1));
+    output[w_range] = ((x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
+                       + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
+                       + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
+                       + (x - x1) * (y - y1) * input[(y2 * wd + x2)]);  // f22
     } else {output[w_range] = 0.0f;}
 }
 """)
@@ -1204,16 +1243,16 @@ def _gpu_window_slice(frame_d, window_size, spacing, buffer, dt=0, shift_d=None,
     block_size = 8
     grid_size = ceil(window_size / block_size)
     if shift_d is not None:
-        _check_arrays(shift_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+        _check_arrays(shift_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=(2, m, n))
         do_deform = DTYPE_i(strain_d is not None)
         if not do_deform:
             strain_d = gpuarray.zeros(1, dtype=DTYPE_i)
         else:
             _check_arrays(strain_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-        window_slice_deform = mod_window_slice.get_function('window_slice_deform')
-        window_slice_deform(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
-                            DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd),
-                            DTYPE_i(ht), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
+        window_slice = mod_window_slice.get_function('window_slice_deform')
+        window_slice(win_d, frame_d, shift_d, strain_d, DTYPE_f(dt), do_deform, DTYPE_i(window_size),
+                     DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n_windows), DTYPE_i(n), DTYPE_i(wd),
+                     DTYPE_i(ht), block=(block_size, block_size, 1), grid=(int(n_windows), grid_size, grid_size))
     else:
         window_slice = mod_window_slice.get_function('window_slice')
         window_slice(win_d, frame_d, DTYPE_i(window_size), DTYPE_i(spacing), buffer_x_i, buffer_y_i, DTYPE_i(n),
