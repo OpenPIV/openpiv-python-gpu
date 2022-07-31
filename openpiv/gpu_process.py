@@ -678,7 +678,7 @@ class PIVGPU:
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
-        mask_d = self._mask_dl[self._k]
+        mask_d = self._get_mask()
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
@@ -711,6 +711,7 @@ class PIVGPU:
     def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d, val_locations_d):
         """Replace spurious vectors by the mean or median of the surrounding points."""
         _check_arrays(u_d, v_d, u_mean_d, v_mean_d, val_locations_d, array_type=gpuarray.GPUArray, shape=u_d.shape)
+        mask_d = self._get_mask()
 
         # First iteration, just replace with mean velocity.
         if self._k == 0:
@@ -720,9 +721,9 @@ class PIVGPU:
         # Case if different dimensions: interpolation using previous iteration.
         elif self._k > 0 and self._field_shape_l[self._k] != self._field_shape_l[self._k - 1]:
             u_d = _interpolate_replace(self._x_dl[self._k - 1], self._y_dl[self._k - 1], self._x_dl[self._k],
-                                       self._y_dl[self._k], u_previous_d, u_d, val_locations_d)
+                                       self._y_dl[self._k], u_previous_d, u_d, val_locations_d, mask_d=mask_d)
             v_d = _interpolate_replace(self._x_dl[self._k - 1], self._y_dl[self._k - 1], self._x_dl[self._k],
-                                       self._y_dl[self._k], v_previous_d, v_d, val_locations_d)
+                                       self._y_dl[self._k], v_previous_d, v_d, val_locations_d, mask_d=mask_d)
 
         # Case if same dimensions.
         elif self._k > 0 and self._field_shape_l[self._k] == self._field_shape_l[self._k - 1]:
@@ -734,17 +735,23 @@ class PIVGPU:
     def _get_next_iteration_prediction(self, u_d, v_d):
         """Returns the velocity field to begin the next iteration."""
         _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
+        mask_d = self._get_mask()
+
         # Interpolate if dimensions do not agree.
         if self._window_size_l[self._k + 1] != self._window_size_l[self._k]:
             dp_x_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
-                                     self._y_dl[self._k + 1], u_d)
+                                     self._y_dl[self._k + 1], u_d, mask_d=mask_d)
             dp_y_d = gpu_interpolate(self._x_dl[self._k], self._y_dl[self._k], self._x_dl[self._k + 1],
-                                     self._y_dl[self._k + 1], v_d)
+                                     self._y_dl[self._k + 1], v_d, mask_d=mask_d)
         else:
             dp_x_d = u_d
             dp_y_d = v_d
 
         return dp_x_d, dp_y_d
+
+    def _get_mask(self):
+        """Returns the mask for the velocity field at the given iteration."""
+        return self._mask_dl[self._k] if self._im_mask_d is not None else None
 
     @staticmethod
     def _log_residual(i_peak_d, j_peak_d):
@@ -1823,13 +1830,13 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
     return f_d
 
 
-def _interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d):
+def _interpolate_replace(x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d, mask_d=None):
     """Replaces the invalid vectors by interpolating another field."""
     _check_arrays(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
     _check_arrays(f0_d, f1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     _check_arrays(val_locations_d, array_type=gpuarray.GPUArray, shape=f1_d.shape, ndim=2)
 
-    f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d)
+    f1_val_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
 
     # Replace vectors at validation locations.
     f1_val_d = gpuarray.if_positive(val_locations_d, f1_val_d, f1_d)

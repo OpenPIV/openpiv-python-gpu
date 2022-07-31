@@ -59,17 +59,15 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
     f_shape = f_dl[0].shape
     f_size = f_dl[0].size
     _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=f_shape, ndim=2)
-    if sig2noise_d is not None:
-        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_size)
-    if mask_d is not None:
-        _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f_shape)
     val_locations_d = None
 
     if 's2n' in validation_method:
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
+        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_size)
         val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
 
-    # Compute the median velocities to be returned.
+    # Compute the median velocities to be returned. This should be stored in memory and re-used in the OOP
+    # implementation.
     neighbours_present_d = _gpu_find_neighbours(f_dl[0].shape, mask_d)
 
     f_median_dl = []
@@ -97,6 +95,7 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
         f_median_dl.append(f_median_d)
 
     if mask_d is not None:
+        _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f_shape)
         val_locations_d = gpu_mask(val_locations_d, mask_d)
 
     if n_y == 1:
