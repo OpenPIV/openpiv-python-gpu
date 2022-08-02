@@ -545,13 +545,15 @@ class PIVGPU:
         for k in range(self._nb_iter):
             self._k = k
             logging.info('ITERATION {}'.format(k))
+
+            # CROSS-CORRELATION
             extended_size, shift_d, strain_d = self._get_corr_arguments(dp_x_d, dp_y_d)
 
             # Get window displacement to subpixel accuracy.
             i_peak_d, j_peak_d = self._corr(self._window_size_l[k], self._spacing_l[k], extended_size=extended_size,
                                             shift_d=shift_d, strain_d=strain_d)
 
-            # update the field with new values
+            # Update the field with new values.
             u_d, v_d = self._update_values(i_peak_d, j_peak_d, dp_x_d, dp_y_d)
             self._log_residual(i_peak_d, j_peak_d)
 
@@ -604,6 +606,7 @@ class PIVGPU:
         self._window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
                                for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
 
+        x = y = mask = None
         for k in range(self._nb_iter):
             self._spacing_l.append(max(1, int(self._window_size_l[k] * (1 - self.overlap_ratio))))
             self._field_shape_l.append(get_field_shape(self.frame_shape, self._window_size_l[k], self._spacing_l[k]))
@@ -615,10 +618,9 @@ class PIVGPU:
             mask = self._mask_field(x, y)
             self._mask_dl.append(gpuarray.to_gpu(mask))
 
-            if k == self._nb_iter - 1:
-                self.x = x
-                self.y = y
-                self.mask = mask
+        self.x = x
+        self.y = y
+        self.mask = mask
 
     def _mask_field(self, x, y):
         if self.im_mask is not None:
@@ -650,7 +652,10 @@ class PIVGPU:
         shift_d = None
         strain_d = None
         extended_size = None
+        mask_d = self._get_mask_k(return_zeros=True)
+
         if self._k == 0:
+            # Compute extended size.
             if self.extend_ratio is not None:
                 extended_size = int(self._window_size_l[self._k] * self.extend_ratio)
         else:
@@ -659,18 +664,20 @@ class PIVGPU:
 
             # Compute the strain rate.
             if self.deform:
-                strain_d = gpu_strain(dp_x_d, dp_y_d, self._mask_dl[self._k], self._spacing_l[self._k])
+                strain_d = gpu_strain(dp_x_d, dp_y_d, mask_d, self._spacing_l[self._k])
 
         return extended_size, shift_d, strain_d
 
     def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d):
         """Updates the velocity values after each iteration."""
+        mask_d = self._get_mask_k(return_zeros=True)
+
         if dp_x_d == dp_y_d is None:
-            u_d = gpu_mask(j_peak_d, self._mask_dl[self._k])
-            v_d = gpu_mask(i_peak_d, self._mask_dl[self._k])
+            u_d = gpu_mask(j_peak_d, mask_d)
+            v_d = gpu_mask(i_peak_d, mask_d)
         else:
-            u_d = _gpu_update_field(dp_x_d, j_peak_d, self._mask_dl[self._k])
-            v_d = _gpu_update_field(dp_y_d, i_peak_d, self._mask_dl[self._k])
+            u_d = _gpu_update_field(dp_x_d, j_peak_d, mask_d)
+            v_d = _gpu_update_field(dp_y_d, i_peak_d, mask_d)
 
         return u_d, v_d
 
@@ -678,7 +685,7 @@ class PIVGPU:
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
-        mask_d = self._get_mask()
+        mask_d = self._get_mask_k(return_zeros=True)
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
@@ -690,6 +697,12 @@ class PIVGPU:
                                                         s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                                         mean_tol=self.mean_tol, rms_tol=self.rms_tol)
             u_mean_d, v_mean_d = f_mean_dl
+
+            # val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=mask_d,
+            #                                             validation_method=self.validation_method,
+            #                                             s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+            #                                             mean_tol=self.mean_tol, rms_tol=self.rms_tol)
+            # u_mean_d, v_mean_d = f_mean_dl
 
             # Do the validation.
             n_val = int(gpuarray.sum(val_locations_d).get())
@@ -711,7 +724,7 @@ class PIVGPU:
     def _gpu_replace_vectors(self, u_d, v_d, u_previous_d, v_previous_d, u_mean_d, v_mean_d, val_locations_d):
         """Replace spurious vectors by the mean or median of the surrounding points."""
         _check_arrays(u_d, v_d, u_mean_d, v_mean_d, val_locations_d, array_type=gpuarray.GPUArray, shape=u_d.shape)
-        mask_d = self._get_mask()
+        mask_d = self._get_mask_k(return_zeros=False)
 
         # First iteration, just replace with mean velocity.
         if self._k == 0:
@@ -735,7 +748,7 @@ class PIVGPU:
     def _get_next_iteration_prediction(self, u_d, v_d):
         """Returns the velocity field to begin the next iteration."""
         _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
-        mask_d = self._get_mask()
+        mask_d = self._get_mask_k(return_zeros=False)
 
         # Interpolate if dimensions do not agree.
         if self._window_size_l[self._k + 1] != self._window_size_l[self._k]:
@@ -749,9 +762,12 @@ class PIVGPU:
 
         return dp_x_d, dp_y_d
 
-    def _get_mask(self):
+    def _get_mask_k(self, return_zeros=True):
         """Returns the mask for the velocity field at the given iteration."""
-        return self._mask_dl[self._k] if self._im_mask_d is not None else None
+        if self._im_mask_d is not None or return_zeros:
+            return self._mask_dl[self._k]
+        else:
+            return None
 
     @staticmethod
     def _log_residual(i_peak_d, j_peak_d):
