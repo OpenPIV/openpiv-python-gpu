@@ -7,7 +7,7 @@ import scipy.interpolate as interp
 from skimage.util import random_noise
 from skimage import img_as_ubyte
 from scipy.ndimage import shift
-from imageio import imread
+from imageio.v2 import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
@@ -298,6 +298,7 @@ def test_subpixel_peak(subpixel_method):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
+# s2n must not cause invalid numbers to be passed to smoothn.
 @pytest.mark.parametrize('validation_method', ('s2n', 'mean_velocity', 'median_velocity', 'rms_velocity'))
 def test_validation(validation_method):
     """Inputs every s2n method to ensure they don't error out."""

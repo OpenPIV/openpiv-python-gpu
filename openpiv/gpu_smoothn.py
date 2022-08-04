@@ -171,19 +171,22 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
     for i in range(n_y):
         replace_non_finite(y[i], finite=is_finite, spacing=spacing)
 
-    # Weights. Zero weights are assigned to not finite values (Inf/NaN values = missing data).
+    # Generate weights.
     if w is not None:
+        # Zero weights are assigned to not finite values (Inf/NaN values = missing data).
         w *= is_finite
+        w = w.astype(d_type)
         if w.shape != y_shape:
             raise ValueError('w must be an ndarray with same shape as arrays in y.')
         if np.any(w < 0):
             raise ValueError('Weights must all be greater than or equal to zero.')
-        w = DTYPE_f(w)
-        w = (w / np.amax(w))
+        w_max = np.amax(w)
+        if 0 < w_max != 1:
+            w = w / w_max
     else:
         w = np.ones(y_shape, dtype=d_type) * is_finite
 
-    # Apply mask to weights
+    # Apply mask to weights.
     if mask is not None:
         if np.any(np.round(mask) != mask):
             'mask must have boolean values.'
@@ -273,7 +276,10 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
                  for i in range(n_y)]
 
             # If not weighted/missing data => tol=0 (no iteration).
-            tol = is_weighted * np.linalg.norm([z0[i] - z[i] for i in range(n_y)]) / np.linalg.norm(z)
+            if is_weighted:
+                tol = np.linalg.norm([z0[i] - z[i] for i in range(n_y)]) / (np.linalg.norm(z) + 1e-6)
+            else:
+                tol = 0
 
             if tol <= tol_z:
                 break
