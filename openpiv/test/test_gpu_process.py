@@ -344,8 +344,8 @@ def test_gpu_piv_benchmark_oop(benchmark):
 @pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
 def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndarrays_regression):
     """This test checks that the output remains the same."""
-    frame_a = imread('../data/test1/exp1_001_a.bmp')
-    frame_b = imread('../data/test1/exp1_001_b.bmp')
+    frame_a = imread('./openpiv/data/test1/exp1_001_a.bmp')
+    frame_b = imread('./openpiv/data/test1/exp1_001_b.bmp')
     args = {'mask': None,
             'window_size_iters': window_size_iters,
             'min_window_size': min_window_size,

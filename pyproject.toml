@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --benchmark-disable"
+addopts = "-ra -q --benchmark-skip"
 testpaths = [
     "openpiv/test",
 ]

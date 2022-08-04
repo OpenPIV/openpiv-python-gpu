@@ -1,6 +1,6 @@
 """This module is for GPU-accelerated validation algorithms."""
 
-from math import ceil
+from math import ceil, prod
 
 import numpy as np
 # Create the PyCUDA context.
@@ -24,8 +24,8 @@ RMS_TOL = 2
 
 
 def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
-                   s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
-    """Returns an array indicating which indices need to be validated.
+                    s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
+    """Validation for vector-fields that returns an array indicating which location need to be validated.
 
     Parameters
     ----------
@@ -49,59 +49,215 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
     Returns
     -------
     val_locations : GPUArray
-        2D int, array of indices that need to be validated. 0 indicates that the index needs to be corrected. 1 means
-        no correction is needed.
-    f_median_d : GPUArray or list
-        2D float, mean of the velocities surrounding each point in this iteration.
+        2D int, array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
     """
-    n_y = len(f_dl)
-    f_shape = f_dl[0].shape
-    f_size = f_dl[0].size
-    _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=f_shape, ndim=2)
-    val_locations_d = None
 
-    if 's2n' in validation_method:
+    validation_gpu = ValidationGPU(f_dl[0], mask_d, validation_method, s2n_tol, median_tol, mean_tol,
+                                   rms_tol)
+    return validation_gpu(*f_dl, sig2noise_d=sig2noise_d)
+
+
+class ValidationGPU:
+    """Validation for vector-fields that returns an array indicating which location need to be validated.
+
+    Parameters
+    ----------
+    f_shape : GPUArray or tuple
+        (ht, wd) of the fields to be validated.
+    mask_d : GPUArray
+        2D float, mask for the velocity field.
+    validation_method : {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+        Method(s) to use for validation.
+    s2n_tol : float, optional
+        Minimum value for sig2noise.
+    median_tol : float, optional
+        Tolerance for median velocity validation.
+    mean_tol : float, optional
+        Tolerance for mean velocity validation.
+    rms_tol : float, optional
+        Tolerance for rms validation.
+
+    Methods
+    -------
+    __call__(*f_dl)
+        Main method to validate vector fields.
+
+    """
+
+    def __init__(self, f_shape, mask_d=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
+                 median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
+        self.f_shape = f_shape.shape if hasattr(f_shape, 'shape') else tuple(f_shape)
+        if mask_d is not None:
+            _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
+        self.mask_d = mask_d
+        self.validation_method = validation_method if not isinstance(validation_method, str) else (validation_method,)
+        self.s2n_tol = s2n_tol
+        self.median_tol = median_tol
+        self.mean_tol = mean_tol
+        self.rms_tol = rms_tol
+
+        self._val_locations_d = None
+        self._f_dl = None
+        self._f_neighbours_dl = None
+        self._f_median_dl = None
+        self._f_mean_dl = None
+
+        self._check_validation_methods()
+
+        # Compute the median velocities to be returned.
+        self._neighbours_present_d = _gpu_find_neighbours(self.f_shape, mask_d)
+
+    def __call__(self, *f_dl, sig2noise_d=None):
+        """Returns an array indicating which indices need to be validated.
+
+        Parameters
+        ----------
+        f_dl : GPUArray
+            2D float, velocity fields to be validated.
+        sig2noise_d : GPUArray, optional
+            1D or 2D float, signal-to-noise ratio of each velocity.
+
+        Returns
+        -------
+        val_locations : GPUArray
+            2D int, array of indices that need to be validated. 1s indicate locations of invalid vectors.
+
+        """
+        self.free_data()
+        _check_arrays(*f_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape)
+        self._num_fields = len(f_dl)
+        self._f_dl = f_dl
+
+        # Do the validations.
+        if 's2n' in self.validation_method:
+            self._s2n_validation(sig2noise_d)
+        if 'median_velocity' in self.validation_method:
+            self._median_validation()
+        if 'mean_velocity' in self.validation_method:
+            self._mean_validation()
+        if 'rms_velocity' in self.validation_method:
+            self._rms_validation()
+
+        # Apply the mask to the final result.
+        self._mask_val_locations()
+
+        return self._val_locations_d
+
+    def free_data(self):
+        self._val_locations_d = None
+        self._f_dl = None
+        self._f_neighbours_dl = None
+        self._f_median_dl = None
+        self._f_mean_dl = None
+
+    @property
+    def median(self):
+        """Returns an array indicating which indices need to be validated.
+
+        Returns
+        -------
+        f_median_d : GPUArray or list
+            2D float, median of the velocities surrounding each point in this iteration.
+
+        """
+        f_median_dl = self._get_median()
+        if len(f_median_dl) == 1:
+            f_median_dl = f_median_dl[0]
+
+        return f_median_dl
+
+    @property
+    def mean(self):
+        """Returns an array indicating which indices need to be validated.
+
+        Returns
+        -------
+        f_mean_d : GPUArray or list
+            2D float, mean of the velocities surrounding each point in this iteration.
+
+        """
+        f_mean_dl = self._get_mean()
+        if len(f_mean_dl) == 1:
+            f_mean_dl = f_mean_dl[0]
+
+        return f_mean_dl
+
+    def _s2n_validation(self, sig2noise_d):
+        """Performs signal-to-noise validation on each field."""
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
-        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=f_size)
-        val_locations_d = _local_validation(sig2noise_d, s2n_tol, val_locations_d)
+        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
 
-    # Compute the median velocities to be returned. This should be stored in memory and re-used in the OOP
-    # implementation.
-    neighbours_present_d = _gpu_find_neighbours(f_dl[0].shape, mask_d)
+        for k in range(self._num_fields):
+            self._val_locations_d = _local_validation(sig2noise_d, self.s2n_tol, self._val_locations_d)
 
-    f_median_dl = []
-    for f_d in f_dl:
-        f_neighbours_d = _gpu_get_neighbours(f_d, neighbours_present_d)
-        f_median_d = _gpu_median_velocity(f_neighbours_d, neighbours_present_d)
-        f_mean_d = None
+    def _median_validation(self):
+        """Performs median validation on each field."""
+        f_neighbours_dl = self._get_neighbours()
+        f_median_dl = self._get_median()
 
-        if 'median_velocity' in validation_method:
-            f_median_fluc_d = _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d)
-            val_locations_d = _neighbour_validation(f_d, f_median_d, f_median_fluc_d, median_tol, val_locations_d)
+        for k in range(self._num_fields):
+            f_median_fluc_d = _gpu_median_fluc(f_median_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
+            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_median_dl[k], f_median_fluc_d,
+                                                          self.median_tol, self._val_locations_d)
 
-        # Compute the mean velocities if they are needed.
-        if 'mean_velocity' in validation_method or 'rms_velocity' in validation_method:
-            f_mean_d = _gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
+    def _mean_validation(self):
+        """Performs mean validation on each field."""
+        f_neighbours_dl = self._get_neighbours()
+        f_mean_dl = self._get_mean()
 
-        if 'mean_velocity' in validation_method:
-            f_mean_fluc_d = _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d)
-            val_locations_d = _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, mean_tol, val_locations_d)
+        for k in range(self._num_fields):
+            f_mean_fluc_d = _gpu_mean_fluc(f_mean_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
+            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_mean_fluc_d, self.mean_tol,
+                                                          self._val_locations_d)
 
-        if 'rms_velocity' in validation_method:
-            f_rms_d = _gpu_rms(f_mean_d, f_neighbours_d, neighbours_present_d)
-            val_locations_d = _neighbour_validation(f_d, f_mean_d, f_rms_d, rms_tol, val_locations_d)
+    def _rms_validation(self):
+        """Performs RMS validation on each field."""
+        f_neighbours_dl = self._get_neighbours()
+        f_mean_dl = self._get_mean()
 
-        f_median_dl.append(f_median_d)
+        for k in range(self._num_fields):
+            f_rms_d = _gpu_rms(f_mean_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
+            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_rms_d, self.rms_tol,
+                                                          self._val_locations_d)
 
-    if mask_d is not None:
-        _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f_shape)
-        val_locations_d = gpu_mask(val_locations_d, mask_d)
+    def _mask_val_locations(self):
+        """Removes masked locations from the validation locations."""
+        if self.mask_d is not None and self._val_locations_d is not None:
+            self._val_locations_d = gpu_mask(self._val_locations_d, self.mask_d)
 
-    if n_y == 1:
-        f_median_dl = f_median_dl[0]
+    def _get_neighbours(self):
+        """Returns neighbouring values for each field."""
+        if self._f_neighbours_dl is None:
+            self._f_neighbours_dl = [_gpu_get_neighbours(f_d, self._neighbours_present_d) for f_d in self._f_dl]
 
-    return val_locations_d, f_median_dl
+        return self._f_neighbours_dl
+
+    def _get_median(self):
+        """Returns field containing median of surrounding points for each field."""
+        f_neighbours_dl = self._get_neighbours()
+
+        if self._f_median_dl is None:
+            self._f_median_dl = [_gpu_median_velocity(f_neighbours_dl[k], self._neighbours_present_d)
+                                 for k in range(self._num_fields)]
+
+        return self._f_median_dl
+
+    def _get_mean(self):
+        """Returns field containing mean of surrounding points for each field."""
+        f_neighbours_dl = self._get_neighbours()
+
+        if self._f_mean_dl is None:
+            self._f_mean_dl = [_gpu_mean_velocity(f_neighbours_dl[k], self._neighbours_present_d)
+                               for k in range(self._num_fields)]
+
+        return self._f_mean_dl
+    
+    def _check_validation_methods(self):
+        """Checks that input validation methods are allowed."""
+        if not all([val_method in ALLOWED_VALIDATION_METHODS for val_method in self.validation_method]):
+            raise ValueError(
+                'Invalid validation method(s). Allowed validation methods are: {}'.format(ALLOWED_VALIDATION_METHODS))
 
 
 mod_validation = SourceModule("""

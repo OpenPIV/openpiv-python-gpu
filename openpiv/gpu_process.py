@@ -19,6 +19,7 @@ import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
 from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+import openpiv.gpu_validation as gpu_validation1
 from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f, gpu_mask
 
@@ -607,6 +608,7 @@ class PIVGPU:
                                for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
 
         x = y = mask = None
+        # TODO refactor
         for k in range(self._nb_iter):
             self._spacing_l.append(max(1, int(self._window_size_l[k] * (1 - self.overlap_ratio))))
             self._field_shape_l.append(get_field_shape(self.frame_shape, self._window_size_l[k], self._spacing_l[k]))
@@ -681,30 +683,27 @@ class PIVGPU:
 
         return u_d, v_d
 
+    # TODO this method is too big.
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
-        mask_d = self._get_mask_k(return_zeros=True)
+        mask_d = self._get_mask_k(return_zeros=False)
 
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
                                                          mask_width=self.sig2noise_width)
 
+        # Do the validation.
+        validation_gpu = gpu_validation1.ValidationGPU(u_d.shape, mask_d=mask_d,
+                                                       validation_method=self.validation_method,
+                                                       s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+                                                       mean_tol=self.mean_tol, rms_tol=self.rms_tol)
         for i in range(self.nb_validation_iter):
-            val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=mask_d,
-                                                        validation_method=self.validation_method,
-                                                        s2n_tol=self.s2n_tol, median_tol=self.median_tol,
-                                                        mean_tol=self.mean_tol, rms_tol=self.rms_tol)
-            u_mean_d, v_mean_d = f_mean_dl
+            val_locations_d = validation_gpu(u_d, v_d, sig2noise_d=self._sig2noise_d)
+            u_mean_d, v_mean_d = validation_gpu.median
 
-            # val_locations_d, f_mean_dl = gpu_validation(u_d, v_d, sig2noise_d=self._sig2noise_d, mask_d=mask_d,
-            #                                             validation_method=self.validation_method,
-            #                                             s2n_tol=self.s2n_tol, median_tol=self.median_tol,
-            #                                             mean_tol=self.mean_tol, rms_tol=self.rms_tol)
-            # u_mean_d, v_mean_d = f_mean_dl
-
-            # Do the validation.
+            # Replace invalid vectors.
             n_val = int(gpuarray.sum(val_locations_d).get())
             if n_val > 0:
                 logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
@@ -714,7 +713,9 @@ class PIVGPU:
                 logging.info('No invalid vectors.')
                 break
 
-        # Smooth the validated field
+            validation_gpu.free_data()
+
+        # Smooth the validated field.
         if self.smooth:
             w_d = (1 - val_locations_d) if val_locations_d is not None else None
             u_d, v_d = gpu_smoothn(u_d, v_d, s=self.smoothing_par, mask=mask_d, w=w_d)
@@ -1089,7 +1090,7 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
         1D float, grid coordinates of the field to be interpolated.
     f0_d : GPUArray
         2D float, field to be interpolated.
-    mask_d : GPUArray
+    mask_d : GPUArray, optional
         2D float, mask array.
 
     Returns
@@ -1236,12 +1237,12 @@ def _gpu_window_slice(frame_d, window_size, spacing, buffer, dt=0, shift_d=None,
         Spacing between vectors of the velocity field.
     buffer : int or tuple
         Adjustment to location of windows from left/top vectors to edge of frame.
-    dt : float
+    dt : float, optional
         Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
         stationary. This is applied to the deformation in an analogous way.
-    shift_d : GPUArray
+    shift_d : GPUArray, optional
         3D float, shift of the second window.
-    strain_d : GPUArray or None
+    strain_d : GPUArray, optional
         3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
 
     Returns

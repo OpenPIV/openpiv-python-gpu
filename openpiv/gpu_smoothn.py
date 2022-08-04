@@ -11,9 +11,9 @@ import warnings
 from math import sqrt, log2, log10, ceil
 
 import numpy as np
-from scipy.optimize.lbfgsb import fmin_l_bfgs_b
+from scipy.optimize import fmin_l_bfgs_b
 from scipy.fft import dct, idct
-from scipy.ndimage.morphology import distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
