@@ -24,7 +24,7 @@ RMS_TOL = 2
 
 
 def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
-                    s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
+                   s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
     """Validation for vector-fields that returns an array indicating which location need to be validated.
 
     Parameters
@@ -38,7 +38,7 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
     validation_method : {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
     s2n_tol : float, optional
-        Minimum value for sig2noise.
+        Minimum value for sig2noise validation.
     median_tol : float, optional
         Tolerance for median velocity validation.
     mean_tol : float, optional
@@ -252,7 +252,7 @@ class ValidationGPU:
                                for k in range(self._num_fields)]
 
         return self._f_mean_dl
-    
+
     def _check_validation_methods(self):
         """Checks that input validation methods are allowed."""
         if not all([val_method in ALLOWED_VALIDATION_METHODS for val_method in self.validation_method]):

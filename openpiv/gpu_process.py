@@ -18,8 +18,7 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu_validation import gpu_validation, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
-import openpiv.gpu_validation as gpu_validation1
+from openpiv.gpu_validation import ValidationGPU, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
 from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f, gpu_mask
 
@@ -359,12 +358,10 @@ def gpu_piv(frame_a, frame_b,
     mask : ndarray
         2D, the boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
-        2D, the signal to noise ratio of the final velocity field.
+        2D, the signal-to-noise ratio of the final velocity field.
 
     Other Parameters
     ----------------
-    trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
     s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
         Tolerance of the validation methods.
     smoothing_par : float
@@ -432,8 +429,6 @@ class PIVGPU:
 
     Other Parameters
     ----------------
-    trust_1st_iter : bool
-        With a first window size following the 1/4 rule, the 1st iteration can be trusted and the value should be 1.
     s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
         Tolerance of the validation methods.
     smoothing_par : float
@@ -500,22 +495,18 @@ class PIVGPU:
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else SIG2NOISE_METHOD
         self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
-        self.trust_1st_iter = kwargs['trust_first_iter'] if 'trust_first_iter' in kwargs else False
 
-        self.mask = None
-        self.x = self.y = None
         self._nb_iter = sum(self.ws_iters)
         self._im_mask_d = None
-        self._x_dl = self._y_dl = None
-        self._window_size_l = None
-        self._spacing_l = None
-        self._field_shape_l = None
-        self._mask_dl = None
         self._corr = None
         self._sig2noise_d = None
+        self._im_mask_d = gpuarray.to_gpu(self.im_mask) if mask is not None else None
 
         self._check_inputs()
-        self._set_geometry()
+        self._init_window_sizes()
+        self._init_spacing()
+        self._init_field_shape()
+        self._init_coords()
 
     def __call__(self, frame_a, frame_b):
         """Processes an image pair.
@@ -559,10 +550,7 @@ class PIVGPU:
             self._log_residual(i_peak_d, j_peak_d)
 
             # VALIDATION
-            if k == 0 and self.trust_1st_iter:
-                logging.info('No validation--trusting 1st iteration.')
-            else:
-                u_d, v_d = self._validate_fields(u_d, v_d, u_previous_d, v_previous_d)
+            u_d, v_d = self._validate_fields(u_d, v_d, u_previous_d, v_previous_d)
 
             # NEXT ITERATION
             # Compute the predictors dpx and dpy from the current displacements.
@@ -596,27 +584,33 @@ class PIVGPU:
         """Frees correlation data from GPU."""
         self._corr = None
 
-    def _set_geometry(self):
-        """Creates the geometric parameters for the field at each iteration."""
-        self._spacing_l = []
-        self._field_shape_l = []
+    def _init_window_sizes(self):
+        """Creates the list of windows sizes at each iteration."""
+        self._window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
+                               for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
+
+    def _init_spacing(self):
+        """Creates the list of grid spacing  at each iteration."""
+        self._spacing_l = [max(1, int(self._window_size_l[k] * (1 - self.overlap_ratio)))
+                           for k in range(self._nb_iter)]
+
+    def _init_field_shape(self):
+        """Creates the list of field shape  at each iteration."""
+        self._field_shape_l = [get_field_shape(self.frame_shape, self._window_size_l[k], self._spacing_l[k])
+                               for k in range(self._nb_iter)]
+
+    def _init_coords(self):
+        """Creates the list of grid coordinates at each iteration."""
         self._x_dl = []
         self._y_dl = []
         self._mask_dl = []
 
-        self._window_size_l = [(2 ** (len(self.ws_iters) - i - 1)) * self.min_window_size
-                               for i, ws in enumerate(self.ws_iters) for _ in range(ws)]
-
-        x = y = mask = None
-        # TODO refactor
+        x = y = None
+        mask = None
         for k in range(self._nb_iter):
-            self._spacing_l.append(max(1, int(self._window_size_l[k] * (1 - self.overlap_ratio))))
-            self._field_shape_l.append(get_field_shape(self.frame_shape, self._window_size_l[k], self._spacing_l[k]))
-
             x, y = get_field_coords(self._field_shape_l[k], self._window_size_l[k], self._spacing_l[k])
             self._x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
             self._y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
-
             mask = self._mask_field(x, y)
             self._mask_dl.append(gpuarray.to_gpu(mask))
 
@@ -625,6 +619,7 @@ class PIVGPU:
         self.mask = mask
 
     def _mask_field(self, x, y):
+        """Creates field mask from image mask."""
         if self.im_mask is not None:
             mask = self.im_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
         else:
@@ -637,9 +632,6 @@ class PIVGPU:
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2)
 
         if self.im_mask is not None:
-            if self._im_mask_d is None:
-                self._im_mask_d = gpuarray.to_gpu(self.im_mask)
-
             frame_a_d = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self._im_mask_d)
             frame_b_d = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self._im_mask_d)
         else:
@@ -683,7 +675,7 @@ class PIVGPU:
 
         return u_d, v_d
 
-    # TODO this method is too big.
+    # TODO this method does too many things.
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
         """Return velocity fields with outliers removed."""
         size = u_d.size
@@ -695,10 +687,10 @@ class PIVGPU:
                                                          mask_width=self.sig2noise_width)
 
         # Do the validation.
-        validation_gpu = gpu_validation1.ValidationGPU(u_d.shape, mask_d=mask_d,
-                                                       validation_method=self.validation_method,
-                                                       s2n_tol=self.s2n_tol, median_tol=self.median_tol,
-                                                       mean_tol=self.mean_tol, rms_tol=self.rms_tol)
+        validation_gpu = ValidationGPU(u_d.shape, mask_d=mask_d,
+                                       validation_method=self.validation_method,
+                                       s2n_tol=self.s2n_tol, median_tol=self.median_tol,
+                                       mean_tol=self.mean_tol, rms_tol=self.rms_tol)
         for i in range(self.nb_validation_iter):
             val_locations_d = validation_gpu(u_d, v_d, sig2noise_d=self._sig2noise_d)
             u_mean_d, v_mean_d = validation_gpu.median
@@ -822,8 +814,6 @@ class PIVGPU:
             raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
         if not 1 < self.sig2noise_width == int(self.sig2noise_width):
             raise ValueError('s2n_width must be an integer.')
-        if self.trust_1st_iter != bool(self.trust_1st_iter):
-            raise ValueError('trust_1st_iter must have a boolean value.')
 
 
 def get_field_shape(image_size, window_size, spacing):
