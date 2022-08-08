@@ -64,22 +64,21 @@ class GPUCorrelation:
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, n_fft=N_FFT, subpixel_method=SUBPIXEL_METHOD):
-        _check_arrays(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
+    def __init__(self, frame_a_d, frame_b_d, n_fft=N_FFT, subpixel_method=SUBPIXEL_METHOD, center_field=True):
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
         self.frame_shape = frame_a_d.shape
+        assert np.all(1 <= DTYPE_i(n_fft) == n_fft)
         if isinstance(n_fft, int):
-            assert n_fft >= 1
             self.n_fft_x = self.n_fft_y = int(n_fft)
         else:
-            assert n_fft[0] >= 1
             self.n_fft_x = int(n_fft[0])
             self.n_fft_y = self.n_fft_x
             logging.info('For now, n_fft is the same in both directions. ({} is used here.)'.format(self.n_fft_x))
         assert subpixel_method in ALLOWED_SUBPIXEL_METHODS, \
             'subpixel_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
         self.subpixel_method = subpixel_method
+        self.center_field = center_field
 
     def __call__(self, window_size, spacing, extended_size=None, shift_d=None, strain_d=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -203,12 +202,20 @@ class GPUCorrelation:
             3D float, all interrogation windows stacked on each other.
 
         """
-        _check_arrays(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_b_d.shape, dtype=DTYPE_f, ndim=2)
-        # Buffer is used to shift the extended windows an additional amount.
-        buffer = -((self.extended_size - self.window_size) // 2)
+        _check_arrays(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
 
-        win_a_d = _gpu_window_slice(frame_a_d, self.window_size, self.spacing, 0, -0.5, shift_d, strain_d)
-        win_b_d = _gpu_window_slice(frame_b_d, self.extended_size, self.spacing, buffer, 0.5, shift_d, strain_d)
+        # buffer_b shifts the centers of the extended windows to match the normal windows.
+        buffer_a = 0
+        buffer_b = -(self.extended_size - self.window_size) // 2
+        if self.center_field:
+            center_buffer = _get_center_buffer(self.frame_shape, self.window_size, self.spacing)
+            buffer_a = center_buffer
+            buffer_b = (center_buffer[0] + buffer_b, center_buffer[1] + buffer_b)
+
+        win_a_d = _gpu_window_slice(frame_a_d, self.field_shape, self.window_size, self.spacing, buffer_a, dt=-0.5,
+                                    shift_d=shift_d, strain_d=strain_d)
+        win_b_d = _gpu_window_slice(frame_b_d, self.field_shape, self.extended_size, self.spacing, buffer_b, dt=0.5,
+                                    shift_d=shift_d, strain_d=strain_d)
 
         return win_a_d, win_b_d
 
@@ -426,6 +433,8 @@ class PIVGPU:
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
+    center_field : bool
+        Whether to center the vector field on the image.
 
     Other Parameters
     ----------------
@@ -495,6 +504,7 @@ class PIVGPU:
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
         self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else SIG2NOISE_METHOD
         self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
+        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
 
         self._nb_iter = sum(self.ws_iters)
         self._im_mask_d = None
@@ -531,7 +541,8 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # Create the correlation object.
-        self._corr = GPUCorrelation(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method)
+        self._corr = GPUCorrelation(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method,
+                                    center_field=self.center_field)
 
         # MAIN LOOP
         for k in range(self._nb_iter):
@@ -608,7 +619,8 @@ class PIVGPU:
         x = y = None
         mask = None
         for k in range(self._nb_iter):
-            x, y = get_field_coords(self._field_shape_l[k], self._window_size_l[k], self._spacing_l[k])
+            x, y = get_field_coords(self.frame_shape, self._window_size_l[k], self._spacing_l[k],
+                                    center_field=self.center_field)
             self._x_dl.append(gpuarray.to_gpu(x[0, :].astype(DTYPE_f)))
             self._y_dl.append(gpuarray.to_gpu(y[:, 0].astype(DTYPE_f)))
             mask = self._mask_field(x, y)
@@ -675,20 +687,17 @@ class PIVGPU:
 
         return u_d, v_d
 
-    # TODO this method does too many things.
     def _validate_fields(self, u_d, v_d, u_previous_d, v_previous_d):
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
         mask_d = self._get_mask_k(return_zeros=False)
-
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
             self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
                                                          mask_width=self.sig2noise_width)
 
         # Do the validation.
-        validation_gpu = ValidationGPU(u_d.shape, mask_d=mask_d,
-                                       validation_method=self.validation_method,
+        validation_gpu = ValidationGPU(u_d.shape, mask_d=mask_d, validation_method=self.validation_method,
                                        s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                        mean_tol=self.mean_tol, rms_tol=self.rms_tol)
         for i in range(self.nb_validation_iter):
@@ -814,22 +823,21 @@ class PIVGPU:
             raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
         if not 1 < self.sig2noise_width == int(self.sig2noise_width):
             raise ValueError('s2n_width must be an integer.')
+        if self.center_field != bool(self.center_field):
+            raise ValueError('center_field must have a boolean value.')
 
 
-def get_field_shape(image_size, window_size, spacing):
+def get_field_shape(frame_shape, window_size, spacing):
     """Returns the shape of the resulting velocity field.
-
-    Given the image size, the interrogation window size and the overlap size, it is possible to calculate the number of
-    rows and columns of the resulting flow field.
 
     Parameters
     ----------
-    image_size : tuple
+    frame_shape : tuple
         (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
     window_size : int
         Size of the interrogation windows.
     spacing : int
-        Spacing between vectors in the field.
+        Spacing between vectors in the resulting field, in pixels.
 
     Returns
     -------
@@ -837,40 +845,51 @@ def get_field_shape(image_size, window_size, spacing):
         Shape of the resulting flow field.
 
     """
-    assert window_size >= 8, 'Window size is too small.'
-    assert window_size % 8 == 0, 'Window size must be a multiple of 8.'
+    assert len(frame_shape) == 2, 'image_size must have length of 2.'
+    assert window_size >= 8, 'window_size is too small.'
+    assert window_size % 8 == 0, 'window_size must be a multiple of 8.'
     assert int(spacing) == spacing > 0, 'spacing must be a positive int.'
+    ht, wd = frame_shape
 
-    m = int((image_size[0] - spacing) // spacing)
-    n = int((image_size[1] - spacing) // spacing)
+    m = int((ht - window_size) // spacing) + 1
+    n = int((wd - window_size) // spacing) + 1
+
     return m, n
 
 
-def get_field_coords(field_shape, window_size, spacing):
+def get_field_coords(frame_shape, window_size, spacing, center_field=True):
     """Returns the coordinates of the resulting velocity field.
 
     Parameters
     ----------
-    field_shape : tuple
-        int (m, n), the shape of the resulting flow field.
+    frame_shape : tuple
+        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
     window_size : int
         Size of the interrogation windows.
-    spacing : float
-        Ratio by which two adjacent interrogation windows overlap.
+    spacing : int
+        Spacing between vectors in the resulting field, in pixels.
+    center_field : bool, optional
+        Whether the coordinates of the interrogation windows are centered on the image.
 
     Returns
     -------
     x, y : ndarray
-        2D float, pixel coordinates of the resulting flow field
+        2D float, pixel coordinates of the resulting flow field.
 
     """
-    assert window_size >= 8, 'Window size is too small.'
-    assert window_size % 8 == 0, 'Window size must be a multiple of 8.'
+    assert len(frame_shape) == 2, 'image_size must have length of 2.'
+    assert window_size >= 8, 'window_size is too small.'
+    assert window_size % 8 == 0, 'window_size must be a multiple of 8.'
     assert int(spacing) == spacing > 0, 'spacing must be a positive int.'
-    m, n = field_shape
 
-    x = np.tile(np.linspace(window_size / 2, window_size / 2 + spacing * (n - 1), n), (m, 1))
-    y = np.tile(np.linspace(window_size / 2 + spacing * (m - 1), window_size / 2, m), (n, 1)).T
+    m, n = get_field_shape(frame_shape, window_size, spacing)
+    half_width = window_size // 2
+    buffer_x = 0
+    buffer_y = 0
+    if center_field:
+        buffer_x, buffer_y = _get_center_buffer(frame_shape, window_size, spacing)
+    x = np.tile(np.linspace(half_width + buffer_x, half_width + buffer_x + spacing * (n - 1), n), (m, 1))
+    y = np.tile(np.linspace(half_width + buffer_y + spacing * (m - 1), half_width + buffer_y, m), (n, 1)).T
 
     return x, y
 
@@ -914,7 +933,7 @@ def gpu_strain(u_d, v_d, mask_d=None, spacing=1):
     ----------
     u_d, v_d : GPUArray
         2D float, velocity fields.
-    mask_d : GPUArray
+    mask_d : GPUArray, optional
         Mask for the vector field.
     spacing : float, optional
         Spacing between nodes.
@@ -1120,6 +1139,17 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     return f1_d
 
 
+def _get_center_buffer(frame_shape, window_size, spacing):
+    """Returns the left pad to indexes to center the vector-field coordinates on the image."""
+    ht, wd = frame_shape
+    m, n = get_field_shape(frame_shape, window_size, spacing)
+
+    buffer_x = (wd - (spacing * (n - 1) + window_size)) // 2 + window_size % 2
+    buffer_y = (ht - (spacing * (m - 1) + window_size)) // 2 + window_size % 2
+
+    return buffer_x, buffer_y
+
+
 mod_window_slice = SourceModule("""
 __global__ void window_slice(float *output, float *input, int ws, int spacing, int buffer_x, int buffer_y, int n,
                     int wd, int ht)
@@ -1214,13 +1244,15 @@ __global__ void window_slice_deform(float *output, float *input, float *shift, f
 """)
 
 
-def _gpu_window_slice(frame_d, window_size, spacing, buffer, dt=0, shift_d=None, strain_d=None):
+def _gpu_window_slice(frame_d, field_shape, window_size, spacing, buffer, dt=0, shift_d=None, strain_d=None):
     """Creates a 3D array stack of all the interrogation windows using shift and strain.
 
     Parameters
     -----------
     frame_d : GPUArray
-        2D int, frame to create windows from.
+        2D int, frame form which to create windows.
+    field_shape : tuple
+        Int, shape of the vector field.
     window_size : int
         Side dimension of the square interrogation windows
     spacing : int
@@ -1242,14 +1274,15 @@ def _gpu_window_slice(frame_d, window_size, spacing, buffer, dt=0, shift_d=None,
 
     """
     _check_arrays(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    assert buffer == int(buffer)
+    assert len(field_shape) == 2
     assert -1 <= dt <= 1
+    assert np.all(buffer == DTYPE_i(buffer))
     if isinstance(buffer, int):
         buffer_x_i = buffer_y_i = DTYPE_i(buffer)
     else:
         buffer_x_i, buffer_y_i = DTYPE_i(buffer)
     ht, wd = frame_d.shape
-    m, n = get_field_shape((ht, wd), window_size, spacing)
+    m, n = field_shape
     n_windows = m * n
 
     win_d = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)

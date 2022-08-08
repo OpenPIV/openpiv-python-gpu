@@ -91,9 +91,9 @@ def test_gpu_interpolate(mask_d):
     ws1 = 8
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
-    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
+    x0, y0 = gpu_process.get_field_coords(_test_size_medium, ws0, spacing0)
     n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
-    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
+    x1, y1 = gpu_process.get_field_coords(_test_size_medium, ws1, spacing1)
     x0 = x0.astype(DTYPE_f)
     y0 = y0.astype(DTYPE_f)
     x1 = x1.astype(DTYPE_f)
@@ -120,9 +120,9 @@ def test_gpu_interpolate_mask(ndarrays_regression):
     ws1 = 8
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
-    x0, y0 = gpu_process.get_field_coords((n_row0, n_col0), ws0, spacing0)
+    x0, y0 = gpu_process.get_field_coords(_test_size_medium, ws0, spacing0)
     n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
-    x1, y1 = gpu_process.get_field_coords((n_row1, n_col1), ws1, spacing1)
+    x1, y1 = gpu_process.get_field_coords(_test_size_medium, ws1, spacing1)
     x0 = x0.astype(DTYPE_f)
     y0 = y0.astype(DTYPE_f)
     x1 = x1.astype(DTYPE_f)
@@ -356,7 +356,8 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndar
             'smooth': True,
             'nb_validation_iter': nb_validation_iter,
             'validation_method': 'median_velocity',
-            'smoothing_par': 0.5
+            'smoothing_par': 0.5,
+            'center_field': False
             }
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
