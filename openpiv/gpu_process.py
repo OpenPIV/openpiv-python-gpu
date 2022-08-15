@@ -43,7 +43,7 @@ SIG2NOISE_METHOD = 'peak2peak'
 SIG2NOISE_WIDTH = 2
 
 
-class GPUCorrelation:
+class CorrelationGPU:
     """A class representing the cross correlation function.
 
     Parameters
@@ -541,7 +541,7 @@ class PIVGPU:
         frame_a_d, frame_b_d = self._mask_image(frame_a, frame_b)
 
         # Create the correlation object.
-        self._corr = GPUCorrelation(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method,
+        self._corr = CorrelationGPU(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method,
                                     center_field=self.center_field)
 
         # MAIN LOOP
@@ -771,8 +771,7 @@ class PIVGPU:
         else:
             return None
 
-    @staticmethod
-    def _log_residual(i_peak_d, j_peak_d):
+    def _log_residual(self, i_peak_d, j_peak_d):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
         _check_arrays(i_peak_d, j_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak_d.shape)
 
@@ -783,7 +782,7 @@ class PIVGPU:
             logging.warning('Overflow in residuals.')
             normalized_residual = np.nan
 
-        return normalized_residual
+        self.normalized_residual = normalized_residual
 
     def _check_inputs(self):
         if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
