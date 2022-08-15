@@ -12,7 +12,7 @@ import scipy.fft as fft
 import pycuda.gpuarray as gpuarray
 
 import openpiv.gpu_smoothn as gpu_smoothn
-from openpiv.test.test_gpu_misc import generate_array, generate_np_gpu_array_pair
+from openpiv.test.test_gpu_misc import generate_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -21,7 +21,7 @@ DTYPE_c = np.complex64
 fixture_dir = './fixtures/gpu_smoothn/'
 
 
-# SCRIPTS
+# UTILS
 def generate_cosine_field(shape, wavelength=10, amplitude=1):
     """Returns multi-modal cosine field."""
     y = amplitude * np.ones(shape)
@@ -42,7 +42,7 @@ def generate_noise_field(shape, scale: float = 1):
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize('norm', ['forward', 'backward', 'ortho'])
 def test_gpu_fft(shape, norm):
-    y, y_d = generate_np_gpu_array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
 
     f_fft = fft.fft(y, norm=norm)
     f_fft_gpu = gpu_smoothn.gpu_fft(y_d, norm=norm, full_frequency=True).get()
@@ -62,13 +62,13 @@ def test_gpu_ifft(shape, norm):
     y_ifft = fft.ifft(y_fft, norm=norm)
     y_ifft_gpu = gpu_smoothn.gpu_ifft(y_fft_d, norm=norm, inverse_width=n, full_frequency=True).get()
 
-    assert np.allclose(y_ifft_gpu, y_ifft)
+    assert np.allclose(y_ifft_gpu, y_ifft, rtol=1.e-4)
 
 
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize('norm', ['forward', 'backward', 'ortho'])
 def test_gpu_dct(shape, norm):
-    y, y_d = generate_np_gpu_array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
 
     y_dct = fft.dct(y, norm=norm)
     y_dct_gpu = gpu_smoothn.gpu_dct(y_d, norm=norm).get()
@@ -91,6 +91,7 @@ def test_gpu_idct(shape, norm):
 
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 def test_replace_non_finite(shape, ndarrays_regression):
+    # Test doesn't check whether nans are replaced by nearest neighbour.
     y = generate_array(shape, magnitude=2, offset=-1)
     finite = generate_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
     f0 = y.copy()
@@ -98,9 +99,6 @@ def test_replace_non_finite(shape, ndarrays_regression):
 
     gpu_smoothn.replace_non_finite(y, finite)
 
-    # Test doesn't check whether nans are replaced by nearest neighbour.
-    ndarrays_regression.check({'y': y})
-    assert np.all(np.isfinite(y))
     assert np.array_equal(y[finite], f0[finite])
 
 
@@ -193,8 +191,7 @@ def test_robust_weights(shape, weight_method, ndarrays_regression):
 @pytest.mark.parametrize('direction', ['forward', 'backward'])
 def test_dct_order_forward(shape, direction):
     m, n = shape
-    y = generate_array(shape, magnitude=2, offset=-1)
-    y_d = gpuarray.to_gpu(y)
+    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
 
     z = gpu_smoothn._dct_order(y_d, direction=direction).get()
     if direction == 'backward':
@@ -212,8 +209,7 @@ def test_dct_order_forward(shape, direction):
 @pytest.mark.parametrize('left_pad', [0, 1])
 def test_flip_frequency_real(shape, offset, left_pad):
     m, n = shape
-    y = generate_array(shape, magnitude=2, offset=-1)
-    y_d = gpuarray.to_gpu(y)
+    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
 
     flip_width = n - 1
     y_flipped = np.flip(y, axis=1)[:, offset:offset + flip_width - left_pad]

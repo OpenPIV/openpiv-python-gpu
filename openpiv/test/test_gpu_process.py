@@ -11,7 +11,7 @@ from imageio.v2 import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
-from openpiv.test.test_gpu_misc import generate_np_gpu_array_pair
+from openpiv.test.test_gpu_misc import generate_array_pair
 
 # GLOBAL VARIABLES
 # datatypes used in gpu_process
@@ -39,7 +39,7 @@ _test_size_super = (1024, 1024)
 _test_size_small_stack = (8, 16, 9)
 
 
-# SCRIPTS
+# UTILS
 def create_pair_shift(image_size, u_shift, v_shift):
     """Creates a pair of images with a roll/shift """
     frame_a = np.zeros(image_size, dtype=np.int32)
