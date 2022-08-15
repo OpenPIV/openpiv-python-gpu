@@ -188,8 +188,9 @@ class ValidationGPU:
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
         _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
 
+        sig2noise_tol_d = sig2noise_d / DTYPE_f(self.s2n_tol)
         for k in range(self._num_fields):
-            self._val_locations_d = _local_validation(sig2noise_d, self.s2n_tol, self._val_locations_d)
+            self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
 
     def _median_validation(self):
         """Performs median validation on each field."""
@@ -261,6 +262,14 @@ class ValidationGPU:
 
 
 mod_validation = SourceModule("""
+__global__ void local_validation(int *val_locations, float *f, float tol, int size)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    val_locations[t_idx] = val_locations[t_idx] || (f[t_idx] > tol);
+}
+
 __global__ void neighbour_validation(int *val_locations, float *f, float *f_mean, float *f_fluc, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -268,14 +277,6 @@ __global__ void neighbour_validation(int *val_locations, float *f, float *f_mean
 
     // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
     val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) > tol);
-}
-
-__global__ void local_validation(int *val_locations, float *f, float tol, int size)
-{
-    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t_idx >= size) {return;}
-
-    val_locations[t_idx] = val_locations[t_idx] || (f[t_idx] <= tol);
 }
 """)
 
