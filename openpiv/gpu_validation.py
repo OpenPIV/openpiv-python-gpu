@@ -52,9 +52,8 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
         2D int, array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
     """
+    validation_gpu = ValidationGPU(f_dl[0], mask_d, validation_method, s2n_tol, median_tol, mean_tol, rms_tol)
 
-    validation_gpu = ValidationGPU(f_dl[0], mask_d, validation_method, s2n_tol, median_tol, mean_tol,
-                                   rms_tol)
     return validation_gpu(*f_dl, sig2noise_d=sig2noise_d)
 
 
@@ -84,7 +83,6 @@ class ValidationGPU:
         Main method to validate vector fields.
 
     """
-
     def __init__(self, f_shape, mask_d=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
                  median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
         self.f_shape = f_shape.shape if hasattr(f_shape, 'shape') else tuple(f_shape)
@@ -92,10 +90,7 @@ class ValidationGPU:
             _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
         self.mask_d = mask_d
         self.validation_method = validation_method if not isinstance(validation_method, str) else (validation_method,)
-        self.s2n_tol = s2n_tol
-        self.median_tol = median_tol
-        self.mean_tol = mean_tol
-        self.rms_tol = rms_tol
+        self.validation_tols = {'s2n': s2n_tol, 'median': median_tol, 'mean': mean_tol, 'rms': rms_tol}
 
         self._val_locations_d = None
         self._f_dl = None
@@ -104,6 +99,7 @@ class ValidationGPU:
         self._f_mean_dl = None
 
         self._check_validation_methods()
+        self._check_validation_tolerances()
 
         # Compute the median velocities to be returned.
         self._neighbours_present_d = _gpu_find_neighbours(self.f_shape, mask_d)
@@ -187,38 +183,42 @@ class ValidationGPU:
         """Performs signal-to-noise validation on each field."""
         assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
         _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
+        s2n_tol = self.validation_tols['s2n']
 
-        sig2noise_tol_d = sig2noise_d / DTYPE_f(self.s2n_tol)
+        sig2noise_tol_d = sig2noise_d / DTYPE_f(s2n_tol)
         self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
 
     def _median_validation(self):
         """Performs median validation on each field."""
         f_neighbours_dl = self._get_neighbours()
         f_median_dl = self._get_median()
+        median_tol = self.validation_tols['median']
 
         for k in range(self._num_fields):
             f_median_fluc_d = _gpu_median_fluc(f_median_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
             self._val_locations_d = _neighbour_validation(self._f_dl[k], f_median_dl[k], f_median_fluc_d,
-                                                          self.median_tol, self._val_locations_d)
+                                                          median_tol, self._val_locations_d)
 
     def _mean_validation(self):
         """Performs mean validation on each field."""
         f_neighbours_dl = self._get_neighbours()
         f_mean_dl = self._get_mean()
+        mean_tol = self.validation_tols['mean']
 
         for k in range(self._num_fields):
             f_mean_fluc_d = _gpu_mean_fluc(f_mean_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
-            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_mean_fluc_d, self.mean_tol,
+            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_mean_fluc_d, mean_tol,
                                                           self._val_locations_d)
 
     def _rms_validation(self):
         """Performs RMS validation on each field."""
         f_neighbours_dl = self._get_neighbours()
         f_mean_dl = self._get_mean()
+        rms_tol = self.validation_tols['rms']
 
         for k in range(self._num_fields):
             f_rms_d = _gpu_rms(f_mean_dl[k], f_neighbours_dl[k], self._neighbours_present_d)
-            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_rms_d, self.rms_tol,
+            self._val_locations_d = _neighbour_validation(self._f_dl[k], f_mean_dl[k], f_rms_d, rms_tol,
                                                           self._val_locations_d)
 
     def _mask_val_locations(self):
@@ -258,6 +258,11 @@ class ValidationGPU:
         if not all([val_method in ALLOWED_VALIDATION_METHODS for val_method in self.validation_method]):
             raise ValueError(
                 'Invalid validation method(s). Allowed validation methods are: {}'.format(ALLOWED_VALIDATION_METHODS))
+
+    def _check_validation_tolerances(self):
+        """Checks that input validation methods are allowed."""
+        if not all([val_tol > 0 for val_tol in self.validation_tols.values()]):
+            raise ValueError('Invalid validation tolerances(s). Validation tolerances must be greater than 0.')
 
 
 mod_validation = SourceModule("""
