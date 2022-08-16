@@ -464,6 +464,16 @@ __device__ void sort(float *A, float *B)
     compare(A, B, 3, 4);
 }
 
+__device__ float median(float *A, float *B)
+{
+    // Count the neighbouring points.
+    int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
+
+    // Return the median out of N neighbours.
+    if (N % 2 == 0) {return (A[N / 2 - 1] + A[N / 2]) / 2;}
+    else {return A[N / 2];}
+}
+
 __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 {
     // nb : values of the neighbouring points.
@@ -480,15 +490,11 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
         A[j] = nb[t_idx * 8 + i];
         B[j++] = np[t_idx * 8 + i];
     }
-    // Sort the array.
+
+    // Sort the arrays.
     sort(A, B);
 
-    // Count the neighbouring points.
-    int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
-
-    // Return the median out of N neighbours.
-    if (N % 2 == 0) {f_median[t_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
-    else {f_median[t_idx] = A[N / 2];}
+    f_median[t_idx] = median(A, B);
 }
 
 __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, int *np, int size)
@@ -509,15 +515,11 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
         A[j] = fabsf(nb[t_idx * 8 + i] - f_m);
         B[j++] = np[t_idx * 8 + i];
     }
-    // Sort the array
+
+    // Sort the arrays.
     sort(A, B);
 
-    // Count the neighbouring points.
-    int N = B[0] + B[1] + B[2] + B[3] + B[4] + B[5] + B[6] + B[7];
-
-    // Return the median out of N neighbours.
-    if (N % 2 == 0) {f_median_fluc[t_idx] = (A[N / 2 - 1] + A[N / 2]) / 2;}
-    else {f_median_fluc[t_idx] = A[N / 2];}
+    f_median_fluc[t_idx] = median(A, B);
 }
 """)
 
@@ -701,20 +703,20 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    // rms is normalized by number of terms summed
+    // Sum terms of the rms fluctuations.
+    float f_m = f_mean[t_idx];
+    float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2) + powf(nb[t_idx * 8 + 1] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 2] - f_m, 2) + powf(nb[t_idx * 8 + 3] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 4] - f_m, 2) + powf(nb[t_idx * 8 + 5] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 6] - f_m, 2) + powf(nb[t_idx * 8 + 7] - f_m, 2));
+
+    // rms is normalized by number of terms summed.
     float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
                         + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
+    denominator = denominator + (denominator == 0.0f);
 
-    // ensure denominator is not zero then compute rms
-    if (denominator > 0) {
-        float f_m = f_mean[t_idx];
-        float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2) + powf(nb[t_idx * 8 + 1] - f_m, 2)
-                           + powf(nb[t_idx * 8 + 2] - f_m, 2) + powf(nb[t_idx * 8 + 3] - f_m, 2)
-                           + powf(nb[t_idx * 8 + 4] - f_m, 2) + powf(nb[t_idx * 8 + 5] - f_m, 2)
-                           + powf(nb[t_idx * 8 + 6] - f_m, 2) + powf(nb[t_idx * 8 + 7] - f_m, 2));
+    f_rms[t_idx] = sqrtf(numerator / denominator);
 
-        f_rms[t_idx] = sqrtf(numerator / denominator);
-    } else {f_rms[t_idx] = 0.0f;}
 }
 """)
 
