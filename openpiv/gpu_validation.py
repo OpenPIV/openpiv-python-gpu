@@ -189,8 +189,7 @@ class ValidationGPU:
         _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
 
         sig2noise_tol_d = sig2noise_d / DTYPE_f(self.s2n_tol)
-        for k in range(self._num_fields):
-            self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
+        self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
 
     def _median_validation(self):
         """Performs median validation on each field."""
@@ -583,45 +582,43 @@ def _gpu_median_fluc(f_median_d, neighbours_d, neighbours_present_d):
 mod_mean_velocity = SourceModule("""
 __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
 {
-    // n : value of neighbours
-    // np : neighbours present
+    // n : value of neighbours.
+    // np : neighbours present.
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    // mean is normalized by number of terms summed
+    // Sum terms of the mean.
+    float numerator = nb[t_idx * 8 + 0] + nb[t_idx * 8 + 1] + nb[t_idx * 8 + 2] + nb[t_idx * 8 + 3]
+                        + nb[t_idx * 8 + 4] + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
+
+    // Mean is normalized by number of terms summed.
     float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
                         + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
+    denominator = denominator + (denominator == 0.0f);
 
-    // ensure denominator is not zero then compute mean
-    if (denominator > 0) {
-        float numerator = nb[t_idx * 8 + 0] + nb[t_idx * 8 + 1] + nb[t_idx * 8 + 2] + nb[t_idx * 8 + 3]
-                            + nb[t_idx * 8 + 4] + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
-
-        f_mean[t_idx] = numerator / denominator;
-    } else {f_mean[t_idx] = 0;}
+    f_mean[t_idx] = numerator / denominator;
 }
 
 __global__ void mean_fluc(float *f_fluc, float *f_mean, float *nb, int *np, int size)
 {
-    // nb : value of the neighbouring points
-    // np : 1 if there is a neighbour, 0 if no neighbour
+    // nb : value of the neighbouring points.
+    // np : 1 if there is a neighbour, 0 if no neighbour.
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    // mean is normalized by number of terms summed
+    // Sum terms of the mean fluctuations.
+    float f_m = f_mean[t_idx];
+    float numerator = fabsf(nb[t_idx * 8 + 0] - f_m) + fabsf(nb[t_idx * 8 + 1] - f_m)
+                      + fabsf(nb[t_idx * 8 + 2] - f_m) + fabsf(nb[t_idx * 8 + 3] - f_m)
+                      + fabsf(nb[t_idx * 8 + 4] - f_m) + fabsf(nb[t_idx * 8 + 5] - f_m)
+                      + fabsf(nb[t_idx * 8 + 6] - f_m) + fabsf(nb[t_idx * 8 + 7] - f_m);
+
+    // Mean is normalized by number of terms summed.
     float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
                         + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
+    denominator = denominator + (denominator == 0.0f);
 
-    // ensure denominator is not zero then compute fluctuations
-    if (denominator > 0) {
-        float f_m = f_mean[t_idx];
-        float numerator = fabsf(nb[t_idx * 8 + 0] - f_m) + fabsf(nb[t_idx * 8 + 1] - f_m)
-                          + fabsf(nb[t_idx * 8 + 2] - f_m) + fabsf(nb[t_idx * 8 + 3] - f_m)
-                          + fabsf(nb[t_idx * 8 + 4] - f_m) + fabsf(nb[t_idx * 8 + 5] - f_m)
-                          + fabsf(nb[t_idx * 8 + 6] - f_m) + fabsf(nb[t_idx * 8 + 7] - f_m);
-
-        f_fluc[t_idx] = numerator / denominator;
-    } else {f_fluc[t_idx] = 0;}
+    f_fluc[t_idx] = numerator / denominator;
 }
 """)
 

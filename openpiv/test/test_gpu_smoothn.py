@@ -12,7 +12,7 @@ import scipy.fft as fft
 import pycuda.gpuarray as gpuarray
 
 import openpiv.gpu_smoothn as gpu_smoothn
-from openpiv.test.test_gpu_misc import generate_array, generate_array_pair
+from openpiv.test.test_gpu_misc import generate_np_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -55,7 +55,7 @@ def test_gpu_fft(shape, norm):
 def test_gpu_ifft(shape, norm):
     m, n = shape
 
-    y = generate_array(shape, magnitude=2, offset=-1)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
     y_fft = fft.fft(y, norm=norm)
     y_fft_d = gpuarray.to_gpu(y_fft)
 
@@ -79,7 +79,7 @@ def test_gpu_dct(shape, norm):
 @pytest.mark.parametrize('shape', [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize('norm', ['forward', 'backward', 'ortho'])
 def test_gpu_idct(shape, norm):
-    y = generate_array(shape, magnitude=2, offset=-1)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
     y_dct = fft.dct(y, norm=norm)
     y_dct_d = gpuarray.to_gpu(y_dct)
 
@@ -92,8 +92,8 @@ def test_gpu_idct(shape, norm):
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 def test_replace_non_finite(shape, ndarrays_regression):
     # Test doesn't check whether nans are replaced by nearest neighbour.
-    y = generate_array(shape, magnitude=2, offset=-1)
-    finite = generate_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
+    finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
     f0 = y.copy()
     y[finite == 0] = np.nan
 
@@ -124,7 +124,7 @@ def test_p_bounds(shape, smooth_order, data_regression):
 
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 def test_lambda(shape, ndarrays_regression):
-    y = generate_array(shape, magnitude=2, offset=-1)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
 
     spacing = np.ones(y.ndim, dtype=DTYPE_f)
     lambda_ = gpu_smoothn._lambda(y, spacing)
@@ -136,7 +136,7 @@ def test_lambda(shape, ndarrays_regression):
 @pytest.mark.parametrize('transform', [fft.dct, fft.idct])
 def test_dct_nd(shape, transform):
     """Test that output arrays are C-contiguous, which is required for proper CUDA indexing."""
-    data = generate_array(shape, magnitude=2, offset=-1)
+    data = generate_np_array(shape, magnitude=2, offset=-1)
 
     data_dct_nd = gpu_smoothn._dct_nd(data, f=transform)
 
@@ -148,12 +148,12 @@ def test_dct_nd(shape, transform):
 def test_gcv(shape, w_mean, data_regression):
     p = np.log10(0.5)
 
-    y = generate_array(shape, magnitude=2, offset=-1)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
     y_dct = fft.dct(y)
-    w = generate_array(shape, seed=1)
+    w = generate_np_array(shape, seed=1)
     if w_mean is None:
         w_mean = np.mean(w)
-    is_finite = generate_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
     nof = np.sum(is_finite)
     spacing = np.ones(y.ndim, dtype=DTYPE_f)
     lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
@@ -176,9 +176,9 @@ def test_leverage(shape: tuple, smooth_order, data_regression):
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize('weight_method', ['cauchy', 'talworth', 'bisquare'])
 def test_robust_weights(shape, weight_method, ndarrays_regression):
-    y = generate_array(shape, magnitude=2, offset=-1)
-    z = generate_array(shape, magnitude=2, offset=-1, seed=1)
-    is_finite = generate_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    y = generate_np_array(shape, magnitude=2, offset=-1)
+    z = generate_np_array(shape, magnitude=2, offset=-1, seed=1)
+    is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
     spacing = np.ones(y.ndim, dtype=DTYPE_i)
     h = gpu_smoothn._leverage(0.5, spacing)
 
@@ -225,7 +225,7 @@ def test_flip_frequency_real(shape, offset, left_pad):
 @pytest.mark.parametrize('left_pad', [0, 1])
 def test_flip_frequency_comp(shape, offset, left_pad):
     m, n = shape
-    y = generate_array(shape, magnitude=2, offset=-1) + 1j * generate_array(shape, magnitude=2, offset=-1, seed=1)
+    y = generate_np_array(shape, magnitude=2, offset=-1) + 1j * generate_np_array(shape, magnitude=2, offset=-1, seed=1)
     y_d = gpuarray.to_gpu(y)
 
     flip_width = n - 1
@@ -241,8 +241,9 @@ def test_flip_frequency_comp(shape, offset, left_pad):
 def test_reflect_frequency_comp(shape):
     m, n = shape
     freq_width = n // 2 + 1
-    y = generate_array((m, freq_width), magnitude=2, offset=-1) + 1j * generate_array((m, freq_width), magnitude=2,
-                                                                                      offset=-1, seed=1)
+    y = generate_np_array((m, freq_width), magnitude=2, offset=-1) + 1j * generate_np_array((m, freq_width),
+                                                                                            magnitude=2, offset=-1,
+                                                                                            seed=1)
     y_d = gpuarray.to_gpu(y)
 
     y_full = np.hstack([y, np.flip(y[:, 1:n - freq_width + 1], axis=1).conj()])

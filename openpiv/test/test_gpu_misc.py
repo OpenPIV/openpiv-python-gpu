@@ -12,7 +12,7 @@ DTYPE_f = np.float32
 
 
 # UTILS
-def generate_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+def generate_np_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
     np.random.seed(seed)
     f = (np.random.random(shape) * magnitude + offset).astype(d_type)
@@ -22,7 +22,7 @@ def generate_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
 
 def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
-    f = generate_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
+    f = generate_np_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f_d
@@ -30,7 +30,7 @@ def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0)
 
 def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
+    f = generate_np_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
@@ -69,7 +69,7 @@ def test_gpu_scalar_mod_i(divisor):
 def test_gpu_replace_nan_f():
     shape = (16, 16)
 
-    f = generate_array(shape, d_type=DTYPE_f)
+    f = generate_np_array(shape, d_type=DTYPE_f)
     f[f < 0.25] = np.nan
     f[f > 0.75] = np.inf
     f_d = gpuarray.to_gpu(f)
