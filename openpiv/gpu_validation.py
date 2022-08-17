@@ -587,6 +587,14 @@ def _gpu_median_fluc(f_median_d, neighbours_d, neighbours_present_d):
 
 
 mod_mean_velocity = SourceModule("""
+__device__ float num_neighbours(int *np, int t_idx)
+{
+    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
+                        + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
+    return denominator + (denominator == 0.0f);
+}
+
+
 __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
 {
     // n : value of neighbours.
@@ -599,10 +607,7 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
                         + nb[t_idx * 8 + 4] + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
 
     // Mean is normalized by number of terms summed.
-    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
-                        + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
-    denominator = denominator + (denominator == 0.0f);
-
+    float denominator = num_neighbours(np, t_idx);
     f_mean[t_idx] = numerator / denominator;
 }
 
@@ -620,12 +625,29 @@ __global__ void mean_fluc(float *f_fluc, float *f_mean, float *nb, int *np, int 
                       + fabsf(nb[t_idx * 8 + 4] - f_m) + fabsf(nb[t_idx * 8 + 5] - f_m)
                       + fabsf(nb[t_idx * 8 + 6] - f_m) + fabsf(nb[t_idx * 8 + 7] - f_m);
 
-    // Mean is normalized by number of terms summed.
-    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
-                        + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
-    denominator = denominator + (denominator == 0.0f);
-
+    // Mean fluctuation is normalized by number of terms summed.
+    float denominator = num_neighbours(np, t_idx);
     f_fluc[t_idx] = numerator / denominator;
+}
+
+__global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
+{
+    // nb : value of the neighbouring points
+    // np : 1 if there is a neighbour, 0 if no neighbour
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    // Sum terms of the rms fluctuations.
+    float f_m = f_mean[t_idx];
+    float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2) + powf(nb[t_idx * 8 + 1] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 2] - f_m, 2) + powf(nb[t_idx * 8 + 3] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 4] - f_m, 2) + powf(nb[t_idx * 8 + 5] - f_m, 2)
+                       + powf(nb[t_idx * 8 + 6] - f_m, 2) + powf(nb[t_idx * 8 + 7] - f_m, 2));
+
+    // RMS is normalized by number of terms summed.
+    float denominator = num_neighbours(np, t_idx);
+    f_rms[t_idx] = sqrtf(numerator / denominator);
+
 }
 """)
 
@@ -695,32 +717,6 @@ def _gpu_mean_fluc(f_mean_d, neighbours_d, neighbours_present_d):
     return f_fluc_d
 
 
-mod_rms = SourceModule("""
-__global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
-{
-    // nb : value of the neighbouring points
-    // np : 1 if there is a neighbour, 0 if no neighbour
-    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t_idx >= size) {return;}
-
-    // Sum terms of the rms fluctuations.
-    float f_m = f_mean[t_idx];
-    float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2) + powf(nb[t_idx * 8 + 1] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 2] - f_m, 2) + powf(nb[t_idx * 8 + 3] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 4] - f_m, 2) + powf(nb[t_idx * 8 + 5] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 6] - f_m, 2) + powf(nb[t_idx * 8 + 7] - f_m, 2));
-
-    // rms is normalized by number of terms summed.
-    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
-                        + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
-    denominator = denominator + (denominator == 0.0f);
-
-    f_rms[t_idx] = sqrtf(numerator / denominator);
-
-}
-""")
-
-
 def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
     """Calculates the rms velocity in a 3x3 grid around each point in a velocity field.
 
@@ -746,7 +742,7 @@ def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
 
     block_size = 32
     grid_size = ceil(size_i / block_size)
-    u_rms = mod_rms.get_function('rms')
+    u_rms = mod_mean_velocity.get_function('rms')
     u_rms(f_rms_d, f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
           grid=(grid_size, 1))
 
