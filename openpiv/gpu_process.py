@@ -35,50 +35,72 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 ALLOWED_SUBPIXEL_METHODS = {'gaussian', 'parabolic', 'centroid'}
-ALLOWED_SIG2NOISE_METHODS = {'peak2peak', 'peak2mean', 'peak2energy'}
+ALLOWED_S2N_METHODS = {'peak2peak', 'peak2mean', 'peak2energy'}
 SMOOTHING_PAR = None
 N_FFT = 2
 SUBPIXEL_METHOD = 'gaussian'
-SIG2NOISE_METHOD = 'peak2peak'
-SIG2NOISE_WIDTH = 2
+S2N_METHOD = 'peak2peak'
+S2N_WIDTH = 2
 
 
 class CorrelationGPU:
-    """A class representing the cross correlation function.
+    """A class that performs the cross-correlation of interrogation windows.
 
     Parameters
     ----------
     frame_a_d, frame_b_d : GPUArray
         2D int, image pair.
-    n_fft : int or tuple, optional
-        Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
         Method to approximate the subpixel location of the peaks.
+
+    Other Parameters
+    ----------------
+    n_fft : int or tuple
+        Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
+    center_field : bool
+        Whether to center the vector field on the image.
+    s2n_method : string, optional
+        Method for evaluating the signal-to-noise ratio value from the correlation map. Can be 'peak2peak',
+        'peak2mean', 'peak2energy'.
+    mask_width : int, optional
+        Half size of the region around the first correlation peak to ignore for finding the second peak. Only used
+        if 'sig2noise_method == peak2peak'.
+
+    Attributes
+    ----------
+    sig2noise_d : GPUArray
+        Signal-to-noise ratio of the cross-correlation.
 
     Methods
     -------
     __call__(window_size, extended_size=None, d_shift=None, d_strain=None)
         Returns the peaks of the correlation windows.
-    sig2noise_ratio(method='peak2peak', width=2)
-        Returns the signal-to-noise ratio of the correlation peaks.
+    free_frame_data()
+        Clears names associated with frames.
 
     """
 
-    def __init__(self, frame_a_d, frame_b_d, n_fft=N_FFT, subpixel_method=SUBPIXEL_METHOD, center_field=True):
+    def __init__(self, frame_a_d, frame_b_d, subpixel_method=SUBPIXEL_METHOD, **kwargs):
         self.frame_a_d = frame_a_d
         self.frame_b_d = frame_b_d
         self.frame_shape = frame_a_d.shape
-        assert np.all(1 <= DTYPE_i(n_fft) == n_fft)
-        if isinstance(n_fft, int):
-            self.n_fft_x = self.n_fft_y = int(n_fft)
-        else:
-            self.n_fft_x = int(n_fft[0])
-            self.n_fft_y = self.n_fft_x
-            logging.info('For now, n_fft is the same in both directions. ({} is used here.)'.format(self.n_fft_x))
+        self.subpixel_method = subpixel_method
         assert subpixel_method in ALLOWED_SUBPIXEL_METHODS, \
             'subpixel_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
-        self.subpixel_method = subpixel_method
-        self.center_field = center_field
+
+        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
+        assert np.all(1 <= DTYPE_i(self.n_fft) == self.n_fft)
+        if isinstance(self.n_fft, int):
+            self.n_fft_x = self.n_fft_y = int(self.n_fft)
+        else:
+            self.n_fft_x = int(self.n_fft[0])
+            self.n_fft_y = self.n_fft_x
+            logging.info('For now, n_fft is the same in both directions. ({} is used here.)'.format(self.n_fft_x))
+        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
+        self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else S2N_WIDTH
+        self.s2n_method = kwargs['s2n_method'] if 's2n_method' in kwargs else S2N_METHOD
+        assert self.s2n_method in ALLOWED_S2N_METHODS, \
+            'subpixel_method_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
 
     def __call__(self, window_size, spacing, extended_size=None, shift_d=None, strain_d=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -111,12 +133,9 @@ class CorrelationGPU:
         self.spacing = int(spacing)
         self.field_shape = get_field_shape(self.frame_shape, self.window_size, self.spacing)
         self.n_windows = self.field_shape[0] * self.field_shape[1]
+        self._sig2noise_d = None
 
-        # Pad up to power of 2 to boost fft speed.
-        self.fft_wd = 2 ** ceil(log2(self.extended_size * self.n_fft_x))
-        self.fft_ht = 2 ** ceil(log2(self.extended_size * self.n_fft_y))
-        self.fft_shape = (self.fft_ht, self.fft_wd)
-        self.fft_size = self.fft_wd * self.fft_ht
+        self._init_fft_shape()
 
         # Return stack of all IWs.
         win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
@@ -137,49 +156,21 @@ class CorrelationGPU:
 
         return i_peak, j_peak
 
-    def get_sig2noise(self, subpixel_method=SUBPIXEL_METHOD, mask_width=SIG2NOISE_WIDTH):
-        """Computes the signal-to-noise ratio using one of three available methods.
+    def free_frame_data(self):
+        """Clears names associated with frames."""
+        self.frame_a_d = None
+        self.frame_b_d = None
 
-        The signal-to-noise ratio is computed from the correlation and is a measure of the quality of the matching
-        between two interrogation windows. Note that this method returns the base-10 logarithm of the sig2noise ratio.
-        The sig2noise field contains +np.Inf values where there is no noise.
+    @property
+    def sig2noise_d(self):
+        return self._get_s2n()
 
-        Parameters
-        ----------
-        subpixel_method : string, optional
-            Method for evaluating the signal-to-noise ratio value from the correlation map. Can be 'peak2peak',
-            'peak2mean', 'peak2energy'.
-        mask_width : int, optional
-            Half size of the region around the first correlation peak to ignore for finding the second peak. Only used
-            if 'sig2noise_method == peak2peak'.
-
-        Returns
-        -------
-        ndarray
-            2D float, the base-10 logarithm of the signal-to-noise ratio from the correlation map for each vector.
-
-        """
-        assert subpixel_method in ALLOWED_SIG2NOISE_METHODS, \
-            'subpixel_method_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
-        assert 0 <= mask_width < int(min(self.fft_shape) / 2), \
-            'Mask width must be integer from 0 and to less than half the correlation window height or width. ' \
-            'Recommended value is 2.'
-
-        # Set all negative values in correlation peaks to zero.
-        gpu_remove_negative_f(self.corr_peak1_d)
-
-        # Compute signal-to-noise ratio by the chosen method.
-        if subpixel_method == 'peak2mean':
-            sig2noise_d = _peak2mean(self.correlation_d, self.corr_peak1_d)
-        elif subpixel_method == 'peak2energy':
-            sig2noise_d = _peak2energy(self.correlation_d, self.corr_peak1_d)
-        else:
-            corr_peak2_d = self._get_second_peak_height(self.correlation_d, mask_width)
-            sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
-
-        gpu_remove_nan_f(sig2noise_d)
-
-        return sig2noise_d.reshape(self.field_shape)
+    def _init_fft_shape(self):
+        """Creates the shape of the fft windows padded up to power of 2 to boost speed."""
+        self.fft_wd = 2 ** ceil(log2(self.extended_size * self.n_fft_x))
+        self.fft_ht = 2 ** ceil(log2(self.extended_size * self.n_fft_y))
+        self.fft_shape = (self.fft_ht, self.fft_wd)
+        self.fft_size = self.fft_wd * self.fft_ht
 
     def _stack_iw(self, frame_a_d, frame_b_d, shift_d, strain_d=None):
         """Creates a 3D array stack of all the interrogation windows.
@@ -260,6 +251,38 @@ class CorrelationGPU:
 
         return i_peak.reshape(self.field_shape), j_peak.reshape(self.field_shape)
 
+    def _get_s2n(self):
+        """Computes the signal-to-noise ratio using one of three available methods.
+
+        The signal-to-noise ratio is computed from the correlation and is a measure of the quality of the matching
+        between two interrogation windows. Note that this method returns the base-10 logarithm of the sig2noise ratio.
+        The sig2noise field contains +np.Inf values where there is no noise.
+
+        Returns
+        -------
+        ndarray
+            2D float, the base-10 logarithm of the signal-to-noise ratio from the correlation map for each vector.
+
+        """
+        assert self.correlation_d is not None, 'Can only compute signal-to-noise ratio after correlation peaks' \
+                                               'have been computed.'
+        assert 0 <= self.s2n_width < int(min(self.fft_shape) / 2), \
+            'Mask width must be integer from 0 and to less than half the correlation window height or width. ' \
+            'Recommended value is 2.'
+
+        if self._sig2noise_d is None:
+            # Compute signal-to-noise ratio by the elected method.
+            if self.s2n_method == 'peak2mean':
+                sig2noise_d = _peak2mean(self.correlation_d, self.corr_peak1_d)
+            elif self.s2n_method == 'peak2energy':
+                sig2noise_d = _peak2energy(self.correlation_d, self.corr_peak1_d)
+            else:
+                corr_peak2_d = self._get_second_peak_height(self.correlation_d, self.s2n_width)
+                sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
+            self._sig2noise_d = sig2noise_d.reshape(self.field_shape)
+
+        return self._sig2noise_d
+
     def _get_second_peak_height(self, correlation_positive_d, mask_width):
         """Find the value of the second-largest peak.
 
@@ -288,11 +311,6 @@ class CorrelationGPU:
         _, _, corr_max2_d = _find_peak(correlation_masked_d)
 
         return corr_max2_d
-
-    def free_data(self):
-        """Frees frame data from GPU."""
-        self.frame_a_d = None
-        self.frame_b_d = None
 
 
 def gpu_piv(frame_a, frame_b,
@@ -388,6 +406,8 @@ def gpu_piv(frame_a, frame_b,
         Only used if sig2noise_method==peak2peak.
     n_fft : int or tuple
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
+    center_field : bool
+        Whether to center the vector field on the image.
 
     Example
     -------
@@ -433,8 +453,6 @@ class PIVGPU:
         Number of iterations per validation cycle.
     validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
-    center_field : bool
-        Whether to center the vector field on the image.
 
     Other Parameters
     ----------------
@@ -454,6 +472,8 @@ class PIVGPU:
         Only used if sig2noise_method==peak2peak.
     n_fft : int or tuple
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
+    center_field : bool
+        Whether to center the vector field on the image.
 
     Attributes
     ----------
@@ -502,14 +522,12 @@ class PIVGPU:
         self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else SMOOTHING_PAR
         self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
         self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
-        self.sig2noise_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else SIG2NOISE_METHOD
-        self.sig2noise_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else SIG2NOISE_WIDTH
+        self.s2n_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else S2N_METHOD
+        self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
         self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
 
         self._nb_iter = sum(self.ws_iters)
-        self._im_mask_d = None
         self._corr = None
-        self._sig2noise_d = None
         self._im_mask_d = gpuarray.to_gpu(self.im_mask) if mask is not None else None
 
         self._check_inputs()
@@ -542,7 +560,8 @@ class PIVGPU:
 
         # Create the correlation object.
         self._corr = CorrelationGPU(frame_a_d, frame_b_d, n_fft=self.n_fft, subpixel_method=self.subpixel_method,
-                                    center_field=self.center_field)
+                                    center_field=self.center_field, s2n_method=self.s2n_method,
+                                    s2n_width=self.s2n_width)
 
         # MAIN LOOP
         for k in range(self._nb_iter):
@@ -575,7 +594,7 @@ class PIVGPU:
         u = (u_d / DTYPE_f(self.dt)).get()
         v = (v_d / DTYPE_f(-self.dt)).get()
 
-        self._corr.free_data()
+        self._corr.free_frame_data()
 
         return u, v
 
@@ -585,11 +604,7 @@ class PIVGPU:
 
     @property
     def s2n(self):
-        if self._sig2noise_d is not None:
-            sig2noise_d = self._sig2noise_d
-        else:
-            sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method)
-        return sig2noise_d.get()
+        return self._corr.sig2noise_d
 
     def free_data(self):
         """Frees correlation data from GPU."""
@@ -692,17 +707,18 @@ class PIVGPU:
         size = u_d.size
         val_locations_d = None
         mask_d = self._get_mask_k(return_zeros=False)
+        # Retrieve signal-to-noise ratio only if required for validation.
+        sig2noise_d = None
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
-            self._sig2noise_d = self._corr.get_sig2noise(subpixel_method=self.sig2noise_method,
-                                                         mask_width=self.sig2noise_width)
+            sig2noise_d = self._corr.sig2noise_d
 
         # Do the validation.
         validation_gpu = ValidationGPU(u_d.shape, mask_d=mask_d, validation_method=self.validation_method,
                                        s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                        mean_tol=self.mean_tol, rms_tol=self.rms_tol)
         for i in range(self.nb_validation_iter):
-            val_locations_d = validation_gpu(u_d, v_d, sig2noise_d=self._sig2noise_d)
-            u_mean_d, v_mean_d = validation_gpu.median
+            val_locations_d = validation_gpu(u_d, v_d, sig2noise_d=sig2noise_d)
+            u_mean_d, v_mean_d = validation_gpu.median_d
 
             # Replace invalid vectors.
             n_val = int(gpuarray.sum(val_locations_d).get())
@@ -816,11 +832,11 @@ class PIVGPU:
             raise ValueError('Validation tolerances must be positive numbers.')
         if not 1 < self.n_fft == float(self.n_fft):
             raise ValueError('n_fft must be an number equal to or greater than 1.')
-        if self.sig2noise_method not in ALLOWED_SIG2NOISE_METHODS:
-            raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SIG2NOISE_METHODS))
+        if self.s2n_method not in ALLOWED_S2N_METHODS:
+            raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_S2N_METHODS))
         if self.subpixel_method not in ALLOWED_SUBPIXEL_METHODS:
             raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
-        if not 1 < self.sig2noise_width == int(self.sig2noise_width):
+        if not 1 < self.s2n_width == int(self.s2n_width):
             raise ValueError('s2n_width must be an integer.')
         if self.center_field != bool(self.center_field):
             raise ValueError('center_field must have a boolean value.')
@@ -1671,7 +1687,9 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
 
 def _peak2mean(correlation_d, corr_peak1_d):
     """Returns the mean-energy measure of the signal-to-noise-ratio."""
+    gpu_remove_negative_f(corr_peak1_d)
     correlation_rms_d = _gpu_mask_rms(correlation_d, corr_peak1_d)
+
     return _peak2energy(correlation_rms_d, corr_peak1_d)
 
 
@@ -1683,11 +1701,13 @@ def _peak2energy(correlation_d, corr_peak1_d):
     window_size = wd * ht
 
     # Remove negative correlation values.
+    gpu_remove_negative_f(corr_peak1_d)
     gpu_remove_negative_f(correlation_d)
 
     corr_reshape = correlation_d.reshape(n_windows, window_size)
     corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
     sig2noise_d = DTYPE_f(2) * cumath.log10(corr_peak1_d / corr_mean_d)
+    gpu_remove_nan_f(sig2noise_d)
 
     return sig2noise_d
 
@@ -1697,9 +1717,11 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     _check_arrays(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
 
     # Remove negative peaks.
+    gpu_remove_negative_f(corr_peak1_d)
     gpu_remove_negative_f(corr_peak2_d)
 
     sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
+    gpu_remove_nan_f(sig2noise_d)
 
     return sig2noise_d
 

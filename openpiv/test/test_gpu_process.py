@@ -92,7 +92,6 @@ def test_gpu_interpolate(mask_d):
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
     x0, y0 = gpu_process.get_field_coords(_test_size_medium, ws0, spacing0)
-    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
     x1, y1 = gpu_process.get_field_coords(_test_size_medium, ws1, spacing1)
     x0 = x0.astype(DTYPE_f)
     y0 = y0.astype(DTYPE_f)
@@ -121,7 +120,6 @@ def test_gpu_interpolate_mask(ndarrays_regression):
     spacing1 = 4
     n_row0, n_col0 = gpu_process.get_field_shape(_test_size_medium, ws0, spacing0)
     x0, y0 = gpu_process.get_field_coords(_test_size_medium, ws0, spacing0)
-    n_row1, n_col1 = gpu_process.get_field_shape(_test_size_medium, ws1, spacing1)
     x1, y1 = gpu_process.get_field_coords(_test_size_medium, ws1, spacing1)
     x0 = x0.astype(DTYPE_f)
     y0 = y0.astype(DTYPE_f)
@@ -138,7 +136,6 @@ def test_gpu_interpolate_mask(ndarrays_regression):
     y1_d = gpuarray.to_gpu(y1[:, 0])
 
     f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
-    f1_gpu = f1_d.get()
     ndarrays_regression.check({'f1': f1_d.get()})
 
 
@@ -239,26 +236,6 @@ def test_extended_search_area():
     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
 
 
-@pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
-@pytest.mark.parametrize('window_size_iters,min_window_size', [((1, 2), 16), ((1, 2, 2), 8)])
-def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
-    """Benchmarks the PIV function."""
-    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
-    args = {'mask': None,
-            'window_size_iters': window_size_iters,
-            'min_window_size': min_window_size,
-            'overlap_ratio': 0.5,
-            'dt': 1,
-            'deform': True,
-            'smooth': True,
-            'nb_validation_iter': 2,
-            'validation_method': 'median_velocity',
-            }
-
-    benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
-    # benchmark(gpu_process_old.gpu_piv, frame_a, frame_b, **args)
-
-
 @pytest.mark.parametrize('s2n_method', ('peak2peak', 'peak2mean', 'peak2energy'))
 def test_sig2noise(s2n_method):
     """Inputs every s2n method to ensure they don't error out."""
@@ -317,28 +294,6 @@ def test_validation(validation_method):
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
-def test_gpu_piv_benchmark_oop(benchmark):
-    """Benchmarks the PIV speed with the objected-oriented interface."""
-    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    args = {'mask': None,
-            'window_size_iters': (1, 2, 2),
-            'min_window_size': 8,
-            'overlap_ratio': 0.5,
-            'dt': 1,
-            'deform': True,
-            'smooth': True,
-            'nb_validation_iter': 2,
-            'validation_method': 'median_velocity',
-            }
-
-    piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
-
-    @benchmark
-    def repeat_10():
-        for i in range(10):
-            piv_gpu(frame_a, frame_b)
-
-
 # sweep the input variables to ensure everything is same
 @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
 @pytest.mark.parametrize('min_window_size', [8, 16])
@@ -364,27 +319,44 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndar
 
     ndarrays_regression.check({'u': u, 'v': v})
 
-    # """Ensures the results of the GPU algorithm remains unchanged."""
-    # file_str = _temp_dir + './comparison_data_{}_{}_{}'.format(str(window_size_iters), str(min_window_size),
-    #                                                            str(nb_validation_iter))
 
-    # # save the results to a numpy file.
-    # if not os.path.isdir(_fixture_dir):
-    #     os.mkdir(_fixture_dir)
-    # print('WARNING: SAVING COMPARISON DATA.')
-    # np.savez(file_str, u=u, v=v)
+# BENCHMARKS
+@pytest.mark.parametrize('image_size', [(1024, 1024), (2048, 2048)])
+@pytest.mark.parametrize('window_size_iters,min_window_size', [((1, 2), 16), ((1, 2, 2), 8)])
+def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
+    """Benchmarks the PIV function."""
+    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': window_size_iters,
+            'min_window_size': min_window_size,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': 'median_velocity',
+            }
 
-    # # load the results for comparison
-    # with np.load(file_str + '.npz') as data:
-    #     u0 = data['u']
-    #     v0 = data['v']
-    #
-    # if not np.allclose(u, u0, atol=_identity_tolerance) or not np.allclose(v, v0, atol=_identity_tolerance):
-    #     u_debug = u - u0
-    #     v_debug = v - v0
-    #     print(np.max(u_debug))
-    #     print(np.max(v_debug))
-    #
-    # # compare with the previous results
-    # assert np.allclose(u, u0, atol=_identity_tolerance)
-    # assert np.allclose(v, v0, atol=_identity_tolerance)
+    benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
+
+
+def test_gpu_piv_benchmark_oop(benchmark):
+    """Benchmarks the PIV speed with the objected-oriented interface."""
+    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+    args = {'mask': None,
+            'window_size_iters': (1, 2, 2),
+            'min_window_size': 8,
+            'overlap_ratio': 0.5,
+            'dt': 1,
+            'deform': True,
+            'smooth': True,
+            'nb_validation_iter': 2,
+            'validation_method': 'median_velocity',
+            }
+
+    piv_gpu = gpu_process.PIVGPU(_image_size_rectangle, **args)
+
+    @benchmark
+    def repeat_10():
+        for i in range(10):
+            piv_gpu(frame_a, frame_b)

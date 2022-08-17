@@ -1,6 +1,6 @@
 """This module is for GPU-accelerated validation algorithms."""
 
-from math import ceil, prod
+from math import ceil, prod, log10
 
 import numpy as np
 # Create the PyCUDA context.
@@ -148,15 +148,7 @@ class ValidationGPU:
         self._f_mean_dl = None
 
     @property
-    def median(self):
-        """Returns an array indicating which indices need to be validated.
-
-        Returns
-        -------
-        f_median_d : GPUArray or list
-            2D float, median of the velocities surrounding each point in this iteration.
-
-        """
+    def median_d(self):
         f_median_dl = self._get_median()
         if len(f_median_dl) == 1:
             f_median_dl = f_median_dl[0]
@@ -164,15 +156,7 @@ class ValidationGPU:
         return f_median_dl
 
     @property
-    def mean(self):
-        """Returns an array indicating which indices need to be validated.
-
-        Returns
-        -------
-        f_mean_d : GPUArray or list
-            2D float, mean of the velocities surrounding each point in this iteration.
-
-        """
+    def mean_d(self):
         f_mean_dl = self._get_mean()
         if len(f_mean_dl) == 1:
             f_mean_dl = f_mean_dl[0]
@@ -181,9 +165,9 @@ class ValidationGPU:
 
     def _s2n_validation(self, sig2noise_d):
         """Performs signal-to-noise validation on each field."""
-        assert sig2noise_d is not None, 's2n validation requires sig2noise to be passed.'
+        assert sig2noise_d is not None, 'signal-to-noise validation requires sig2noise_d to be passed.'
         _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
-        s2n_tol = self.validation_tols['s2n']
+        s2n_tol = log10(self.validation_tols['s2n'])
 
         sig2noise_tol_d = sig2noise_d / DTYPE_f(s2n_tol)
         self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
@@ -524,12 +508,12 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
 """)
 
 
-def _gpu_median_velocity(neighbours_d, neighbours_present_d):
+def _gpu_median_velocity(f_neighbours_d, neighbours_present_d):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    neighbours_d: GPUArray
+    f_neighbours_d: GPUArray
         4D float (m, n, 8), all the neighbouring velocities of every point.
     neighbours_present_d: GPUArray
         4D int (m, n, 8), indicates if a neighbour is present.
@@ -540,7 +524,7 @@ def _gpu_median_velocity(neighbours_d, neighbours_present_d):
         2D float, mean velocities at each point.
 
     """
-    m, n, _ = neighbours_d.shape
+    m, n, _ = f_neighbours_d.shape
     size_i = DTYPE_i(m * n)
 
     f_median_d = gpuarray.empty((m, n), dtype=DTYPE_f)
@@ -548,20 +532,20 @@ def _gpu_median_velocity(neighbours_d, neighbours_present_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     median_velocity = mod_median_velocity.get_function('median_velocity')
-    median_velocity(f_median_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
+    median_velocity(f_median_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
                     grid=(grid_size, 1))
 
     return f_median_d
 
 
-def _gpu_median_fluc(f_median_d, neighbours_d, neighbours_present_d):
+def _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d):
     """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
     f_median_d : GPUArray
         2D float, mean velocities around each point.
-    neighbours_d : GPUArray
+    f_neighbours_d : GPUArray
         4D float (m, n, 8), all the neighbouring velocities of every point.
     neighbours_present_d : GPUArray
         4D int  (m, n, 8), indicates if a neighbour is present.
@@ -580,7 +564,7 @@ def _gpu_median_fluc(f_median_d, neighbours_d, neighbours_present_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     median_u_fluc = mod_median_velocity.get_function('median_fluc')
-    median_u_fluc(f_median_fluc_d, f_median_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
+    median_u_fluc(f_median_fluc_d, f_median_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
                   grid=(grid_size, 1))
 
     return f_median_fluc_d
@@ -652,12 +636,12 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
 """)
 
 
-def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
+def _gpu_mean_velocity(f_neighbours_d, neighbours_present_d):
     """Calculates the mean velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    neighbours_d: GPUArray
+    f_neighbours_d: GPUArray
         4D float (m, n, 8), all the neighbouring velocities of every point.
     neighbours_present_d: GPUArray
         4D int (m, n, 8), indicates if a neighbour is present.
@@ -668,7 +652,7 @@ def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
         2D float, mean velocities at each point.
 
     """
-    m, n, _ = neighbours_d.shape
+    m, n, _ = f_neighbours_d.shape
     size_i = DTYPE_i(m * n)
 
     f_mean_d = gpuarray.empty((m, n), dtype=DTYPE_f)
@@ -676,7 +660,7 @@ def _gpu_mean_velocity(neighbours_d, neighbours_present_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     mean_velocity = mod_mean_velocity.get_function('mean_velocity')
-    mean_velocity(f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    mean_velocity(f_mean_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
     return f_mean_d
 
 
@@ -685,14 +669,14 @@ mod_mean_fluc = SourceModule("""
 """)
 
 
-def _gpu_mean_fluc(f_mean_d, neighbours_d, neighbours_present_d):
+def _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d):
     """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
     f_mean_d: GPUArray
         2D float, mean velocities around each point.
-    neighbours_d : GPUArray
+    f_neighbours_d : GPUArray
         4D float (m, n, 8), all the neighbouring velocities of every point.
     neighbours_present_d : GPUArray
         4D int (m, n, 8), indicates if a neighbour is present.
@@ -711,7 +695,7 @@ def _gpu_mean_fluc(f_mean_d, neighbours_d, neighbours_present_d):
     block_size = 32
     grid_size = ceil(size_i / block_size)
     mean_fluc = mod_mean_velocity.get_function('mean_fluc')
-    mean_fluc(f_fluc_d, f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
+    mean_fluc(f_fluc_d, f_mean_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
               grid=(grid_size, 1))
 
     return f_fluc_d
