@@ -24,54 +24,6 @@ window_size = 32
 spacing = 16
 
 
-# FIXTURES
-@pytest.fixture
-def correlation_gpu():
-    frame_a = imread(data_path + 'test1/exp1_001_a.bmp').astype(np.float32)
-    frame_b = imread(data_path + 'test1/exp1_001_b.bmp').astype(np.float32)
-    frame_a_d = gpuarray.to_gpu(frame_a)
-    frame_b_d = gpuarray.to_gpu(frame_b)
-
-    correlation_gpu = gpu_process.CorrelationGPU(frame_a_d, frame_b_d)
-
-    return correlation_gpu
-
-
-@pytest.fixture
-def peaks_dl(correlation_gpu):
-    i_peaks_d, j_peaks_d = correlation_gpu(window_size, spacing)
-
-    return i_peaks_d, j_peaks_d
-
-
-@pytest.fixture
-def mask_d(peaks_dl):
-    i_peaks_d, j_peaks_d = peaks_dl
-
-    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2, d_type=DTYPE_i, seed=0)
-
-    return mask_d
-
-
-@pytest.fixture
-def sig2noise_d(correlation_gpu):
-    _, _ = correlation_gpu(window_size, spacing)
-    sig2noise_d = correlation_gpu.sig2noise_d
-
-    return sig2noise_d
-
-
-@pytest.fixture
-def validation_gpu(peaks_dl):
-    i_peaks_d, j_peaks_d = peaks_dl
-
-    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2.0, d_type=DTYPE_i, seed=1)
-
-    validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask_d=mask_d)
-
-    return validation_gpu
-
-
 # TEST UTILS
 def median_np(f_neighbours, neighbours_present):
     f_neighbours[neighbours_present == 0] = np.nan
@@ -140,6 +92,54 @@ def get_neighbours_np(f, neighbours_present):
     f_neighbours[:-1, :-1, 7] = neighbours_present[:-1, :-1, 7] * f[1:, 1:]  # bottom right
 
     return f_neighbours
+
+
+# FIXTURES
+@pytest.fixture
+def correlation_gpu():
+    frame_a = imread(data_path + 'test1/exp1_001_a.bmp').astype(np.float32)
+    frame_b = imread(data_path + 'test1/exp1_001_b.bmp').astype(np.float32)
+    frame_a_d = gpuarray.to_gpu(frame_a)
+    frame_b_d = gpuarray.to_gpu(frame_b)
+
+    correlation_gpu = gpu_process.CorrelationGPU(frame_a_d, frame_b_d)
+
+    return correlation_gpu
+
+
+@pytest.fixture
+def peaks_dl(correlation_gpu):
+    i_peaks_d, j_peaks_d = correlation_gpu(window_size, spacing)
+
+    return i_peaks_d, j_peaks_d
+
+
+@pytest.fixture
+def mask_d(peaks_dl):
+    i_peaks_d, j_peaks_d = peaks_dl
+
+    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2, d_type=DTYPE_i, seed=0)
+
+    return mask_d
+
+
+@pytest.fixture
+def sig2noise_d(correlation_gpu):
+    _, _ = correlation_gpu(window_size, spacing)
+    sig2noise_d = correlation_gpu.sig2noise_d
+
+    return sig2noise_d
+
+
+@pytest.fixture
+def validation_gpu(peaks_dl):
+    i_peaks_d, j_peaks_d = peaks_dl
+
+    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2.0, d_type=DTYPE_i, seed=1)
+
+    validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask_d=mask_d)
+
+    return validation_gpu
 
 
 # UNIT TESTS
