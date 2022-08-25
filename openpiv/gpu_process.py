@@ -49,17 +49,17 @@ class CorrelationGPU:
     Parameters
     ----------
     frame_a_d, frame_b_d : GPUArray
-        2D int, image pair.
+        2D int (ht, wd), image pair.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
         Method to approximate the subpixel location of the peaks.
 
     Other Parameters
     ----------------
     n_fft : int or tuple
-        Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
+        (n_fft_x, n_fft_y), Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
     center_field : bool
         Whether to center the vector field on the image.
-    s2n_method : {'peak2peak', 'peak2mean', 'peak2energy'}, optional
+    s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
         Method for evaluating the signal-to-noise ratio value from the correlation map.
     mask_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding the second peak. Only used
@@ -111,10 +111,10 @@ class CorrelationGPU:
         extended_size : int or None, optional
             Extended window size to search in the second frame.
         shift_d : GPUArray or None, optional
-            2D ([dx, dy]), dx and dy are 1D arrays of the x-y shift at each interrogation window of the second image.
-            This is using the x-y convention of this code where x is the row and y is the column.
+            2D float ([du, dv]), du and dv are 1D arrays of the x-y shift at each interrogation window of the second
+            image. This is using the x-y convention of this code where x is the row and y is the column.
         strain_d : GPUArray or None, optional
-            2D float, strain tensor. First dimension is (u_x, u_y, v_x, v_y).
+            2D float ([u_x, u_y, v_x, v_y]), strain tensor.
 
         Returns
         -------
@@ -175,16 +175,16 @@ class CorrelationGPU:
         Parameters
         -----------
         frame_a_d, frame_b_d : GPUArray
-            2D int, image pair.
+            2D int (ht, wd), image pair.
         shift_d : GPUArray
-            3D float, shift of the second window.
+            3D float (2, m, n), ([du, dv]), shift of the second window.
         strain_d : GPUArray or None
-            3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
+            3D float (4, m, n) ([u_x, u_y, v_x, v_y]), strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
 
         Returns
         -------
         win_a_d, win_b_d : GPUArray
-            3D float, all interrogation windows stacked on each other.
+            3D float (n_windows, ht, wd), interrogation windows stacked in the first dimension.
 
         """
         _check_arrays(frame_a_d, frame_b_d, array_type=gpuarray.GPUArray, shape=frame_a_d.shape, dtype=DTYPE_f, ndim=2)
@@ -210,12 +210,12 @@ class CorrelationGPU:
         Parameters
         ----------
         win_a_d, win_b_d : GPUArray
-            3D float, stacked window data.
+            3D float (n_windows, ht, wd), interrogation windows.
 
         Returns
         -------
         GPUArray
-            3D, outputs of the correlation function.
+            3D (n_window, fft_ht, fft_wd), outputs of the correlation function.
 
         """
         _check_arrays(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -226,7 +226,7 @@ class CorrelationGPU:
 
         # Zero pad arrays according to extended size requirements.
         offset = (self._extended_size - self.piv_field.window_size) // 2
-        win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, offset=offset)
+        win_a_zp_d = _gpu_zero_pad(win_a_norm_d, self.fft_shape, extended_search_offset=offset)
         win_b_zp_d = _gpu_zero_pad(win_b_norm_d, self.fft_shape)
 
         corr_d = _cross_correlate(win_a_zp_d, win_b_zp_d)
@@ -255,7 +255,8 @@ class CorrelationGPU:
         Returns
         -------
         ndarray
-            2D float, the base-10 logarithm of the signal-to-noise ratio from the correlation map for each vector.
+            2D float (m, n), the base-10 logarithm of the signal-to-noise ratio from the correlation map for each
+            vector.
 
         """
         assert self.correlation_d is not None, 'Can only compute signal-to-noise ratio after correlation peaks' \
@@ -285,15 +286,15 @@ class CorrelationGPU:
 
         Parameters
         ----------
-        correlation_positive_d : GPUArray.
-            Correlation data with negative values removed.
+        correlation_positive_d : GPUArray
+            3D float (n_windows, fft_wd, fft_ht), correlation data with negative values removed.
         mask_width : int
             Half size of the region around the first correlation peak to ignore for finding the second peak.
 
         Returns
         -------
         GPUArray
-            Value of the second correlation peak for each interrogation window.
+            3D float (n_windows, fft_wd, fft_ht), value of the second correlation peak for each interrogation window.
 
         """
         assert self.row_peak_d is not None and self.col_peak_d is not None
@@ -324,11 +325,11 @@ class PIVFieldGPU:
     Attributes
     ----------
     coords : tuple
-        2D int, full coordinates of the PIV field.
+        2D ndarray float (x, y), full coordinates of the PIV field.
     grid_coords_d : tuple
-        1D int, vectors containing the grid coordinates of the PIV field.
+        1D ndarray float (x, y), vectors containing the grid coordinates of the PIV field.
     window_buffer : tuple
-        1D int, offset in pixel units to the window positions to align them with the vector field.
+        1D int (buffer_x, buffer_y), offset in pixel units to the window positions to align them with the vector field.
 
     Methods
     -------
@@ -409,14 +410,15 @@ def gpu_piv(frame_a, frame_b,
     Parameters
     ----------
     frame_a, frame_b : ndarray
-        2D int, integers containing grey levels of the first and second frames.
+        2D int (ht, wd), grey levels of the first and second frames.
     mask : ndarray or None, optional
-        2D, int, array of integers with values 0 for the background, 1 for the flow-field. If the center of a window is
-        on a 0 value the velocity is set to 0.
+        2D int (ht, wd), array with values 0 for the background, 1 for the flow-field. If the center of a
+        window is on a 0 value the velocity is set to 0.
     window_size_iters : tuple or int, optional
-        Number of iterations performed at each window size
+        Number of iterations performed at each window size. The length of window_size_iters gives the number of
+        different windows sizes to use, while the value of each entry gives the number of times a window size is use.
     min_window_size : tuple or int, optional
-        Length of the sides of the square deformation. Only supports multiples of 8.
+        Length of the sides of the square interrogation window. Only supports multiples of 8.
     overlap_ratio : float, optional
         Ratio of overlap between two windows (between 0 and 1).
     dt : float, optional
@@ -427,20 +429,20 @@ def gpu_piv(frame_a, frame_b,
         Whether to smooth the intermediate fields.
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
-    validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for
         median validation.
 
     Returns
     -------
     x, y : ndarray
-        2D, Coordinates where the PIV-velocity fields have been computed.
+        2D float (m, n), coordinates where the PIV-velocity fields have been computed.
     u, v : ndarray
-        2D, Velocity fields in pixel/time units.
+        2D float (m, n), velocity fields in pixel/time units.
     mask : ndarray
-        2D, the boolean values (True for vectors interpolated from previous iteration).
+        2D int (m, n), boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
-        2D, the signal-to-noise ratio of the final velocity field.
+        2D float (m, n), signal-to-noise ratio of the final velocity field.
 
     Other Parameters
     ----------------
@@ -451,16 +453,16 @@ def gpu_piv(frame_a, frame_b,
     extend_ratio : float
         Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
         used.
-    subpixel_method : {'gaussian'}
+    subpixel_method : str {'gaussian', 'centroid', 'parabolic'}
         Method to estimate subpixel location of the peak.
     return_sig2noise : bool
         Sets whether to return the signal-to-noise ratio. Not returning the signal-to-noise speeds up computation
         significantly, which is default behaviour.
-    sig2noise_method : {'peak2peak', 'peak2mean'}
+    sig2noise_method : str {'peak2peak', 'peak2mean', 'peak2energy'}
         Method of signal-to-noise-ratio measurement.
     s2n_width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
-        Only used if sig2noise_method==peak2peak.
+        Only used if sig2noise_method == 'peak2peak'.
     n_fft : int or tuple
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
     center_field : bool
@@ -490,17 +492,18 @@ class PIVGPU:
     Parameters
     ----------
     frame_shape : ndarray or tuple
-        (ht, wd) of the image series.
+        Int (ht, wd), size of the images in pixels.
     window_size_iters : tuple or int, optional
-        Number of iterations performed at each window size.
+        Number of iterations performed at each window size. The length of window_size_iters gives the number of
+        different windows sizes to use, while the value of each entry gives the number of times a window size is use.
     min_window_size : tuple or int, optional
-        Length of the sides of the square deformation. Only support multiples of 8.
+        Length of the sides of the square interrogation window. Only supports multiples of 8.
     overlap_ratio : float, optional
         Ratio of overlap between two windows (between 0 and 1).
     dt : float, optional
         Time delay separating the two frames.
     mask : ndarray or None, optional
-        2D, float. Array of integers with values 0 for the background, 1 for the flow-field. If the center of a window
+        2D, float, array with values 0 for the background, 1 for the flow-field. If the center of a window
         is on a 0 value the velocity is set to 0.
     deform : bool, optional
         Whether to deform the windows by the velocity gradient at each iteration.
@@ -508,7 +511,7 @@ class PIVGPU:
         Whether to smooth the intermediate fields.
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
-    validation_method : {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
 
     Other Parameters
@@ -520,13 +523,13 @@ class PIVGPU:
     extend_ratio : float
         Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
         used.
-    subpixel_method : {'gaussian'}
+    subpixel_method : str {'gaussian', 'centroid', 'parabolic'}
         Method to estimate subpixel location of the peak.
-    sig2noise_method : {'peak2peak', 'peak2mean', 'peak2energy'}
+    sig2noise_method : str {'peak2peak', 'peak2mean', 'peak2energy'}
         Method of signal-to-noise-ratio measurement.
     sig2noise_width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
-        Only used if sig2noise_method==peak2peak.
+        Only used if sig2noise_method == 'peak2peak'.
     n_fft : int or tuple
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
     center_field : bool
@@ -534,12 +537,12 @@ class PIVGPU:
 
     Attributes
     ----------
-    coords : ndarray
-        2D, Coordinates where the PIV-velocity fields have been computed.
+    coords : tuple
+        2D ndarray (x, y), coordinates where the PIV-velocity fields have been computed.
     mask : ndarray
-        2D, the boolean values (True for vectors interpolated from previous iteration).
+        2D float (m, n), boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
-        2D, the signal-to-noise ratio of the final velocity field.
+        2D float (m, n), signal-to-noise ratio of the final velocity field.
 
     Methods
     -------
@@ -596,12 +599,12 @@ class PIVGPU:
         Parameters
         ----------
         frame_a, frame_b : ndarray
-            2D int, integers containing grey levels of the first and second frames.
+            2D int (ht, wd), grey levels of the first and second frames.
 
         Returns
         -------
-        u, v : array
-            2D, u velocity component, in pixels/time units.
+        u, v : ndarray
+            2D float (m, n), velocity in pixels/time units.
 
         """
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, ndim=2)
@@ -620,7 +623,7 @@ class PIVGPU:
         # MAIN LOOP
         for k in range(self._nb_iter):
             self._k = k
-            self.piv_field_k = self._piv_field_l[k]
+            self._piv_field_k = self._piv_field_l[k]
             logging.info('ITERATION {}'.format(k))
 
             # CROSS-CORRELATION
@@ -695,26 +698,26 @@ class PIVGPU:
         """Returns the extended size used during the first iteration."""
         extended_size = None
         if self._k == 0 and self.extend_ratio is not None:
-            extended_size = int(self.piv_field_k.window_size * self.extend_ratio)
+            extended_size = int(self._piv_field_k.window_size * self.extend_ratio)
 
         return extended_size
 
     def _get_window_deformation(self, dp_u_d, dp_v_d):
         """Returns the shift and strain arguments to the correlation class."""
-        mask_d = self.piv_field_k.mask_d
+        mask_d = self._piv_field_k.mask_d
         shift_d = None
         strain_d = None
 
         if self._k > 0:
             shift_d = _shift(dp_u_d, dp_v_d)
             if self.deform:
-                strain_d = gpu_strain(dp_u_d, dp_v_d, mask_d, self.piv_field_k.spacing)
+                strain_d = gpu_strain(dp_u_d, dp_v_d, mask_d, self._piv_field_k.spacing)
 
         return shift_d, strain_d
 
     def _update_values(self, i_peak_d, j_peak_d, dp_x_d, dp_y_d):
         """Updates the velocity values after each iteration."""
-        mask_d = self.piv_field_k.mask_d
+        mask_d = self._piv_field_k.mask_d
 
         if dp_x_d == dp_y_d is None:
             u_d = gpu_mask(j_peak_d, mask_d)
@@ -729,7 +732,7 @@ class PIVGPU:
         """Return velocity fields with outliers removed."""
         size = u_d.size
         val_locations_d = None
-        mask_d = self.piv_field_k.get_mask()
+        mask_d = self._piv_field_k.get_mask()
         # Retrieve signal-to-noise ratio only if required for validation.
         sig2noise_d = None
         if 's2n' in self.validation_method and self.nb_validation_iter > 0:
@@ -772,16 +775,16 @@ class PIVGPU:
             v_d = gpuarray.if_positive(val_locations_d, v_mean_d, v_d)
 
         # Case if different dimensions: interpolation using previous iteration.
-        elif self._k > 0 and self.piv_field_k.shape != self._piv_field_l[self._k - 1].shape:
+        elif self._k > 0 and self._piv_field_k.shape != self._piv_field_l[self._k - 1].shape:
             x0_d, y0_d = self._piv_field_l[self._k - 1].grid_coords_d
             x1_d, y1_d = self._piv_field_l[self._k].grid_coords_d
-            mask_d = self.piv_field_k.get_mask()
+            mask_d = self._piv_field_l[self._k - 1].get_mask()
 
             u_d = _interpolate_replace(x0_d, y0_d, x1_d, y1_d, u_previous_d, u_d, val_locations_d, mask_d=mask_d)
             v_d = _interpolate_replace(x0_d, y0_d, x1_d, y1_d, v_previous_d, v_d, val_locations_d, mask_d=mask_d)
 
         # Case if same dimensions.
-        elif self._k > 0 and self.piv_field_k.shape == self._piv_field_l[self._k - 1].shape:
+        elif self._k > 0 and self._piv_field_k.shape == self._piv_field_l[self._k - 1].shape:
             u_d = gpuarray.if_positive(val_locations_d, u_previous_d, u_d)
             v_d = gpuarray.if_positive(val_locations_d, v_previous_d, v_d)
 
@@ -790,12 +793,12 @@ class PIVGPU:
     def _get_next_iteration_predictions(self, u_d, v_d):
         """Returns the velocity field to begin the next iteration."""
         _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u_d.shape, ndim=2)
-        x0_d, y0_d = self.piv_field_k.grid_coords_d
+        x0_d, y0_d = self._piv_field_k.grid_coords_d
         x1_d, y1_d = self._piv_field_l[self._k + 1].grid_coords_d
-        mask_d = self.piv_field_k.get_mask()
+        mask_d = self._piv_field_k.get_mask()
 
         # Interpolate if dimensions do not agree.
-        if self._piv_field_l[self._k + 1].window_size != self.piv_field_k.window_size:
+        if self._piv_field_l[self._k + 1].window_size != self._piv_field_k.window_size:
             dp_u_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, u_d, mask_d=mask_d)
             dp_v_d = gpu_interpolate(x0_d, y0_d, x1_d, y1_d, v_d, mask_d=mask_d)
         else:
@@ -865,7 +868,7 @@ def get_field_shape(frame_shape, window_size, spacing):
     Parameters
     ----------
     frame_shape : tuple
-        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
+        Int (ht, wd), size of the image in pixels.
     window_size : int
         Size of the interrogation windows.
     spacing : int
@@ -874,7 +877,7 @@ def get_field_shape(frame_shape, window_size, spacing):
     Returns
     -------
     tuple
-        Shape of the resulting flow field.
+        Int (m, n), shape of the resulting flow field.
 
     """
     assert len(frame_shape) == 2, 'image_size must have length of 2.'
@@ -893,7 +896,7 @@ def get_field_coords(frame_shape, window_size, spacing, center_field=True):
     Parameters
     ----------
     frame_shape : tuple
-        (ht, wd), pixel size of the image first element is number of rows, second element is the number of columns.
+        Int (ht, wd), size of the image in pixels.
     window_size : int
         Size of the interrogation windows.
     spacing : int
@@ -904,7 +907,7 @@ def get_field_coords(frame_shape, window_size, spacing, center_field=True):
     Returns
     -------
     x, y : ndarray
-        2D float, pixel coordinates of the resulting flow field.
+        2D float (m, n), pixel coordinates of the resulting flow field.
 
     """
     assert len(frame_shape) == 2, 'image_size must have length of 2.'
@@ -969,7 +972,7 @@ def gpu_strain(u_d, v_d, mask_d=None, spacing=1):
     Returns
     -------
     GPUArray
-        3D float, full strain tensor of the velocity fields. (4, m, n) corresponds to (u_x, u_y, v_x and v_y).
+        3D float (4, m, n) [(u_x, u_y, v_x, v_y)], full strain tensor of the velocity fields.
 
     """
     _check_arrays(u_d, v_d, array_type=gpuarray.GPUArray, shape=u_d.shape, dtype=DTYPE_f)
@@ -1024,6 +1027,7 @@ def gpu_fft_shift(correlation_d):
     Returns
     -------
     GPUArray
+        3D float (n_windows, ht, wd), shifted data from fft.
 
     """
     _check_arrays(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -1126,20 +1130,20 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     x1_d, y1_d : GPUArray
         1D float, grid coordinates of the field to be interpolated.
     f0_d : GPUArray
-        2D float, field to be interpolated.
-    mask_d : GPUArray, optional
-        2D float, mask array.
+        2D float (y0_d.size, x0_d.size), field to be interpolated.
+    mask_d : (y0_d.size, x0_d.size): GPUArray, optional
+        2D float, value of one where masked values are.
 
     Returns
     -------
     GPUArray
-        2D float, interpolated field.
+        2D float (x1_d.size, y1_d.size), interpolated field.
 
     """
     _check_arrays(x0_d, y0_d, x1_d, y1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)
-    _check_arrays(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    ht_i = DTYPE_i(y0_d.size)
-    wd_i = DTYPE_i(x0_d.size)
+    ht = y0_d.size
+    wd = x0_d.size
+    _check_arrays(f0_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2, shape=(ht, wd))
     n = x1_d.size
     m = y1_d.size
     size_i = DTYPE_i(m * n)
@@ -1147,8 +1151,8 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     f1_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     # Calculate the relationship between the two grid coordinates.
-    buffer_x_f = DTYPE_f((x0_d[0]).get())
-    buffer_y_f = DTYPE_f((y0_d[0]).get())
+    buffer_x_f = DTYPE_f(x0_d[0].get())
+    buffer_y_f = DTYPE_f(y0_d[0].get())
     spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 
@@ -1157,12 +1161,12 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     if mask_d is not None:
         _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f0_d.shape)
         interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation_mask')
-        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, mask_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i,
-                        DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, mask_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, DTYPE_i(ht),
+                        DTYPE_i(wd), DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
     else:
         interpolate_gpu = mod_interpolate.get_function('bilinear_interpolation')
-        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, ht_i, wd_i,
-                        DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+        interpolate_gpu(f1_d, f0_d, x1_d, y1_d, buffer_x_f, buffer_y_f, spacing_x_f, spacing_y_f, DTYPE_i(ht),
+                        DTYPE_i(wd), DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return f1_d
 
@@ -1174,7 +1178,7 @@ def _get_window_sizes(ws_iters, min_window_size):
 
 
 def _get_spacing(window_size, overlap_ratio):
-    """Returns spaing from window size and overlap ratio."""
+    """Returns spacing from window size and overlap ratio."""
     return max(1, int(window_size * (1 - overlap_ratio)))
 
 
@@ -1299,27 +1303,27 @@ def _gpu_window_slice(frame_d, field_shape, window_size, spacing, buffer, dt=0, 
     Parameters
     -----------
     frame_d : GPUArray
-        2D int, frame form which to create windows.
+        2D int (ht, wd), frame form which to create windows.
     field_shape : tuple
-        Int, shape of the vector field.
+        Int (m, n), shape of the vector field.
     window_size : int
-        Side dimension of the square interrogation windows
+        Side dimension of the square interrogation windows.
     spacing : int
         Spacing between vectors of the velocity field.
     buffer : int or tuple
-        Adjustment to location of windows from left/top vectors to edge of frame.
+        (buffer_x, buffer_y), adjustment to location of windows from left/top vectors to edge of frame.
     dt : float, optional
         Number between -1 and 1 indicating the level of shifting/deform. E.g. 1 indicates shift by full amount, 0 is
         stationary. This is applied to the deformation in an analogous way.
     shift_d : GPUArray, optional
-        3D float, shift of the second window.
+        3D float (2, m, n) ([du, dv]), shift of the second window.
     strain_d : GPUArray, optional
-        3D float, strain rate tensor. First dimension is (u_x, u_y, v_x, v_y).
+        3D float (4, m, n) ([u_x, u_y, v_x, v_y]), strain rate tensor.
 
     Returns
     -------
     GPUArray
-        3D float, all interrogation windows stacked on each other.
+        3D float (n_windows, ht, wd), interrogation windows stacked in the first dimension.
 
     """
     _check_arrays(frame_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
@@ -1379,12 +1383,12 @@ def _gpu_normalize_intensity(win_d):
     Parameters
     ----------
     win_d : GPUArray
-        3D float, stack of first IWs.
+        3D float (n_windows, ht, wd), interrogation windows.
 
     Returns
     -------
     GPUArray
-        3D float, normalized intensities in the windows.
+        3D float (n_windows, ht, wd), normalized intensities in the windows.
 
     """
     _check_arrays(win_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -1422,17 +1426,18 @@ __global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, 
 """)
 
 
-def _gpu_zero_pad(win_d, fft_shape, offset=0):
+def _gpu_zero_pad(win_d, fft_shape, extended_search_offset=0):
     """Function that zero-pads an 3D stack of arrays for use with the scikit-cuda FFT function.
 
     Parameters
     ----------
     win_d : GPUArray
-        3D float, arrays to be zero padded.
+        3D float (n_windows, ht, wd), interrogation windows.
     fft_shape : tuple
         Int (ht, wd), shape to zero pad the date to.
-    offset: int or tuple, optional
-        Offsets to the destination index in the padded array. Used for the extended search area PIV method.
+    extended_search_offset: int or tuple, optional
+        (offset_x, offset_y), offsets to the destination index in the padded array. Used for the extended search area
+        PIV method.
 
     Returns
     -------
@@ -1441,11 +1446,11 @@ def _gpu_zero_pad(win_d, fft_shape, offset=0):
 
     """
     _check_arrays(win_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    assert 0 <= offset == int(offset)
-    if isinstance(offset, int):
-        offset_x_i = offset_y_i = DTYPE_i(offset)
+    assert 0 <= extended_search_offset == int(extended_search_offset)
+    if isinstance(extended_search_offset, int):
+        offset_x_i = offset_y_i = DTYPE_i(extended_search_offset)
     else:
-        offset_x_i, offset_y_i = DTYPE_i(offset)
+        offset_x_i, offset_y_i = DTYPE_i(extended_search_offset)
     n_windows, wd, ht = win_d.shape
     fft_ht_i, fft_wd_i = DTYPE_i(fft_shape)
 
@@ -1468,12 +1473,12 @@ def _cross_correlate(win_a_d, win_b_d):
     Parameters
     ----------
     win_a_d, win_b_d : GPUArray
-        3D float, stacked window data.
+        3D float (n_windows, fft_ht, fft_wd), zero-padded interrogation windows.
 
     Returns
     -------
     GPUArray
-        3D, outputs of the cross-correlation function.
+        3D (n_windows, fft_ht, fft_wd), outputs of the cross-correlation function.
 
     """
     _check_arrays(win_a_d, win_b_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=win_b_d.shape, ndim=3)
@@ -1510,15 +1515,15 @@ __global__ void window_index_f(float *dest, float *src, int *indices, int ws, in
 """)
 
 
-def _gpu_window_index_f(src_d, indices_d):
+def _gpu_window_index_f(peaks_d, indices_d):
     """Returns the values of the peaks from the 2D correlation.
 
     Parameters
     ----------
-    src_d : GPUArray
-        2D float, correlation values.
+    peaks_d : GPUArray
+        2D float (m, n), correlation values of each window.
     indices_d : GPUArray
-        1D int, indexes of the peaks.
+        1D int (n_windows,), indexes of the peaks.
 
     Returns
     -------
@@ -1526,8 +1531,8 @@ def _gpu_window_index_f(src_d, indices_d):
         1D float.
 
     """
-    _check_arrays(src_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
-    n_windows, window_size = src_d.shape
+    _check_arrays(peaks_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
+    n_windows, window_size = peaks_d.shape
     _check_arrays(indices_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(n_windows,), ndim=1)
 
     dest_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
@@ -1535,7 +1540,7 @@ def _gpu_window_index_f(src_d, indices_d):
     block_size = 32
     grid_size = ceil(n_windows / block_size)
     index_update = mod_index_update.get_function('window_index_f')
-    index_update(dest_d, src_d, indices_d, DTYPE_i(window_size), DTYPE_i(n_windows), block=(block_size, 1, 1),
+    index_update(dest_d, peaks_d, indices_d, DTYPE_i(window_size), DTYPE_i(n_windows), block=(block_size, 1, 1),
                  grid=(grid_size, 1))
 
     return dest_d
@@ -1679,16 +1684,16 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     Parameters
     ----------
     correlation_d : GPUArray
-        3D float, data from the window correlations.
+       3D float (n_windows, fft_wd, fft_ht data from the window correlations.
     row_peak_d, col_peak_d : GPUArray
-        1D int, location of the correlation peak.
-    method : {'gaussian', 'parabolic', 'centroid'}
+        1D int (n_windows,), location of the correlation peak.
+    method : str {'gaussian', 'parabolic', 'centroid'}
         Method of the subpixel approximation.
 
     Returns
     -------
     row_sp_d, col_sp_d : GPUArray
-        1D float, row and column positions of the subpixel peak.
+        1D float (n_windows,), row and column positions of the subpixel peak.
 
     """
     _check_arrays(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -1788,9 +1793,9 @@ def _gpu_mask_peak(correlation_positive_d, row_peak_d, col_peak_d, mask_width):
     Parameters
     ----------
     correlation_positive_d : GPUArray.
-        Correlation data with negative values removed.
+        3D float (n_windows, fft_wd, fft_ht), correlation data with negative values removed.
     row_peak_d, col_peak_d : GPUArray
-        1D int, position of the peaks.
+        1D int (n_windows,), position of the peaks.
     mask_width : int
         Half size of the region around the first correlation peak to ignore for finding the second peak.
 
@@ -1842,9 +1847,9 @@ def _gpu_mask_rms(correlation_positive_d, corr_peak_d):
     Parameters
     ----------
     correlation_positive_d : GPUArray.
-        Correlation data with negative values removed.
+        3D float (n_windows, fft_wd, fft_ht), correlation data with negative values removed.
     corr_peak_d : GPUArray
-        1D float, value of peaks.
+        1D float (n_windows,), value of peaks.
 
     Returns
     -------

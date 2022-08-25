@@ -30,12 +30,12 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
     Parameters
     ----------
     f_dl : GPUArray
-        2D float, velocity fields to be validated.
+        2D float (m, n), velocity fields to be validated.
     sig2noise_d : GPUArray, optional
-        1D or 2D float, signal-to-noise ratio of each velocity.
+        2D float (m, n), signal-to-noise ratio of each velocity.
     mask_d : GPUArray
-        2D float, mask for the velocity field.
-    validation_method : {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+        2D int (m, n), mask for the velocity field.
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
     s2n_tol : float, optional
         Minimum value for sig2noise validation.
@@ -49,7 +49,7 @@ def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='medi
     Returns
     -------
     val_locations : GPUArray
-        2D int, array of indices that need to be validated. 1s indicate locations of invalid vectors.
+        2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
     """
     validation_gpu = ValidationGPU(f_dl[0], mask_d, validation_method, s2n_tol, median_tol, mean_tol, rms_tol)
@@ -66,7 +66,7 @@ class ValidationGPU:
         (ht, wd) of the fields to be validated.
     mask_d : GPUArray
         2D float, mask for the velocity field.
-    validation_method : {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
     s2n_tol : float, optional
         Minimum value for sig2noise.
@@ -80,7 +80,7 @@ class ValidationGPU:
     Methods
     -------
     __call__(*f_dl)
-        Main method to validate vector fields.
+        Returns an array indicating which indices need to be validated.
 
     """
     def __init__(self, f_shape, mask_d=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
@@ -110,14 +110,14 @@ class ValidationGPU:
         Parameters
         ----------
         f_dl : GPUArray
-            2D float, velocity fields to be validated.
+            2D float (m, n), velocity fields to be validated.
         sig2noise_d : GPUArray, optional
-            1D or 2D float, signal-to-noise ratio of each velocity.
+            2D float (m, n), signal-to-noise ratio of each velocity.
 
         Returns
         -------
         val_locations : GPUArray
-            2D int, array of indices that need to be validated. 1s indicate locations of invalid vectors.
+            2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
         """
         self.free_data()
@@ -342,14 +342,14 @@ def _gpu_find_neighbours(shape, mask_d=None):
     Parameters
     ----------
     shape : tuple
-        Int, number of rows and columns at each iteration.
+        Int (m, n), shape of the array to find neighbours for.
     mask_d : GPUArray
-        2D int, masked values.
+        2D int (m, n), value of one where masked.
 
     Returns
     -------
     GPUArray
-        4D (m, n, 8), whether the point in the field has neighbours.
+        4D (m, n, 8), value of one where the point in the field has neighbours.
 
     """
     m, n = shape
@@ -374,9 +374,9 @@ def _gpu_get_neighbours(f_d, neighbours_present_d):
     Parameters
     ----------
     f_d : GPUArray
-        2D float, values from which to get neighbours.
+        2D float (m, n), values from which to get neighbours.
     neighbours_present_d : GPUArray
-        4D int (m, n, 8), locations where neighbours exist.
+        4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
@@ -514,14 +514,14 @@ def _gpu_median_velocity(f_neighbours_d, neighbours_present_d):
     Parameters
     ----------
     f_neighbours_d: GPUArray
-        4D float (m, n, 8), all the neighbouring velocities of every point.
+        4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present_d: GPUArray
-        4D int (m, n, 8), indicates if a neighbour is present.
+        4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
     GPUArray
-        2D float, mean velocities at each point.
+        2D float (m, n), mean velocities at each point.
 
     """
     m, n, _ = f_neighbours_d.shape
@@ -544,16 +544,16 @@ def _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d):
     Parameters
     ----------
     f_median_d : GPUArray
-        2D float, mean velocities around each point.
+        2D float (m, n), mean velocities around each point.
     f_neighbours_d : GPUArray
-        4D float (m, n, 8), all the neighbouring velocities of every point.
+        4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present_d : GPUArray
-        4D int  (m, n, 8), indicates if a neighbour is present.
+        4D int  (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
     GPUArray
-        2D float, RMS velocities at each point.
+        2D float (m, n), RMS velocities at each point.
 
     """
     m, n = f_median_d.shape
@@ -642,14 +642,14 @@ def _gpu_mean_velocity(f_neighbours_d, neighbours_present_d):
     Parameters
     ----------
     f_neighbours_d: GPUArray
-        4D float (m, n, 8), all the neighbouring velocities of every point.
+        4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present_d: GPUArray
-        4D int (m, n, 8), indicates if a neighbour is present.
+        4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
     GPUArray
-        2D float, mean velocities at each point.
+        2D float (m, n), mean velocities at each point.
 
     """
     m, n, _ = f_neighbours_d.shape
@@ -675,16 +675,16 @@ def _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d):
     Parameters
     ----------
     f_mean_d: GPUArray
-        2D float, mean velocities around each point.
+        2D float (m, n), mean velocities around each point.
     f_neighbours_d : GPUArray
-        4D float (m, n, 8), all the neighbouring velocities of every point.
+        4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present_d : GPUArray
-        4D int (m, n, 8), indicates if a neighbour is present.
+        4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
     GPUArray
-        2D float, rms velocities at each point.
+        2D float (m, n), rms velocities at each point.
 
     """
     m, n = f_mean_d.shape
@@ -707,16 +707,16 @@ def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
     Parameters
     ----------
     f_mean_d : GPUArray
-        2D float, mean velocities around each point.
+        2D float (m, n), mean velocities around each point.
     neighbours_d : GPUArray
-        4D float (m, n, 8), all the neighbouring velocities of every point.
+        4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present_d : GPUArray
-        4D int (m, n, 8), indicates if a neighbour is present.
+        4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
     -------
     GPUArray
-        2D float, RMS velocities at each point.
+        2D float (m, n), RMS velocities at each point.
 
     """
     m, n = f_mean_d.shape

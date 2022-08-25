@@ -493,7 +493,6 @@ def replace_non_finite(y, finite=None, spacing=None):
 
     """
     assert finite.dtype == bool
-    y_ndim = y.ndim
 
     if finite is None:
         finite = np.isfinite(y)
@@ -502,7 +501,7 @@ def replace_non_finite(y, finite=None, spacing=None):
     if np.any(missing):
         nearest_neighbour = distance_transform_edt(missing, sampling=spacing, return_distances=False,
                                                    return_indices=True)
-        if y_ndim == 1:
+        if y.ndim == 1:
             neighbour_index = nearest_neighbour.squeeze()
         else:
             neighbour_index = tuple(nearest_neighbour[i] for i in range(nearest_neighbour.shape[0]))

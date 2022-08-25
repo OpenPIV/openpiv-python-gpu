@@ -103,15 +103,16 @@ def test_replace_non_finite(shape, ndarrays_regression):
 
 
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
-def test_initial_guess(shape: tuple):
+def test_initial_guess(shape: tuple, data_regression):
     y = generate_cosine_field(shape, wavelength=100)
     noise = generate_noise_field(shape, scale=0.1)
 
     z0 = gpu_smoothn._initial_guess([y + noise])[0]
     z0_l2_norm = np.linalg.norm(z0 - y)
     noise_l2_norm = np.linalg.norm(noise)
+    noise_ratio = float(z0_l2_norm / noise_l2_norm)
 
-    assert z0_l2_norm / noise_l2_norm <= 0.8
+    data_regression.check({'noise_ratio': noise_ratio})
 
 
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
@@ -258,27 +259,30 @@ def test_reflect_frequency_comp(shape):
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize('s', [None, 50])
 @pytest.mark.parametrize('robust', [True, False])
-def test_smoothn(shape, s, robust):
+def test_smoothn(shape, s, robust, data_regression):
     y = generate_cosine_field(shape, wavelength=50)
     noise = generate_noise_field(shape, scale=0.5)
 
     z = gpu_smoothn.smoothn(y + noise, s=s, robust=robust)[0]
     z_l2_norm = np.linalg.norm(z - y)
     noise_l2_norm = np.linalg.norm(noise)
+    noise_ratio = float(z_l2_norm / noise_l2_norm)
 
-    assert z_l2_norm / noise_l2_norm < 0.7
+    data_regression.check({'noise_ratio': noise_ratio})
 
 
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize('s', [None, 50])
 @pytest.mark.parametrize('robust', [True, False])
-def test_gpu_smoothn(shape, s, robust):
+def test_gpu_smoothn(shape, s, robust, data_regression):
     # Need tests for: mask, max_iter, smooth_order, w, z0.
+    # Need to save
     y = generate_cosine_field(shape, wavelength=50)
     noise = generate_noise_field(shape, scale=0.5)
     z = gpu_smoothn.gpu_smoothn(gpuarray.to_gpu(y + noise), s=s, robust=robust).get()
 
     z_l2_norm = np.linalg.norm(z - y)
     noise_l2_norm = np.linalg.norm(noise)
+    noise_ratio = float(z_l2_norm / noise_l2_norm)
 
-    assert z_l2_norm / noise_l2_norm < 0.7
+    data_regression.check({'noise_ratio': noise_ratio})

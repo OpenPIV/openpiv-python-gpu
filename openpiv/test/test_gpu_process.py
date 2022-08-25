@@ -11,7 +11,6 @@ from imageio.v2 import imread
 from scipy.fft import fftshift
 
 import openpiv.gpu_process as gpu_process
-from openpiv.test.test_gpu_misc import generate_array_pair
 
 # GLOBAL VARIABLES
 # datatypes used in gpu_process

@@ -20,8 +20,6 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 
 data_path = './openpiv/data/'
-window_size = 32
-spacing = 16
 
 
 # TEST UTILS
@@ -108,8 +106,17 @@ def correlation_gpu():
 
 
 @pytest.fixture
-def peaks_dl(correlation_gpu):
-    i_peaks_d, j_peaks_d = correlation_gpu(window_size, spacing)
+def piv_field(correlation_gpu):
+    window_size = 32
+    spacing = 16
+    frame_shape = correlation_gpu.frame_shape
+
+    return gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
+
+
+@pytest.fixture
+def peaks_dl(correlation_gpu, piv_field):
+    i_peaks_d, j_peaks_d = correlation_gpu(piv_field)
 
     return i_peaks_d, j_peaks_d
 
@@ -124,8 +131,8 @@ def mask_d(peaks_dl):
 
 
 @pytest.fixture
-def sig2noise_d(correlation_gpu):
-    _, _ = correlation_gpu(window_size, spacing)
+def sig2noise_d(correlation_gpu, piv_field):
+    _, _ = correlation_gpu(piv_field)
     sig2noise_d = correlation_gpu.sig2noise_d
 
     return sig2noise_d
