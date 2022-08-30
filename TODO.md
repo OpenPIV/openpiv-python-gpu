@@ -16,13 +16,6 @@ parameters and their effects.
 
 ## Features
 
-- Center the window coordinates with respect to the image coordinates, such that the number of pixels
-between the left side of the image and the leftmost window coordinate is the same (to 1 pixel) as that on the right
-side. The same should be true for the top/bottom of the image. This can be easily implemented by padding the left side
-at the window-slicing stage, which already has padding functionality. The only work required is adding input parameters
-and logic to generate the padding, as well as testing.
-
-
 - Add an option to print the logging input to console. Logging is preferred for status output since its behaviour can be
 controlled by scripts, and it doesn't crowd out other console output. However, having an option to output it to the
 console could be desirable for testing.
@@ -51,12 +44,6 @@ might not be a power of 2.
 functions where GPU-acceleration is only desired in one part.
 
 
-- Change the interpolation functions so that masked points do not affect the interpolation. Currently, the interpolation
-functions aren't aware of masked points so the interpolation will be wrong next to masked them. The solution will be to
-edit the kernels to not interpolate using masked points. The performance cost of doing this should be considered,
-however.
-
-
 - Dynamically allocate size of arrays used in PIV if the passed frame is a different size. The PIV class
 requires the user to supply the image size to the init() method, so that arrays of the correct size can be predefined.
 The flexibility of the class can be slightly improved if there is logic to redefine all the arrays when a
@@ -67,6 +54,12 @@ images, maybe due to cropping.
 - Use a common framework to call CPU- or GPU-based PIV functions. The API for the gpu_process module was based on the
 decommisioned WiDIM algorithm. Because it is significantly different from the API used in the CPU-based modules, it
 could be confusing for users of OpenPIV.
+
+
+- Implement bicubic interpolation in the window slicing. Interpolation of the pixel values is important to PIV accuracy
+as subpixel estimation with sharp correlation peaks results in peak-locking on the image coordinates. Because the
+grey-levels of the particle images is assumed to be gaussian, linear interpolation is not ideal in estimating the
+values.
 
 ## Optimization
 
