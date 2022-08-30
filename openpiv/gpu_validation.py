@@ -315,7 +315,7 @@ __global__ void find_neighbours(int *np, int *mask, int n, int m, int size)
                                 + ((nb_idx == 2) || (nb_idx == 4) || (nb_idx == 7));
     int in_bound = (row_idx >= 0) * (row_idx < m) * (col_idx >= 0) * (col_idx < n);
 
-    np[t_idx] = in_bound * (mask[(row_idx * n + col_idx) * in_bound] == 0);
+    np[t_idx] = in_bound * (!mask[(row_idx * n + col_idx) * in_bound]);
 }
 
 __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
