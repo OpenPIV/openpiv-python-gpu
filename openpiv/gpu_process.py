@@ -121,7 +121,7 @@ class CorrelationGPU:
 
         Returns
         -------
-        row_sp, col_sp : ndarray
+        i_peak, j_peak : ndarray
             3D float, locations of the subpixel peaks.
 
         """
@@ -133,17 +133,22 @@ class CorrelationGPU:
 
         self._init_fft_shape()
 
-        # Return stack of all interrogation windows.
+        # Get stack of all interrogation windows.
         win_a_d, win_b_d = self._stack_iw(self.frame_a_d, self.frame_b_d, shift_d, strain_d)
 
         # Correlate the windows.
         self.correlation_d = self._correlate_windows(win_a_d, win_b_d)
 
         # Get first peak of correlation.
-        self.row_peak_d, self.col_peak_d, self.corr_peak1_d = _find_peak(self.correlation_d)
+        self.peak_idx_d = _find_peak(self.correlation_d)
+        self.corr_peak1_d = _get_peak(self.correlation_d, self.peak_idx_d)
+
+        # Get row and column of peak.
+        # TODO Does storing these save time?
+        self.row_peak_d, self.col_peak_d = gpu_scalar_mod_i(self.peak_idx_d, self.fft_wd)
         self._check_zero_correlation()
 
-        # Get the subpixel location.
+        # Get the subpixel location.z
         row_sp_d, col_sp_d = _gpu_subpixel_approximation(self.correlation_d, self.row_peak_d, self.col_peak_d,
                                                          self.subpixel_method)
 
@@ -246,6 +251,7 @@ class CorrelationGPU:
         self.col_peak_d = gpuarray.if_positive(self.corr_peak1_d, self.col_peak_d, center_d)
 
     def _get_displacement(self, row_sp_d, col_sp_d):
+        """Returns the relative position of the peaks with respect to the center of the interrogation window."""
         i_peak = row_sp_d - DTYPE_f(self.fft_ht // 2)
         j_peak = col_sp_d - DTYPE_f(self.fft_wd // 2)
 
@@ -278,13 +284,13 @@ class CorrelationGPU:
             elif self.s2n_method == 'peak2energy':
                 sig2noise_d = _peak2energy(self.correlation_d, self.corr_peak1_d)
             else:
-                corr_peak2_d = self._get_second_peak_height(self.correlation_d, self.s2n_width)
+                corr_peak2_d = self._get_second_peak(self.correlation_d, self.s2n_width)
                 sig2noise_d = _peak2peak(self.corr_peak1_d, corr_peak2_d)
             self._sig2noise_d = sig2noise_d.reshape(self.piv_field.shape)
 
         return self._sig2noise_d
 
-    def _get_second_peak_height(self, correlation_positive_d, mask_width):
+    def _get_second_peak(self, correlation_positive_d, mask_width):
         """Find the value of the second-largest peak.
 
         The second-largest peak is the height of the peak in the region outside a width * width sub-matrix around
@@ -309,7 +315,8 @@ class CorrelationGPU:
         correlation_masked_d = _gpu_mask_peak(correlation_positive_d, self.row_peak_d, self.col_peak_d, mask_width)
 
         # Get the height of the second peak of correlation.
-        _, _, corr_max2_d = _find_peak(correlation_masked_d)
+        peak2_idx_d = _find_peak(correlation_masked_d)
+        corr_max2_d = _get_peak(correlation_masked_d, peak2_idx_d)
 
         return corr_max2_d
 
@@ -441,10 +448,14 @@ def gpu_piv(frame_a, frame_b,
 
     Returns
     -------
-    x, y : ndarray
-        2D float (m, n), coordinates where the PIV-velocity fields have been computed.
-    u, v : ndarray
-        2D float (m, n), velocity fields in pixel/time units.
+    x : ndarray
+        2D float (m, n), x-coordinates where the velocity field has been computed.
+    y : ndarray
+        2D float (m, n), y-coordinates where the velocity field has been computed.
+    u : ndarray
+        2D float (m, n), horizontal component of velocity in pixel/time units.
+    v : ndarray
+        2D float (m, n), vertical component of velocity in pixel/time units.
     mask : ndarray
         2D int (m, n), boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
@@ -544,7 +555,7 @@ class PIVGPU:
     Attributes
     ----------
     coords : tuple
-        2D ndarray (x, y), coordinates where the PIV-velocity fields have been computed.
+        2D ndarray (x, y), coordinates where the velocity field has been computed.
     mask : ndarray
         2D float (m, n), boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
@@ -610,7 +621,7 @@ class PIVGPU:
         Returns
         -------
         u, v : ndarray
-            2D float (m, n), velocity in pixels/time units.
+            2D float (m, n), horizontal/vertical components of velocity in pixels/time units.
 
         """
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, ndim=2)
@@ -886,7 +897,7 @@ def get_field_shape(frame_shape, window_size, spacing):
         Int (m, n), shape of the resulting flow field.
 
     """
-    assert len(frame_shape) == 2, 'image_size must have length of 2.'
+    assert len(frame_shape) == 2, 'frame_shape must have length 2.'
     assert int(spacing) == spacing > 0, 'spacing must be a positive int.'
     ht, wd = frame_shape
 
@@ -916,7 +927,7 @@ def get_field_coords(frame_shape, window_size, spacing, center_field=True):
         2D float (m, n), pixel coordinates of the resulting flow field.
 
     """
-    assert len(frame_shape) == 2, 'image_size must have length of 2.'
+    assert len(frame_shape) == 2, 'frame_shape must have length 2.'
     assert int(spacing) == spacing > 0, 'spacing must be a positive int.'
 
     m, n = get_field_shape(frame_shape, window_size, spacing)
@@ -1553,9 +1564,8 @@ def _gpu_window_index_f(correlation_d, indices_d):
     return peak_d
 
 
-# TODO refactor into smaller functions
 def _find_peak(correlation_d):
-    """Find the row and column of the highest peak in correlation function.
+    """Returns the row and column of the highest peak in correlation function.
 
     Parameters
     ----------
@@ -1564,25 +1574,37 @@ def _find_peak(correlation_d):
 
     Returns
     -------
-    row_peak : GPUArray
-        1D int, row position of corr peak.
-    col_peak : GPUArray
-        1D int, column position of corr peak.
-    max_peak : GPUArray
-        1D int, flattened index of corr peak.
+    peak_idx_d : GPUArray
+        1D int, index of peak location in reshaped correlation function.
 
     """
     n_windows, wd, ht = correlation_d.shape
 
-    # Get index and value of peak.
     corr_reshape_d = correlation_d.reshape(n_windows, wd * ht)
     peak_idx_d = cumisc.argmax(corr_reshape_d, axis=1).astype(DTYPE_i)
+
+    return peak_idx_d
+
+
+def _get_peak(correlation_d, peak_idx_d):
+    """Returns the value of the highest peak in correlation function.
+
+    Parameters
+    ----------
+    peak_idx_d : GPUArray
+        1D int, image of the correlation function.
+
+    Returns
+    -------
+    GPUArray
+        1D int, flattened index of corr peak.
+
+    """
+    n_windows, wd, ht = correlation_d.shape
+    corr_reshape_d = correlation_d.reshape(n_windows, wd * ht)
     peak_value_d = _gpu_window_index_f(corr_reshape_d, peak_idx_d)
 
-    # Row and column information of peak.
-    row_peak_d, col_peak_d = gpu_scalar_mod_i(peak_idx_d, wd)
-
-    return row_peak_d, col_peak_d, peak_value_d
+    return peak_value_d
 
 
 mod_subpixel_approximation = SourceModule("""
@@ -1600,8 +1622,7 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, f
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
-    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-    } else {
+    if (row >= 1 && row <= ht - 2) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         if (cd > 0 && cu > 0 && non_zero) {
@@ -1609,10 +1630,9 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, f
             cu = logf(cu);
             row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * logf(c) + cu + small);
         } else {row_sp[w_idx] = row;}
-    }
+    } else {row_sp[w_idx] = row;}
 
-    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-    } else {
+    if (col >= 1 && col <= wd - 2) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         if (cl > 0 && cr > 0 && non_zero) {
@@ -1620,7 +1640,7 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, f
             cr = logf(cr);
             col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * logf(c) + cr + small);
         } else {col_sp[w_idx] = col;}
-    }
+    } else {col_sp[w_idx] = col;}
 }
 
 __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
@@ -1636,19 +1656,17 @@ __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, 
     int col = col_p[w_idx];
     float c = corr[ws * w_idx + wd * row + col];
 
-    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-    } else {
+    if (row >= 1 && row <= ht - 2) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * c + cu + small);
-    }
+    } else {row_sp[w_idx] = row;}
 
-    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-    } else {
+    if (col >= 1 && col <= wd - 2) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * c + cr + small);
-    }
+    } else {col_sp[w_idx] = col;}
 }
 
 __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, float *corr, int n_windows, int ht,
@@ -1665,23 +1683,21 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, f
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
-    if (row <= 0 || row >= ht - 1) {row_sp[w_idx] = row;  // peak on window edges
-    } else {
+    if (row >= 1 && row <= ht - 2) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         if (cd > 0 && cu > 0 && non_zero) {
             row_sp[w_idx] = row + 0.5f * (cu - cd) / (cd + c + cu + small);
         } else {row_sp[w_idx] = row;}
-    }
+    } else {row_sp[w_idx] = row;}
 
-    if (col <= 0 || col >= wd - 1) {col_sp[w_idx] = col;  // peak on window edges
-    } else {
+    if (col >= 1 && col <= wd - 2) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         if (cl > 0 && cr > 0 && non_zero) {
             col_sp[w_idx] = col + 0.5f * (cr - cl) / (cl + c + cr + small);
         } else {col_sp[w_idx] = col;}
-    }
+    } else {col_sp[w_idx] = col;}
 }
 """)
 
@@ -1724,7 +1740,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
         parabolic_approximation = mod_subpixel_approximation.get_function('parabolic')
         parabolic_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
                                 DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
-    if method == 'centroid':
+    else:
         centroid_approximation = mod_subpixel_approximation.get_function('centroid')
         centroid_approximation(row_sp_d, col_sp_d, row_peak_d, col_peak_d, correlation_d, DTYPE_i(n_windows),
                                DTYPE_i(ht), DTYPE_i(wd), window_size_i, block=(block_size, 1, 1), grid=(grid_size, 1))

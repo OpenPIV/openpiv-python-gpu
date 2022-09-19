@@ -172,6 +172,27 @@ def test_mask_rms():
     assert np.allclose(correlation_stack_masked_cpu, correlation_stack_masked_gpu, _identity_tolerance)
 
 
+# @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
+# def test_gpu_piv_fast0(image_size):
+#     """Quick test of the main piv function."""
+#     frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
+#     args = {'mask': None,
+#             'window_size_iters': (1, 2),
+#             'min_window_size': 16,
+#             'overlap_ratio': 0.5,
+#             'dt': 1,
+#             'deform': True,
+#             'smooth': True,
+#             'nb_validation_iter': 1,
+#             'validation_method': 'median_velocity',
+#             }
+#
+#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_a, **args)
+#
+#     assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size) < _accuracy_tolerance
+#     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size) < _accuracy_tolerance
+
+
 # INTEGRATION TESTS
 @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
 def test_gpu_piv_fast(image_size):
