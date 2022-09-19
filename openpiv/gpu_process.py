@@ -1687,7 +1687,7 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, f
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         if (cd > 0 && cu > 0 && non_zero) {
-            row_sp[w_idx] = row + 0.5f * (cu - cd) / (cd + c + cu + small);
+            row_sp[w_idx] = row + (cu - cd) / (cd + c + cu + small);
         } else {row_sp[w_idx] = row;}
     } else {row_sp[w_idx] = row;}
 
@@ -1695,7 +1695,7 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, f
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         if (cl > 0 && cr > 0 && non_zero) {
-            col_sp[w_idx] = col + 0.5f * (cr - cl) / (cl + c + cr + small);
+            col_sp[w_idx] = col + (cr - cl) / (cl + c + cr + small);
         } else {col_sp[w_idx] = col;}
     } else {col_sp[w_idx] = col;}
 }
