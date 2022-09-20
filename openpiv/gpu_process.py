@@ -1622,7 +1622,7 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, f
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
-    if (row >= 1 && row <= ht - 2) {
+    if (row > 0 && row < ht - 1) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         if (cd > 0 && cu > 0 && non_zero) {
@@ -1632,7 +1632,7 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p, f
         } else {row_sp[w_idx] = row;}
     } else {row_sp[w_idx] = row;}
 
-    if (col >= 1 && col <= wd - 2) {
+    if (col > 0 && col < wd - 1) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         if (cl > 0 && cr > 0 && non_zero) {
@@ -1656,13 +1656,13 @@ __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p, 
     int col = col_p[w_idx];
     float c = corr[ws * w_idx + wd * row + col];
 
-    if (row >= 1 && row <= ht - 2) {
+    if (row > 0 && row < ht - 1) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         row_sp[w_idx] = row + 0.5f * (cd - cu) / (cd - 2.0f * c + cu + small);
     } else {row_sp[w_idx] = row;}
 
-    if (col >= 1 && col <= wd - 2) {
+    if (col > 0 && col < wd - 1) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * c + cr + small);
@@ -1683,7 +1683,7 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, f
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
-    if (row >= 1 && row <= ht - 2) {
+    if (row > 0 && row < ht - 1) {
         float cd = corr[ws * w_idx + wd * (row - 1) + col];
         float cu = corr[ws * w_idx + wd * (row + 1) + col];
         if (cd > 0 && cu > 0 && non_zero) {
@@ -1691,7 +1691,7 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p, f
         } else {row_sp[w_idx] = row;}
     } else {row_sp[w_idx] = row;}
 
-    if (col >= 1 && col <= wd - 2) {
+    if (col > 0 && col < wd - 1) {
         float cl = corr[ws * w_idx + wd * row + col - 1];
         float cr = corr[ws * w_idx + wd * row + col + 1];
         if (cl > 0 && cr > 0 && non_zero) {
@@ -1802,11 +1802,11 @@ __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int h
     int row = row_p[idx_i] - mask_w + idx_y;
     int col = col_p[idx_i] - mask_w + idx_x;
 
-    // Return if outside edge of window.
-    if (row >= ht || col >= wd) {return;}
-
-    // Mask the point.
-    corr[idx_i * size + row * wd + col] = 0.0f;
+    // Mask only if inside window domain.
+    if (row >= 0 && row < ht && col >= 0 && col < wd) {
+        // Mask the point.
+        corr[idx_i * size + row * wd + col] = 0.0f;
+    }
 }
 """)
 
