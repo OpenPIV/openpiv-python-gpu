@@ -41,6 +41,7 @@ N_FFT = 2
 SUBPIXEL_METHOD = 'gaussian'
 S2N_METHOD = 'peak2peak'
 S2N_WIDTH = 2
+_BLOCK_SIZE = 64
 
 
 class CorrelationGPU:
@@ -1003,7 +1004,7 @@ def gpu_strain(u_d, v_d, mask_d=None, spacing=1):
 
     strain_d = gpuarray.empty((4, m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     n_blocks = ceil(size_i * 2 / block_size)
     strain_gpu = mod_strain.get_function('strain_gpu')
     strain_gpu(strain_d, u_d, v_d, mask_d, DTYPE_f(spacing), DTYPE_i(m), DTYPE_i(n), size_i, block=(block_size, 1, 1),
@@ -1173,7 +1174,7 @@ def gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=None):
     spacing_x_f = DTYPE_f((x0_d[1].get() - buffer_x_f))
     spacing_y_f = DTYPE_f((y0_d[1].get() - buffer_y_f))
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     if mask_d is not None:
         _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=f0_d.shape)
@@ -1417,7 +1418,7 @@ def _gpu_normalize_intensity(win_d):
 
     mean_d = cumisc.mean(win_d.reshape(n_windows, int(iw_size_i)), axis=1)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     normalize = mod_norm.get_function('normalize')
     normalize(win_d, win_norm_d, mean_d, iw_size_i, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
@@ -1555,7 +1556,7 @@ def _gpu_window_index_f(correlation_d, indices_d):
 
     peak_d = gpuarray.empty(n_windows, dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(n_windows / block_size)
     index_update = mod_index_update.get_function('window_index_f')
     index_update(peak_d, correlation_d, indices_d, DTYPE_i(window_size), DTYPE_i(n_windows), block=(block_size, 1, 1),
@@ -1730,7 +1731,7 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     row_sp_d = gpuarray.empty_like(row_peak_d, dtype=DTYPE_f)
     col_sp_d = gpuarray.empty_like(col_peak_d, dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(n_windows / block_size)
     if method == 'gaussian':
         gaussian_approximation = mod_subpixel_approximation.get_function('gaussian')
@@ -1748,28 +1749,28 @@ def _gpu_subpixel_approximation(correlation_d, row_peak_d, col_peak_d, method):
     return row_sp_d, col_sp_d
 
 
-def _peak2mean(correlation_d, corr_peak1_d):
+def _peak2mean(correlation_d, corr_peak_d):
     """Returns the mean-energy measure of the signal-to-noise-ratio."""
-    gpu_remove_negative_f(corr_peak1_d)
-    correlation_rms_d = _gpu_mask_rms(correlation_d, corr_peak1_d)
+    correlation_rms_d = _gpu_mask_rms(correlation_d, corr_peak_d)
+    sig2noise_d = _peak2energy(correlation_rms_d, corr_peak_d)
 
-    return _peak2energy(correlation_rms_d, corr_peak1_d)
+    return sig2noise_d
 
 
-def _peak2energy(correlation_d, corr_peak1_d):
+def _peak2energy(correlation_d, corr_peak_d):
     """Returns the RMS-measure of the signal-to-noise-ratio."""
     _check_arrays(correlation_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_arrays(corr_peak1_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=correlation_d.shape[0])
+    _check_arrays(corr_peak_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=correlation_d.shape[0])
     n_windows, wd, ht = correlation_d.shape
-    window_size = wd * ht
+    size = wd * ht
 
     # Remove negative correlation values.
-    gpu_remove_negative_f(corr_peak1_d)
+    gpu_remove_negative_f(corr_peak_d)
     gpu_remove_negative_f(correlation_d)
 
-    corr_reshape = correlation_d.reshape(n_windows, window_size)
-    corr_mean_d = cumisc.sum(corr_reshape, axis=1) / DTYPE_f(window_size)
-    sig2noise_d = DTYPE_f(2) * cumath.log10(corr_peak1_d / corr_mean_d)
+    corr_reshape = correlation_d.reshape(n_windows, size)
+    corr_mean_d = cumisc.mean(corr_reshape, axis=1)
+    sig2noise_d = DTYPE_f(2) * cumath.log10(corr_peak_d / corr_mean_d)
     gpu_remove_nan_f(sig2noise_d)
 
     return sig2noise_d
@@ -1946,7 +1947,7 @@ def _gpu_update_field(dp_d, peak_d, mask_d):
 
     f_d = gpuarray.empty_like(dp_d, dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     update_values = mod_update.get_function('update_values')
     update_values(f_d, dp_d, peak_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))

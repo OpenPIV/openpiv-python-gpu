@@ -21,6 +21,7 @@ S2N_TOL = 2
 MEDIAN_TOL = 2
 MEAN_TOL = 2
 RMS_TOL = 2
+_BLOCK_SIZE = 64
 
 
 def gpu_validation(*f_dl, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
@@ -277,7 +278,7 @@ def _local_validation(f_d, tol, val_locations_d=None):
     if val_locations_d is None:
         val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     local_validation = mod_validation.get_function('local_validation')
     local_validation(val_locations_d, f_d, tol_f, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
@@ -293,7 +294,7 @@ def _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, tol, val_locations_d=Non
     if val_locations_d is None:
         val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     neighbour_validation = mod_validation.get_function('neighbour_validation')
     neighbour_validation(val_locations_d, f_d, f_mean_d, f_mean_fluc_d, tol_f, size_i, block=(block_size, 1, 1),
@@ -359,7 +360,7 @@ def _gpu_find_neighbours(shape, mask_d=None):
 
     neighbours_present_d = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     find_neighbours = mod_neighbours.get_function('find_neighbours')
     find_neighbours(neighbours_present_d, mask_d, DTYPE_i(n), DTYPE_i(m), size_i, block=(block_size, 1, 1),
@@ -389,7 +390,7 @@ def _gpu_get_neighbours(f_d, neighbours_present_d):
 
     neighbours_d = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     get_neighbours = mod_neighbours.get_function('get_neighbours')
     get_neighbours(neighbours_d, neighbours_present_d, f_d, DTYPE_i(n), size_i, block=(block_size, 1, 1),
@@ -529,7 +530,7 @@ def _gpu_median_velocity(f_neighbours_d, neighbours_present_d):
 
     f_median_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     median_velocity = mod_median_velocity.get_function('median_velocity')
     median_velocity(f_median_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
@@ -561,7 +562,7 @@ def _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d):
 
     f_median_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     median_u_fluc = mod_median_velocity.get_function('median_fluc')
     median_u_fluc(f_median_fluc_d, f_median_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
@@ -657,7 +658,7 @@ def _gpu_mean_velocity(f_neighbours_d, neighbours_present_d):
 
     f_mean_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     mean_velocity = mod_mean_velocity.get_function('mean_velocity')
     mean_velocity(f_mean_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
@@ -692,7 +693,7 @@ def _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d):
 
     f_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     mean_fluc = mod_mean_velocity.get_function('mean_fluc')
     mean_fluc(f_fluc_d, f_mean_d, f_neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
@@ -724,7 +725,7 @@ def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
 
     f_rms_d = gpuarray.empty((m, n), dtype=DTYPE_f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size_i / block_size)
     u_rms = mod_mean_velocity.get_function('rms')
     u_rms(f_rms_d, f_mean_d, neighbours_d, neighbours_present_d, size_i, block=(block_size, 1, 1),
