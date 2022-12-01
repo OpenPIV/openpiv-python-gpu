@@ -39,12 +39,12 @@ COARSE_COEFFICIENTS = 10
 WEIGHT_METHODS = {'bisquare', 'talworth', 'cauchy'}
 
 
-def gpu_smoothn(*y_dl, **kwargs):
+def gpu_smoothn(*y_d, **kwargs):
     """Smooths a scalar field stored as a GPUArray.
 
     Parameters
     ----------
-    y_dl : GPUArray
+    y_d : GPUArray
         nD float, field to be smoothed.
 
     Returns
@@ -53,22 +53,22 @@ def gpu_smoothn(*y_dl, **kwargs):
         nD float, same size as y_d. Smoothed field.
 
     """
-    _check_arrays(*y_dl, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    n = len(y_dl)
+    _check_arrays(*y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    n = len(y_d)
 
     # Get data from GPUArrays.
-    y = [y_d.get() for y_d in y_dl]
+    y = [y_d.get() for y_d in y_d]
     for key, value in kwargs.items():
         if isinstance(value, gpuarray.GPUArray):
             kwargs[key] = value.get()
 
     z = smoothn(*y, **kwargs)[0]
     if n == 1:
-        z_dl = gpuarray.to_gpu(z)
+        z_d = gpuarray.to_gpu(z)
     else:
-        z_dl = [gpuarray.to_gpu(array) for array in z]
+        z_d = [gpuarray.to_gpu(array) for array in z]
 
-    return z_dl
+    return z_d
 
 
 def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
@@ -470,13 +470,13 @@ def gpu_idct(y_d, norm='backward'):
 
     plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
     cufft.ifft(ifft_input_d, ifft_output_d, plan_inverse, scale=scale)
-    yidct_d = _dct_order(ifft_output_d, 'backward')
+    y_idct_d = _dct_order(ifft_output_d, 'backward')
 
     if norm == 'ortho':
         x_0 = y_d[:, 0].copy().reshape(m, 1)
-        yidct_d = cumisc.add(DTYPE_f(sqrt(2 / n)) * yidct_d, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0)
+        y_idct_d = cumisc.add(DTYPE_f(sqrt(2 / n)) * y_idct_d, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0)
 
-    return yidct_d
+    return y_idct_d
 
 
 def replace_non_finite(y, finite=None, spacing=None):

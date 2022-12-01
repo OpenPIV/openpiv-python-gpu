@@ -49,7 +49,7 @@ def gpu_validation(*f_d, sig2noise_d=None, mask_d=None, validation_method='media
 
     Returns
     -------
-    val_locations : GPUArray
+    GPUArray
         2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
     """
