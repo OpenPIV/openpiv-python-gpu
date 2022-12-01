@@ -256,6 +256,7 @@ def test_reflect_frequency_comp(shape):
 # INTEGRATION TESTS
 # Need tests for: mask, max_iter, smooth_order, w, z0.
 # Need to test for unexpected inputs.
+@pytest.mark.integtest
 @pytest.mark.parametrize('shape', [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize('s', [None, 50])
 @pytest.mark.parametrize('robust', [True, False])

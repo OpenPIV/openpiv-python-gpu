@@ -51,19 +51,19 @@ def gpu_mask(f_d, mask_d):
     _check_arrays(f_d, array_type=gpuarray.GPUArray)
     _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
     d_type = f_d.dtype
-    size_i = DTYPE_i(f_d.size)
+    size = f_d.size
 
     f_masked_d = gpuarray.empty_like(f_d)
 
     block_size = 32
-    grid_size = ceil(size_i / block_size)
+    grid_size = ceil(size / block_size)
     if d_type == DTYPE_f:
         mask_gpu = mod_mask.get_function('gpu_mask_f')
     elif d_type == DTYPE_i:
         mask_gpu = mod_mask.get_function('gpu_mask_i')
     else:
         raise ValueError('Wrong data type for f_d.')
-    mask_gpu(f_masked_d, f_d, mask_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    mask_gpu(f_masked_d, f_d, mask_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return f_masked_d
 
@@ -102,15 +102,15 @@ def gpu_scalar_mod_i(f_d, m):
     """
     _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
     assert 0 < m == int(m)
-    size_i = DTYPE_i(f_d.size)
+    size = f_d.size
 
     i_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
     r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
 
     block_size = 32
-    grid_size = ceil(size_i / block_size)
+    grid_size = ceil(size / block_size)
     mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
-    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return i_d, r_d
 
@@ -139,12 +139,12 @@ def gpu_remove_nan_f(f_d):
 
     """
     _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    size_i = DTYPE_i(f_d.size)
+    size = f_d.size
 
     block_size = 32
-    grid_size = ceil(size_i / block_size)
+    grid_size = ceil(size / block_size)
     replace_nan = mod_replace_nan_f.get_function('replace_nan_f')
-    replace_nan(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_nan(f_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 mod_replace_negative_f = SourceModule("""
@@ -170,12 +170,12 @@ def gpu_remove_negative_f(f_d):
 
     """
     _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    size_i = DTYPE_i(f_d.size)
+    size = f_d.size
 
     block_size = 32
-    grid_size = ceil(size_i / block_size)
+    grid_size = ceil(size / block_size)
     replace_negative = mod_replace_negative_f.get_function('replace_negative_f')
-    replace_negative(f_d, size_i, block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_negative(f_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
@@ -199,23 +199,23 @@ def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, s
             raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
 
 
-def _check_arrays1(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
-    """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
-    for array in arrays:
-        if not array.flags.c_contiguous:
-            raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
-        if array_type is not None:
-            if not isinstance(array, array_type):
-                raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
-        if dtype is not None:
-            if not array.dtype == dtype:
-                raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
-        if shape is not None:
-            if not array.shape == shape:
-                raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
-        if ndim is not None:
-            if not array.ndim == ndim:
-                raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
-        if size is not None:
-            if not array.size == size:
-                raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
+# def _check_arrays1(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
+#     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
+#     for array in arrays:
+#         if not array.flags.c_contiguous:
+#             raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
+#         if array_type is not None:
+#             if not isinstance(array, array_type):
+#                 raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
+#         if dtype is not None:
+#             if not array.dtype == dtype:
+#                 raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
+#         if shape is not None:
+#             if not array.shape == shape:
+#                 raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
+#         if ndim is not None:
+#             if not array.ndim == ndim:
+#                 raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
+#         if size is not None:
+#             if not array.size == size:
+#                 raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))

@@ -719,17 +719,17 @@ def _dct_order(y_d, direction):
     """
     assert direction in {'forward', 'backward'}
     m, n = y_d.shape
-    size_i = DTYPE_i(y_d.size)
+    size = y_d.size
 
     y_ordered = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    x_blocks = ceil(size / block_size)
     if direction == 'forward':
         order = mod_order.get_function('forward_order')
     else:
         order = mod_order.get_function('backward_order')
-    order(y_ordered, y_d, DTYPE_i(n), size_i, block=(block_size, 1, 1), grid=(x_blocks, 1))
+    order(y_ordered, y_d, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return y_ordered
 
@@ -753,14 +753,14 @@ def _flip_frequency_real(y_d, flip_width, offset=0, left_pad=0):
     m, n = y_d.shape
     assert flip_width == int(flip_width) and offset == int(offset) and left_pad == int(left_pad)
     assert flip_width - left_pad <= n - offset
-    size_i = DTYPE_i(m * (flip_width - left_pad))
+    size = m * (flip_width - left_pad)
 
     y_flipped_d = gpuarray.zeros((m, flip_width), dtype=DTYPE_f)
 
     block_size = 32
-    x_blocks = ceil(size_i / block_size)
+    x_blocks = ceil(size / block_size)
     flip_frequency = mod_flip.get_function('flip_frequency')
-    flip_frequency(y_flipped_d, y_d, DTYPE_i(offset), DTYPE_i(left_pad), DTYPE_i(flip_width), DTYPE_i(n), size_i,
+    flip_frequency(y_flipped_d, y_d, DTYPE_i(offset), DTYPE_i(left_pad), DTYPE_i(flip_width), DTYPE_i(n), DTYPE_i(size),
                    block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return y_flipped_d
