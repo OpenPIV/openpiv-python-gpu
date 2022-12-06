@@ -83,7 +83,7 @@ def test_gpu_scalar_mod_i(divisor):
 
     i = f // m
     r = f % m
-    i_d, r_d = gpu_misc.gpu_scalar_mod_i(f_d, m)
+    i_d, r_d = gpu_misc.gpu_scalar_mod(f_d, m)
     i_gpu = i_d.get()
     r_gpu = r_d.get()
 
@@ -100,7 +100,7 @@ def test_gpu_replace_nan_f():
     f_d = gpuarray.to_gpu(f)
 
     f_finite = np.nan_to_num(f, nan=0, posinf=np.inf)
-    gpu_misc.gpu_remove_nan_f(f_d)
+    gpu_misc.gpu_remove_nan(f_d)
     f_finite_gpu = f_d.get()
 
     assert np.array_equal(f_finite_gpu, f_finite)
@@ -112,7 +112,7 @@ def test_gpu_replace_negative_f():
     f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
 
     f[f < 0] = 0
-    gpu_misc.gpu_remove_negative_f(f_d)
+    gpu_misc.gpu_remove_negative(f_d)
     f_positive_gpu = f_d.get()
 
     assert np.array_equal(f_positive_gpu, f)

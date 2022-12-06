@@ -19,7 +19,7 @@ from pycuda.compiler import SourceModule
 
 from openpiv.gpu_validation import ValidationGPU, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod_i, gpu_remove_nan_f, gpu_remove_negative_f, gpu_mask
+from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod, gpu_remove_nan, gpu_remove_negative, gpu_mask
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 with warnings.catch_warnings():
@@ -145,7 +145,7 @@ class CorrelationGPU:
 
         # Get row and column of peak.
         # TODO Does storing these save time?
-        self.row_peak_d, self.col_peak_d = gpu_scalar_mod_i(self.peak_idx_d, self.fft_wd)
+        self.row_peak_d, self.col_peak_d = gpu_scalar_mod(self.peak_idx_d, self.fft_wd)
         self._check_zero_correlation()
 
         # Get the subpixel location.z
@@ -1774,13 +1774,13 @@ def _peak2energy(correlation_d, corr_peak_d):
     size = wd * ht
 
     # Remove negative correlation values.
-    gpu_remove_negative_f(corr_peak_d)
-    gpu_remove_negative_f(correlation_d)
+    gpu_remove_negative(corr_peak_d)
+    gpu_remove_negative(correlation_d)
 
     corr_reshape = correlation_d.reshape(n_windows, size)
     corr_mean_d = cumisc.mean(corr_reshape, axis=1)
     sig2noise_d = DTYPE_f(2) * cumath.log10(corr_peak_d / corr_mean_d)
-    gpu_remove_nan_f(sig2noise_d)
+    gpu_remove_nan(sig2noise_d)
 
     return sig2noise_d
 
@@ -1790,11 +1790,11 @@ def _peak2peak(corr_peak1_d, corr_peak2_d):
     _check_arrays(corr_peak1_d, corr_peak2_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1_d.shape)
 
     # Remove negative peaks.
-    gpu_remove_negative_f(corr_peak1_d)
-    gpu_remove_negative_f(corr_peak2_d)
+    gpu_remove_negative(corr_peak1_d)
+    gpu_remove_negative(corr_peak2_d)
 
     sig2noise_d = cumath.log10(corr_peak1_d / corr_peak2_d)
-    gpu_remove_nan_f(sig2noise_d)
+    gpu_remove_nan(sig2noise_d)
 
     return sig2noise_d
 

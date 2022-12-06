@@ -32,14 +32,14 @@ __global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
 """)
 
 
-def gpu_mask(f_d, mask_d):
+def gpu_mask(f, mask):
     """Mask an array.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         nD float, frame to be masked.
-    mask_d : GPUArray or None, optional
+    mask : GPUArray or None, optional
         nD int, mask to apply to frame. 0s are values to keep.
 
     Returns
@@ -48,12 +48,12 @@ def gpu_mask(f_d, mask_d):
         nD int, masked field.
 
     """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray)
-    _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f_d.size)
-    d_type = f_d.dtype
-    size = f_d.size
+    _check_arrays(f, array_type=gpuarray.GPUArray)
+    _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=f.size)
+    d_type = f.dtype
+    size = f.size
 
-    f_masked_d = gpuarray.empty_like(f_d)
+    f_masked = gpuarray.empty_like(f)
 
     block_size = 32
     grid_size = ceil(size / block_size)
@@ -63,9 +63,9 @@ def gpu_mask(f_d, mask_d):
         mask_gpu = mod_mask.get_function('gpu_mask_i')
     else:
         raise ValueError('Wrong data type for f_d.')
-    mask_gpu(f_masked_d, f_d, mask_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    mask_gpu(f_masked, f, mask, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    return f_masked_d
+    return f_masked
 
 
 mod_scalar_mod = SourceModule("""
@@ -82,37 +82,36 @@ __global__ void scalar_mod(int *i, int *r, int *f, int m, int size)
 """)
 
 
-def gpu_scalar_mod_i(f_d, m):
+# TODO add support for float
+def gpu_scalar_mod(f, m):
     """Returns the integer and remainder of division of a PyCUDA array by a scalar int.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         nd int, input to be decomposed.
     m : int
         Modulus.
 
     Returns
     -------
-    i_d, r_d : GPUArray
-        Int, integer part of the decomposition.
-    r_d : GPUArray
-        Int, remainder part of the decomposition.
+    i, r : GPUArray
+        Int, integer and remainder parts of the decomposition.
 
     """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
+    _check_arrays(f, array_type=gpuarray.GPUArray, dtype=DTYPE_i)
     assert 0 < m == int(m)
-    size = f_d.size
+    size = f.size
 
-    i_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
-    r_d = gpuarray.empty_like(f_d, dtype=DTYPE_i)
+    i = gpuarray.empty_like(f, dtype=DTYPE_i)
+    r = gpuarray.empty_like(f, dtype=DTYPE_i)
 
     block_size = 32
     grid_size = ceil(size / block_size)
     mask_frame_gpu = mod_scalar_mod.get_function('scalar_mod')
-    mask_frame_gpu(i_d, r_d, f_d, DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    mask_frame_gpu(i, r, f, DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    return i_d, r_d
+    return i, r
 
 
 mod_replace_nan_f = SourceModule("""
@@ -129,22 +128,23 @@ __global__ void replace_nan_f(float *f, int size)
 """)
 
 
-def gpu_remove_nan_f(f_d):
+# TODO add support for int
+def gpu_remove_nan(f):
     """Replaces all NaN from array with zeros.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         nd float.
 
     """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    size = f_d.size
+    _check_arrays(f, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    size = f.size
 
     block_size = 32
     grid_size = ceil(size / block_size)
     replace_nan = mod_replace_nan_f.get_function('replace_nan_f')
-    replace_nan(f_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_nan(f, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 mod_replace_negative_f = SourceModule("""
@@ -160,22 +160,23 @@ __global__ void replace_negative_f(float *f, int size)
 """)
 
 
-def gpu_remove_negative_f(f_d):
+# TODO add support for float
+def gpu_remove_negative(f):
     """Replaces all negative values from array with zeros.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         nd float.
 
     """
-    _check_arrays(f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    size = f_d.size
+    _check_arrays(f, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    size = f.size
 
     block_size = 32
     grid_size = ceil(size / block_size)
     replace_negative = mod_replace_negative_f.get_function('replace_negative_f')
-    replace_negative(f_d, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    replace_negative(f, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
@@ -199,6 +200,7 @@ def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, s
             raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
 
 
+# TODO compare speed with above function.
 # def _check_arrays1(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
 #     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
 #     for array in arrays:
