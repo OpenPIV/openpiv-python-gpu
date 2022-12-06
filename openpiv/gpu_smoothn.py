@@ -39,12 +39,12 @@ COARSE_COEFFICIENTS = 10
 WEIGHT_METHODS = {'bisquare', 'talworth', 'cauchy'}
 
 
-def gpu_smoothn(*y_d, **kwargs):
+def gpu_smoothn(*y, **kwargs):
     """Smooths a scalar field stored as a GPUArray.
 
     Parameters
     ----------
-    y_d : GPUArray
+    y : GPUArray
         nD float, field to be smoothed.
 
     Returns
@@ -53,22 +53,22 @@ def gpu_smoothn(*y_d, **kwargs):
         nD float, same size as y_d. Smoothed field.
 
     """
-    _check_arrays(*y_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    n = len(y_d)
+    _check_arrays(*y, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    n = len(y)
 
     # Get data from GPUArrays.
-    y = [y_d.get() for y_d in y_d]
+    y = [y.get() for y in y]
     for key, value in kwargs.items():
         if isinstance(value, gpuarray.GPUArray):
             kwargs[key] = value.get()
 
     z = smoothn(*y, **kwargs)[0]
     if n == 1:
-        z_d = gpuarray.to_gpu(z)
+        z = gpuarray.to_gpu(z)
     else:
-        z_d = [gpuarray.to_gpu(array) for array in z]
+        z = [gpuarray.to_gpu(array) for array in z]
 
-    return z_d
+    return z
 
 
 def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
@@ -314,12 +314,12 @@ def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, 
     return z, s
 
 
-def gpu_fft(y_d, norm='backward', full_frequency=False):
+def gpu_fft(y, norm='backward', full_frequency=False):
     """Returns the 1D FFT of the input.
 
     Parameters
     ----------
-    y_d : GPUArray
+    y : GPUArray
         1D data to be transformed, with serial data along rows.
     norm : {'forward', 'backward', 'ortho'}
         Normalization of the forward-backward transform pair.
@@ -331,32 +331,32 @@ def gpu_fft(y_d, norm='backward', full_frequency=False):
     GPUArray
 
     """
-    assert y_d.dtype == DTYPE_f
-    if y_d.ndim == 1:
-        y_d = y_d.reshape(1, y_d.size)
-    m, n = y_d.shape
+    assert y.dtype == DTYPE_f
+    if y.ndim == 1:
+        y = y.reshape(1, y.size)
+    m, n = y.shape
     assert n >= 2
     scale = norm == 'forward'
-    y_fft_d = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
+    y_fft = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
 
     plan_forward = cufft.Plan((n,), DTYPE_f, DTYPE_c, batch=m)
-    cufft.fft(y_d, y_fft_d, plan_forward, scale=scale)
+    cufft.fft(y, y_fft, plan_forward, scale=scale)
 
     if norm == 'ortho':
-        y_fft_d = y_fft_d * DTYPE_f(1 / sqrt(n))
+        y_fft = y_fft * DTYPE_f(1 / sqrt(n))
 
     if full_frequency:
-        y_fft_d = _reflect_frequency_comp(y_fft_d, n)
+        y_fft = _reflect_frequency_comp(y_fft, n)
 
-    return y_fft_d
+    return y_fft
 
 
-def gpu_ifft(y_d, norm='backward', inverse_width=None, full_frequency=False):
+def gpu_ifft(y, norm='backward', inverse_width=None, full_frequency=False):
     """Returns the 1D, inverse FFT of the input.
 
     Parameters
     ----------
-    y_d : GPUArray
+    y : GPUArray
         1D data to be transformed, with serial data along rows.
     norm : {'forward', 'backward', 'ortho'}
         Normalization of the forward-backward transform pair.
@@ -370,79 +370,35 @@ def gpu_ifft(y_d, norm='backward', inverse_width=None, full_frequency=False):
     GPUArray
 
     """
-    assert y_d.dtype == DTYPE_c
-    if y_d.ndim == 1:
-        y_d = y_d.reshape(1, y_d.size)
-    m, n = y_d.shape
+    assert y.dtype == DTYPE_c
+    if y.ndim == 1:
+        y = y.reshape(1, y.size)
+    m, n = y.shape
     assert n >= 2
     scale = norm == 'backward'
     if inverse_width is None:
         inverse_width = (n - 1) * 2
     if full_frequency:
         frequency_width = inverse_width // 2 + 1
-        y_d = y_d[:, :frequency_width].copy()
+        y = y[:, :frequency_width].copy()
 
-    y_ifft_d = gpuarray.empty((m, inverse_width), dtype=DTYPE_f)
+    y_ifft = gpuarray.empty((m, inverse_width), dtype=DTYPE_f)
 
     plan_inverse = cufft.Plan((inverse_width,), DTYPE_c, DTYPE_f, batch=m)
-    cufft.ifft(y_d, y_ifft_d, plan_inverse, scale=scale)
+    cufft.ifft(y, y_ifft, plan_inverse, scale=scale)
 
     if norm == 'ortho':
-        y_ifft_d = y_ifft_d * DTYPE_f(1 / sqrt(inverse_width))
+        y_ifft = y_ifft * DTYPE_f(1 / sqrt(inverse_width))
 
-    return y_ifft_d
-
-
-def gpu_dct(y_d, norm='backward'):
-    assert y_d.dtype == DTYPE_f
-    if y_d.ndim == 1:
-        y_d = y_d.reshape(1, y_d.size)
-    m, n = y_d.shape
-    assert n >= 2
-
-    normal_factor = DTYPE_f(1 / n) if norm == 'forward' else DTYPE_f(2)
-
-    freq_width = n // 2 + 1
-
-    # W-coefficients from Makhoul.
-    w_real_d = gpuarray.to_gpu(np.cos(DTYPE_f(-np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
-                               * normal_factor)
-    w_imag_d = gpuarray.to_gpu(np.sin(DTYPE_f(np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
-                               * normal_factor)
-
-    # Extend the fft output rather than zero-pad.
-    data_d = _dct_order(y_d, 'forward')
-    fft_data_d = gpu_fft(data_d, norm='backward', full_frequency=False)
-    fft_data_real_d = fft_data_d.real
-    fft_data_imag_d = fft_data_d.imag
-
-    # This could be done by a kernel to save two array definitions.
-    dct_positive_d = (cumisc.multiply(fft_data_real_d, w_real_d) + cumisc.multiply(fft_data_imag_d, w_imag_d))
-    dct_negative_d2 = (cumisc.multiply(fft_data_real_d, w_imag_d) - cumisc.multiply(fft_data_imag_d, w_real_d))
-    y_dct_d = gpuarray.empty((m, n), dtype=DTYPE_f)
-    y_dct_d[:, :freq_width] = dct_positive_d
-    y_dct_d[:, freq_width:] = _flip_frequency_real(dct_negative_d2, n - freq_width, offset=1 - n % 2)
-
-    # Use this after the next release of PyCUDA (2022) and after testing:
-    # y_dct_d = gpuarray.concatenate(dct_positive_d, dct_negative_d2, axis=0)
-
-    if norm == 'ortho':
-        a = np.empty((n,), dtype=DTYPE_f)
-        a.fill(DTYPE_f(1 / sqrt(2 * n)))
-        a[0] = 1 / sqrt(4 * n)
-        a_d = gpuarray.to_gpu(a)
-
-        y_dct_d = cumisc.multiply(y_dct_d, a_d)
-
-    return y_dct_d
+    return y_ifft
 
 
-def gpu_idct(y_d, norm='backward'):
-    """Returns the 1D, type-II, inverse DCT of the input.
+def gpu_dct(y, norm='backward'):
+    """Returns the 1D, type-II, forward DCT of the input.
 
     Parameters
     ----------
-    y_d : GPUArray
+    y : GPUArray
         1D data to be transformed, with serial data along rows.
     norm : {'forward', 'backward', 'ortho'}
         Normalization of the forward-backward transform pair.
@@ -452,31 +408,89 @@ def gpu_idct(y_d, norm='backward'):
     GPUArray
 
     """
-    assert y_d.dtype == DTYPE_f
-    if y_d.ndim == 1:
-        y_d = y_d.reshape(1, y_d.size)
-    m, n = y_d.shape
+    assert y.dtype == DTYPE_f
+    if y.ndim == 1:
+        y = y.reshape(1, y.size)
+    m, n = y.shape
+    assert n >= 2
+
+    normal_factor = DTYPE_f(1 / n) if norm == 'forward' else DTYPE_f(2)
+
+    freq_width = n // 2 + 1
+
+    # W-coefficients from Makhoul.
+    w_real = gpuarray.to_gpu(np.cos(DTYPE_f(-np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                             * normal_factor)
+    w_imag = gpuarray.to_gpu(np.sin(DTYPE_f(np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                             * normal_factor)
+
+    # Extend the fft output rather than zero-pad.
+    data = _dct_order(y, 'forward')
+    fft_data = gpu_fft(data, norm='backward', full_frequency=False)
+    fft_data_real = fft_data.real
+    fft_data_imag = fft_data.imag
+
+    # This could be done by a kernel to save two array definitions.
+    dct_positive = (cumisc.multiply(fft_data_real, w_real) + cumisc.multiply(fft_data_imag, w_imag))
+    dct_negative_d2 = (cumisc.multiply(fft_data_real, w_imag) - cumisc.multiply(fft_data_imag, w_real))
+    y_dct = gpuarray.empty((m, n), dtype=DTYPE_f)
+    y_dct[:, :freq_width] = dct_positive
+    y_dct[:, freq_width:] = _flip_frequency_real(dct_negative_d2, n - freq_width, offset=1 - n % 2)
+
+    # Use this after the next release of PyCUDA (2022) and after testing:
+    # y_dct = gpuarray.concatenate(dct_positive, dct_negative_d2, axis=0)
+
+    if norm == 'ortho':
+        a = np.empty((n,), dtype=DTYPE_f)
+        a.fill(DTYPE_f(1 / sqrt(2 * n)))
+        a[0] = 1 / sqrt(4 * n)
+        a = gpuarray.to_gpu(a)
+
+        y_dct = cumisc.multiply(y_dct, a)
+
+    return y_dct
+
+
+def gpu_idct(y, norm='backward'):
+    """Returns the 1D, type-II, inverse DCT of the input.
+
+    Parameters
+    ----------
+    y : GPUArray
+        1D data to be transformed, with serial data along rows.
+    norm : {'forward', 'backward', 'ortho'}
+        Normalization of the forward-backward transform pair.
+
+    Returns
+    -------
+    GPUArray
+
+    """
+    assert y.dtype == DTYPE_f
+    if y.ndim == 1:
+        y = y.reshape(1, y.size)
+    m, n = y.shape
     assert n >= 2
     scale = norm == 'backward'
     freq_width = n // 2 + 1
     normal_factor = DTYPE_f(1) if norm == 'forward' else DTYPE_f(0.5)
 
-    ifft_output_d = gpuarray.empty((m, n), dtype=DTYPE_f)
-    w_d = gpuarray.to_gpu(np.exp(DTYPE_c(1j * np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
-                          * normal_factor)
+    ifft_output = gpuarray.empty((m, n), dtype=DTYPE_f)
+    w = gpuarray.to_gpu(np.exp(DTYPE_c(1j * np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n))
+                        * normal_factor)
 
-    fft_data_flip = _flip_frequency_real(y_d, freq_width, left_pad=1)
-    ifft_input_d = cumisc.multiply(y_d[:, :freq_width].copy() - DTYPE_c(1j) * fft_data_flip, w_d)
+    fft_data_flip = _flip_frequency_real(y, freq_width, left_pad=1)
+    ifft_input = cumisc.multiply(y[:, :freq_width].copy() - DTYPE_c(1j) * fft_data_flip, w)
 
     plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
-    cufft.ifft(ifft_input_d, ifft_output_d, plan_inverse, scale=scale)
-    y_idct_d = _dct_order(ifft_output_d, 'backward')
+    cufft.ifft(ifft_input, ifft_output, plan_inverse, scale=scale)
+    y_idct = _dct_order(ifft_output, 'backward')
 
     if norm == 'ortho':
-        x_0 = y_d[:, 0].copy().reshape(m, 1)
-        y_idct_d = cumisc.add(DTYPE_f(sqrt(2 / n)) * y_idct_d, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0)
+        x_0 = y[:, 0].copy().reshape(m, 1)
+        y_idct = cumisc.add(DTYPE_f(sqrt(2 / n)) * y_idct, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0)
 
-    return y_idct_d
+    return y_idct
 
 
 def replace_non_finite(y, finite=None, spacing=None):
@@ -711,15 +725,15 @@ __global__ void backward_order(float *dest, float *src, int wd, int size)
 """)
 
 
-def _dct_order(y_d, direction):
+def _dct_order(y, direction):
     """Returns reordered data for the forward- and inverse-DCT.
 
     [a, b, c, d, e, f] becomes [a, c, e, f, d, b] along each row for the forward reorder (Eq 20 of Makhoul, 1980).
 
     """
     assert direction in {'forward', 'backward'}
-    m, n = y_d.shape
-    size = y_d.size
+    m, n = y.shape
+    size = y.size
 
     y_ordered = gpuarray.empty((m, n), dtype=DTYPE_f)
 
@@ -729,7 +743,7 @@ def _dct_order(y_d, direction):
         order = mod_order.get_function('forward_order')
     else:
         order = mod_order.get_function('backward_order')
-    order(y_ordered, y_d, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1), grid=(x_blocks, 1))
+    order(y_ordered, y, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1), grid=(x_blocks, 1))
 
     return y_ordered
 
@@ -748,47 +762,47 @@ __global__ void flip_frequency(float *dest, float *src, int offset, int left_pad
 """)
 
 
-def _flip_frequency_real(y_d, flip_width, offset=0, left_pad=0):
+def _flip_frequency_real(y, flip_width, offset=0, left_pad=0):
     """Returns subset of the frequency spectrum with indexing flipped along rows."""
-    m, n = y_d.shape
+    m, n = y.shape
     assert flip_width == int(flip_width) and offset == int(offset) and left_pad == int(left_pad)
     assert flip_width - left_pad <= n - offset
     size = m * (flip_width - left_pad)
 
-    y_flipped_d = gpuarray.zeros((m, flip_width), dtype=DTYPE_f)
+    y_flipped = gpuarray.zeros((m, flip_width), dtype=DTYPE_f)
 
     block_size = 32
     x_blocks = ceil(size / block_size)
     flip_frequency = mod_flip.get_function('flip_frequency')
-    flip_frequency(y_flipped_d, y_d, DTYPE_i(offset), DTYPE_i(left_pad), DTYPE_i(flip_width), DTYPE_i(n), DTYPE_i(size),
+    flip_frequency(y_flipped, y, DTYPE_i(offset), DTYPE_i(left_pad), DTYPE_i(flip_width), DTYPE_i(n), DTYPE_i(size),
                    block=(block_size, 1, 1), grid=(x_blocks, 1))
 
-    return y_flipped_d
+    return y_flipped
 
 
-def _flip_frequency_comp(y_d, flip_width, offset=0, left_pad=0):
+def _flip_frequency_comp(y, flip_width, offset=0, left_pad=0):
     """Returns subset of the complex conjugate frequency spectrum with indexing flipped along rows."""
-    y_flip_real_d = _flip_frequency_real(y_d.real, flip_width, offset, left_pad)
-    y_flip_imag_d = _flip_frequency_real(y_d.imag, flip_width, offset, left_pad)
+    y_flip_real = _flip_frequency_real(y.real, flip_width, offset, left_pad)
+    y_flip_imag = _flip_frequency_real(y.imag, flip_width, offset, left_pad)
 
-    y_flipped_d = y_flip_real_d - DTYPE_c(1j) * y_flip_imag_d
+    y_flipped = y_flip_real - DTYPE_c(1j) * y_flip_imag
 
-    return y_flipped_d
+    return y_flipped
 
 
-def _reflect_frequency_comp(y_d, full_width):
+def _reflect_frequency_comp(y, full_width):
     """Returns the full sequence of transform coefficients from a non-redundant sequence."""
-    m, n = y_d.shape
+    m, n = y.shape
     assert full_width // 2 + 1 == n
     flip_width = full_width - n
     offset = 1 - full_width % 2
 
-    y_reflected_d = gpuarray.empty((m, full_width), dtype=DTYPE_c)
-    y_reflected_d[:, :n] = y_d
-    y_reflected_d[:, n:] = _flip_frequency_comp(y_d, flip_width, offset=offset)
+    y_reflected = gpuarray.empty((m, full_width), dtype=DTYPE_c)
+    y_reflected[:, :n] = y
+    y_reflected[:, n:] = _flip_frequency_comp(y, flip_width, offset=offset)
 
     # Use this for next release of PyCUDA (2022) after testing:
-    # f_flip_d = _flip_frequency_complex(f_d, flip_width)
-    # y_reflected_d = gpuarray.concatenate(f_d, f_flip_d, axis=0)
+    # f_flip = _flip_frequency_complex(f, flip_width)
+    # y_reflected = gpuarray.concatenate(f, f_flip, axis=0)
 
-    return y_reflected_d
+    return y_reflected
