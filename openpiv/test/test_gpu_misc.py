@@ -74,10 +74,10 @@ def test_gpu_mask(d_type):
     assert np.array_equal(f_masked_gpu, f_masked)
 
 
-@pytest.mark.parametrize('divisor', [1, 2, 3])
-def test_gpu_scalar_mod_i(divisor):
+@pytest.mark.parametrize('d_type', [DTYPE_i, DTYPE_f])
+def test_gpu_scalar_mod_i(d_type):
     shape = (16, 16)
-    m = divisor
+    m = 3
 
     f, f_d = generate_array_pair(shape, magnitude=10, d_type=DTYPE_i)
 
@@ -106,10 +106,11 @@ def test_gpu_replace_nan_f():
     assert np.array_equal(f_finite_gpu, f_finite)
 
 
-def test_gpu_replace_negative_f():
+@pytest.mark.parametrize('d_type', [DTYPE_i, DTYPE_f])
+def test_gpu_replace_negative_f(d_type):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    f, f_d = generate_array_pair1(shape, width=2, d_type=d_type)
 
     f[f < 0] = 0
     gpu_misc.gpu_remove_negative(f_d)
