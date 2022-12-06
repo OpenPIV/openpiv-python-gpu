@@ -71,8 +71,17 @@ def gpu_smoothn(*y, **kwargs):
     return z
 
 
-def smoothn(*y, mask=None, w=None, s=None, robust=False, z0=None, max_iter=100, tol_z=1e-3, weight_method='bisquare',
-            smooth_order=2, spacing=None):
+def smoothn(*y,
+            mask=None,
+            w=None,
+            s=None,
+            robust=False,
+            z0=None,
+            max_iter=100,
+            tol_z=1e-3,
+            weight_method='bisquare',
+            smooth_order=2,
+            spacing=None):
     """Robust spline smoothing for 1-D to n-D data.
 
     smoothn provides a fast, automatized and robust discretized smoothing spline for data of any dimension. z =

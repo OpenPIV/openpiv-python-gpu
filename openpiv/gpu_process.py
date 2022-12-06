@@ -756,11 +756,11 @@ class PIVGPU:
             sig2noise_d = self._corr.sig2noise_d
 
         # Do the validation.
-        validation_gpu = ValidationGPU(u_d.shape, mask_d=mask_d, validation_method=self.validation_method,
+        validation_gpu = ValidationGPU(u_d.shape, mask=mask_d, validation_method=self.validation_method,
                                        s2n_tol=self.s2n_tol, median_tol=self.median_tol,
                                        mean_tol=self.mean_tol, rms_tol=self.rms_tol)
         for i in range(self.nb_validation_iter):
-            val_locations_d = validation_gpu(u_d, v_d, sig2noise_d=sig2noise_d)
+            val_locations_d = validation_gpu(u_d, v_d, sig2noise=sig2noise_d)
             u_mean_d, v_mean_d = validation_gpu.median_d
 
             # Replace invalid vectors.

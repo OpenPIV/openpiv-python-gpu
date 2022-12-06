@@ -24,17 +24,23 @@ RMS_TOL = 2
 _BLOCK_SIZE = 64
 
 
-def gpu_validation(*f_d, sig2noise_d=None, mask_d=None, validation_method='median_velocity',
-                   s2n_tol=S2N_TOL, median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
+def gpu_validation(*f,
+                   sig2noise=None,
+                   mask=None,
+                   validation_method='median_velocity',
+                   s2n_tol=S2N_TOL,
+                   median_tol=MEDIAN_TOL,
+                   mean_tol=MEAN_TOL,
+                   rms_tol=RMS_TOL):
     """Validation for vector-fields that returns an array indicating which location need to be validated.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         2D float (m, n), velocity fields to be validated.
-    sig2noise_d : GPUArray, optional
+    sig2noise : GPUArray, optional
         2D float (m, n), signal-to-noise ratio of each velocity.
-    mask_d : GPUArray
+    mask : GPUArray
         2D int (m, n), mask for the velocity field.
     validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
@@ -53,9 +59,9 @@ def gpu_validation(*f_d, sig2noise_d=None, mask_d=None, validation_method='media
         2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
 
     """
-    validation_gpu = ValidationGPU(f_d[0], mask_d, validation_method, s2n_tol, median_tol, mean_tol, rms_tol)
+    validation_gpu = ValidationGPU(f[0], mask, validation_method, s2n_tol, median_tol, mean_tol, rms_tol)
 
-    return validation_gpu(*f_d, sig2noise_d=sig2noise_d)
+    return validation_gpu(*f, sig2noise=sig2noise)
 
 
 class ValidationGPU:
@@ -65,7 +71,7 @@ class ValidationGPU:
     ----------
     f_shape : GPUArray or tuple
         (ht, wd) of the fields to be validated.
-    mask_d : GPUArray
+    mask : GPUArray
         2D float, mask for the velocity field.
     validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
@@ -80,39 +86,39 @@ class ValidationGPU:
 
     Methods
     -------
-    __call__(*f_d)
+    __call__(*f)
         Returns an array indicating which indices need to be validated.
 
     """
-    def __init__(self, f_shape, mask_d=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
+    def __init__(self, f_shape, mask=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
                  median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
         self.f_shape = f_shape.shape if hasattr(f_shape, 'shape') else tuple(f_shape)
-        if mask_d is not None:
-            _check_arrays(mask_d, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
-        self.mask_d = mask_d
+        if mask is not None:
+            _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
+        self.mask = mask
         self.validation_method = validation_method if not isinstance(validation_method, str) else (validation_method,)
         self.validation_tols = {'s2n': s2n_tol, 'median': median_tol, 'mean': mean_tol, 'rms': rms_tol}
 
-        self._val_locations_d = None
-        self._f_d = None
-        self._f_neighbours_d = None
-        self._f_median_d = None
-        self._f_mean_d = None
+        self._val_locations = None
+        self._f = None
+        self._f_neighbours = None
+        self._f_median = None
+        self._f_mean = None
 
         self._check_validation_methods()
         self._check_validation_tolerances()
 
         # Compute the median velocities to be returned.
-        self._neighbours_present_d = _gpu_find_neighbours(self.f_shape, mask_d)
+        self._neighbours_present = _gpu_find_neighbours(self.f_shape, mask)
 
-    def __call__(self, *f_d, sig2noise_d=None):
+    def __call__(self, *f, sig2noise=None):
         """Returns an array indicating which indices need to be validated.
 
         Parameters
         ----------
-        f_d : GPUArray
+        f : GPUArray
             2D float (m, n), velocity fields to be validated.
-        sig2noise_d : GPUArray, optional
+        sig2noise : GPUArray, optional
             2D float (m, n), signal-to-noise ratio of each velocity.
 
         Returns
@@ -122,13 +128,13 @@ class ValidationGPU:
 
         """
         self.free_data()
-        _check_arrays(*f_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape)
-        self._num_fields = len(f_d)
-        self._f_d = f_d
+        _check_arrays(*f, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape)
+        self._num_fields = len(f)
+        self._f = f
 
         # Do the validations.
         if 's2n' in self.validation_method:
-            self._s2n_validation(sig2noise_d)
+            self._s2n_validation(sig2noise)
         if 'median_velocity' in self.validation_method:
             self._median_validation()
         if 'mean_velocity' in self.validation_method:
@@ -139,104 +145,103 @@ class ValidationGPU:
         # Apply the mask to the final result.
         self._mask_val_locations()
 
-        return self._val_locations_d
+        return self._val_locations
 
     def free_data(self):
-        self._val_locations_d = None
-        self._f_d = None
-        self._f_neighbours_d = None
-        self._f_median_d = None
-        self._f_mean_d = None
+        self._val_locations = None
+        self._f = None
+        self._f_neighbours = None
+        self._f_median = None
+        self._f_mean = None
 
     @property
     def median_d(self):
-        f_median_d = self._get_median()
-        if len(f_median_d) == 1:
-            f_median_d = f_median_d[0]
+        f_median = self._get_median()
+        if len(f_median) == 1:
+            f_median = f_median[0]
 
-        return f_median_d
+        return f_median
 
     @property
     def mean_d(self):
-        f_mean_d = self._get_mean()
-        if len(f_mean_d) == 1:
-            f_mean_d = f_mean_d[0]
+        f_mean = self._get_mean()
+        if len(f_mean) == 1:
+            f_mean = f_mean[0]
 
-        return f_mean_d
+        return f_mean
 
-    def _s2n_validation(self, sig2noise_d):
+    def _s2n_validation(self, sig2noise):
         """Performs signal-to-noise validation on each field."""
-        assert sig2noise_d is not None, 'signal-to-noise validation requires sig2noise_d to be passed.'
-        _check_arrays(sig2noise_d, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
+        assert sig2noise is not None, 'signal-to-noise validation requires sig2noise to be passed.'
+        _check_arrays(sig2noise, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
         s2n_tol = log10(self.validation_tols['s2n'])
 
-        sig2noise_tol_d = sig2noise_d / DTYPE_f(s2n_tol)
-        self._val_locations_d = _local_validation(sig2noise_tol_d, 1, self._val_locations_d)
+        sig2noise_tol = sig2noise / DTYPE_f(s2n_tol)
+        self._val_locations = _local_validation(sig2noise_tol, 1, self._val_locations)
 
     def _median_validation(self):
         """Performs median validation on each field."""
-        f_neighbours_d = self._get_neighbours()
-        f_median_d = self._get_median()
+        f_neighbours = self._get_neighbours()
+        f_median = self._get_median()
         median_tol = self.validation_tols['median']
 
         for k in range(self._num_fields):
-            f_median_fluc_d = _gpu_median_fluc(f_median_d[k], f_neighbours_d[k], self._neighbours_present_d)
-            self._val_locations_d = _neighbour_validation(self._f_d[k], f_median_d[k], f_median_fluc_d,
-                                                          median_tol, self._val_locations_d)
+            f_median_fluc = _gpu_median_fluc(f_median[k], f_neighbours[k], self._neighbours_present)
+            self._val_locations = _neighbour_validation(self._f[k], f_median[k], f_median_fluc,
+                                                        median_tol, self._val_locations)
 
     def _mean_validation(self):
         """Performs mean validation on each field."""
-        f_neighbours_d = self._get_neighbours()
-        f_mean_d = self._get_mean()
+        f_neighbours = self._get_neighbours()
+        f_mean = self._get_mean()
         mean_tol = self.validation_tols['mean']
 
         for k in range(self._num_fields):
-            f_mean_fluc_d = _gpu_mean_fluc(f_mean_d[k], f_neighbours_d[k], self._neighbours_present_d)
-            self._val_locations_d = _neighbour_validation(self._f_d[k], f_mean_d[k], f_mean_fluc_d, mean_tol,
-                                                          self._val_locations_d)
+            f_mean_fluc = _gpu_mean_fluc(f_mean[k], f_neighbours[k], self._neighbours_present)
+            self._val_locations = _neighbour_validation(self._f[k], f_mean[k], f_mean_fluc, mean_tol,
+                                                        self._val_locations)
 
     def _rms_validation(self):
         """Performs RMS validation on each field."""
-        f_neighbours_d = self._get_neighbours()
-        f_mean_d = self._get_mean()
+        f_neighbours = self._get_neighbours()
+        f_mean = self._get_mean()
         rms_tol = self.validation_tols['rms']
 
         for k in range(self._num_fields):
-            f_rms_d = _gpu_rms(f_mean_d[k], f_neighbours_d[k], self._neighbours_present_d)
-            self._val_locations_d = _neighbour_validation(self._f_d[k], f_mean_d[k], f_rms_d, rms_tol,
-                                                          self._val_locations_d)
+            f_rms = _gpu_rms(f_mean[k], f_neighbours[k], self._neighbours_present)
+            self._val_locations = _neighbour_validation(self._f[k], f_mean[k], f_rms, rms_tol, self._val_locations)
 
     def _mask_val_locations(self):
         """Removes masked locations from the validation locations."""
-        if self.mask_d is not None and self._val_locations_d is not None:
-            self._val_locations_d = gpu_mask(self._val_locations_d, self.mask_d)
+        if self.mask is not None and self._val_locations is not None:
+            self._val_locations = gpu_mask(self._val_locations, self.mask)
 
     def _get_neighbours(self):
         """Returns neighbouring values for each field."""
-        if self._f_neighbours_d is None:
-            self._f_neighbours_d = [_gpu_get_neighbours(f_d, self._neighbours_present_d) for f_d in self._f_d]
+        if self._f_neighbours is None:
+            self._f_neighbours = [_gpu_get_neighbours(f, self._neighbours_present) for f in self._f]
 
-        return self._f_neighbours_d
+        return self._f_neighbours
 
     def _get_median(self):
         """Returns field containing median of surrounding points for each field."""
-        f_neighbours_d = self._get_neighbours()
+        f_neighbours = self._get_neighbours()
 
-        if self._f_median_d is None:
-            self._f_median_d = [_gpu_median_velocity(f_neighbours_d[k], self._neighbours_present_d)
-                                for k in range(self._num_fields)]
+        if self._f_median is None:
+            self._f_median = [_gpu_median_velocity(f_neighbours[k], self._neighbours_present)
+                              for k in range(self._num_fields)]
 
-        return self._f_median_d
+        return self._f_median
 
     def _get_mean(self):
         """Returns field containing mean of surrounding points for each field."""
-        f_neighbours_d = self._get_neighbours()
+        f_neighbours = self._get_neighbours()
 
-        if self._f_mean_d is None:
-            self._f_mean_d = [_gpu_mean_velocity(f_neighbours_d[k], self._neighbours_present_d)
-                              for k in range(self._num_fields)]
+        if self._f_mean is None:
+            self._f_mean = [_gpu_mean_velocity(f_neighbours[k], self._neighbours_present)
+                            for k in range(self._num_fields)]
 
-        return self._f_mean_d
+        return self._f_mean
 
     def _check_validation_methods(self):
         """Checks that input validation methods are allowed."""
@@ -270,35 +275,35 @@ __global__ void neighbour_validation(int *val_locations, float *f, float *f_mean
 """)
 
 
-def _local_validation(f_d, tol, val_locations_d=None):
+def _local_validation(f, tol, val_locations=None):
     """Updates the validation list by checking if the array elements exceed the tolerance."""
-    size = f_d.size
+    size = f.size
 
-    if val_locations_d is None:
-        val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
+    if val_locations is None:
+        val_locations = gpuarray.zeros_like(f, dtype=DTYPE_i)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     local_validation = mod_validation.get_function('local_validation')
-    local_validation(val_locations_d, f_d, DTYPE_f(tol), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    local_validation(val_locations, f, DTYPE_f(tol), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    return val_locations_d
+    return val_locations
 
 
-def _neighbour_validation(f_d, f_mean_d, f_mean_fluc_d, tol, val_locations_d=None):
+def _neighbour_validation(f, f_mean, f_mean_fluc, tol, val_locations=None):
     """Updates the validation list by checking if the neighbouring elements exceed the tolerance."""
-    size = f_d.size
+    size = f.size
 
-    if val_locations_d is None:
-        val_locations_d = gpuarray.zeros_like(f_d, dtype=DTYPE_i)
+    if val_locations is None:
+        val_locations = gpuarray.zeros_like(f, dtype=DTYPE_i)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     neighbour_validation = mod_validation.get_function('neighbour_validation')
-    neighbour_validation(val_locations_d, f_d, f_mean_d, f_mean_fluc_d, DTYPE_f(tol), DTYPE_i(size),
-                         block=(block_size, 1, 1), grid=(grid_size, 1))
+    neighbour_validation(val_locations, f, f_mean, f_mean_fluc, DTYPE_f(tol), DTYPE_i(size), block=(block_size, 1, 1),
+                         grid=(grid_size, 1))
 
-    return val_locations_d
+    return val_locations
 
 
 mod_neighbours = SourceModule("""
@@ -335,14 +340,14 @@ __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
 """)
 
 
-def _gpu_find_neighbours(shape, mask_d=None):
+def _gpu_find_neighbours(shape, mask=None):
     """An array that stores if a point has neighbours in a 3x3 grid surrounding it.
 
     Parameters
     ----------
     shape : tuple
         Int (m, n), shape of the array to find neighbours for.
-    mask_d : GPUArray
+    mask : GPUArray
         2D int (m, n), value of one where masked.
 
     Returns
@@ -353,28 +358,28 @@ def _gpu_find_neighbours(shape, mask_d=None):
     """
     m, n = shape
     size = m * n * 8
-    if mask_d is None:
-        mask_d = gpuarray.zeros((m, n), dtype=DTYPE_i)
+    if mask is None:
+        mask = gpuarray.zeros((m, n), dtype=DTYPE_i)
 
-    neighbours_present_d = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
+    neighbours_present = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     find_neighbours = mod_neighbours.get_function('find_neighbours')
-    find_neighbours(neighbours_present_d, mask_d, DTYPE_i(n), DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1),
+    find_neighbours(neighbours_present, mask, DTYPE_i(n), DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1),
                     grid=(grid_size, 1))
 
-    return neighbours_present_d
+    return neighbours_present
 
 
-def _gpu_get_neighbours(f_d, neighbours_present_d):
+def _gpu_get_neighbours(f, neighbours_present):
     """An array that stores the values of the velocity of the surrounding neighbours.
 
     Parameters
     ----------
-    f_d : GPUArray
+    f : GPUArray
         2D float (m, n), values from which to get neighbours.
-    neighbours_present_d : GPUArray
+    neighbours_present : GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -383,18 +388,18 @@ def _gpu_get_neighbours(f_d, neighbours_present_d):
         4D float (m, n, 8), values of u and v of the neighbours of a point.
 
     """
-    m, n = f_d.shape
-    size = f_d.size * 8
+    m, n = f.shape
+    size = f.size * 8
 
-    neighbours_d = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
+    neighbours = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     get_neighbours = mod_neighbours.get_function('get_neighbours')
-    get_neighbours(neighbours_d, neighbours_present_d, f_d, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1),
+    get_neighbours(neighbours, neighbours_present, f, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1),
                    grid=(grid_size, 1))
 
-    return neighbours_d
+    return neighbours
 
 
 mod_median_velocity = SourceModule("""
@@ -507,14 +512,14 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
 """)
 
 
-def _gpu_median_velocity(f_neighbours_d, neighbours_present_d):
+def _gpu_median_velocity(f_neighbours, neighbours_present):
     """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    f_neighbours_d: GPUArray
+    f_neighbours: GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present_d: GPUArray
+    neighbours_present: GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -523,30 +528,30 @@ def _gpu_median_velocity(f_neighbours_d, neighbours_present_d):
         2D float (m, n), mean velocities at each point.
 
     """
-    m, n, _ = f_neighbours_d.shape
+    m, n, _ = f_neighbours.shape
     size = m * n
 
-    f_median_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     median_velocity = mod_median_velocity.get_function('median_velocity')
-    median_velocity(f_median_d, f_neighbours_d, neighbours_present_d, DTYPE_i(size), block=(block_size, 1, 1),
+    median_velocity(f_median, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
                     grid=(grid_size, 1))
 
-    return f_median_d
+    return f_median
 
 
-def _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d):
+def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
     """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    f_median_d : GPUArray
+    f_median : GPUArray
         2D float (m, n), mean velocities around each point.
-    f_neighbours_d : GPUArray
+    f_neighbours : GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present_d : GPUArray
+    neighbours_present : GPUArray
         4D int  (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -555,18 +560,18 @@ def _gpu_median_fluc(f_median_d, f_neighbours_d, neighbours_present_d):
         2D float (m, n), RMS velocities at each point.
 
     """
-    m, n = f_median_d.shape
-    size = f_median_d.size
+    m, n = f_median.shape
+    size = f_median.size
 
-    f_median_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median_fluc = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     median_u_fluc = mod_median_velocity.get_function('median_fluc')
-    median_u_fluc(f_median_fluc_d, f_median_d, f_neighbours_d, neighbours_present_d, DTYPE_i(size),
+    median_u_fluc(f_median_fluc, f_median, f_neighbours, neighbours_present, DTYPE_i(size),
                   block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    return f_median_fluc_d
+    return f_median_fluc
 
 
 mod_mean_velocity = SourceModule("""
@@ -635,14 +640,14 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
 """)
 
 
-def _gpu_mean_velocity(f_neighbours_d, neighbours_present_d):
+def _gpu_mean_velocity(f_neighbours, neighbours_present):
     """Calculates the mean velocity on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    f_neighbours_d: GPUArray
+    f_neighbours: GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present_d: GPUArray
+    neighbours_present: GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -651,35 +656,30 @@ def _gpu_mean_velocity(f_neighbours_d, neighbours_present_d):
         2D float (m, n), mean velocities at each point.
 
     """
-    m, n, _ = f_neighbours_d.shape
+    m, n, _ = f_neighbours.shape
     size = m * n
 
-    f_mean_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_mean = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     mean_velocity = mod_mean_velocity.get_function('mean_velocity')
-    mean_velocity(f_mean_d, f_neighbours_d, neighbours_present_d, DTYPE_i(size), block=(block_size, 1, 1),
+    mean_velocity(f_mean, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
                   grid=(grid_size, 1))
 
-    return f_mean_d
+    return f_mean
 
 
-mod_mean_fluc = SourceModule("""
-
-""")
-
-
-def _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d):
+def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
     """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    f_mean_d: GPUArray
+    f_mean: GPUArray
         2D float (m, n), mean velocities around each point.
-    f_neighbours_d : GPUArray
+    f_neighbours : GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present_d : GPUArray
+    neighbours_present : GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -688,30 +688,30 @@ def _gpu_mean_fluc(f_mean_d, f_neighbours_d, neighbours_present_d):
         2D float (m, n), rms velocities at each point.
 
     """
-    m, n = f_mean_d.shape
-    size = f_mean_d.size
+    m, n = f_mean.shape
+    size = f_mean.size
 
-    f_fluc_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_fluc = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     mean_fluc = mod_mean_velocity.get_function('mean_fluc')
-    mean_fluc(f_fluc_d, f_mean_d, f_neighbours_d, neighbours_present_d, DTYPE_i(size), block=(block_size, 1, 1),
+    mean_fluc(f_fluc, f_mean, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
               grid=(grid_size, 1))
 
-    return f_fluc_d
+    return f_fluc
 
 
-def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
+def _gpu_rms(f_mean, neighbours, neighbours_present):
     """Calculates the rms velocity in a 3x3 grid around each point in a velocity field.
 
     Parameters
     ----------
-    f_mean_d : GPUArray
+    f_mean : GPUArray
         2D float (m, n), mean velocities around each point.
-    neighbours_d : GPUArray
+    neighbours : GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present_d : GPUArray
+    neighbours_present : GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
 
     Returns
@@ -720,15 +720,14 @@ def _gpu_rms(f_mean_d, neighbours_d, neighbours_present_d):
         2D float (m, n), RMS velocities at each point.
 
     """
-    m, n = f_mean_d.shape
-    size = f_mean_d.size
+    m, n = f_mean.shape
+    size = f_mean.size
 
-    f_rms_d = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_rms = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     u_rms = mod_mean_velocity.get_function('rms')
-    u_rms(f_rms_d, f_mean_d, neighbours_d, neighbours_present_d, DTYPE_i(size), block=(block_size, 1, 1),
-          grid=(grid_size, 1))
+    u_rms(f_rms, f_mean, neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
-    return f_rms_d
+    return f_rms
