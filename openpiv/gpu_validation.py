@@ -31,7 +31,8 @@ def gpu_validation(*f,
                    s2n_tol=S2N_TOL,
                    median_tol=MEDIAN_TOL,
                    mean_tol=MEAN_TOL,
-                   rms_tol=RMS_TOL):
+                   rms_tol=RMS_TOL
+                   ):
     """Validation for vector-fields that returns an array indicating which location need to be validated.
 
     Parameters
@@ -83,11 +84,6 @@ class ValidationGPU:
         Tolerance for mean velocity validation.
     rms_tol : float, optional
         Tolerance for rms validation.
-
-    Methods
-    -------
-    __call__(*f)
-        Returns an array indicating which indices need to be validated.
 
     """
     def __init__(self, f_shape, mask=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
@@ -155,7 +151,7 @@ class ValidationGPU:
         self._f_mean = None
 
     @property
-    def median_d(self):
+    def median(self):
         f_median = self._get_median()
         if len(f_median) == 1:
             f_median = f_median[0]
@@ -163,7 +159,7 @@ class ValidationGPU:
         return f_median
 
     @property
-    def mean_d(self):
+    def mean(self):
         f_mean = self._get_mean()
         if len(f_mean) == 1:
             f_mean = f_mean[0]

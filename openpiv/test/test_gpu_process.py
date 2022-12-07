@@ -106,7 +106,7 @@ def test_gpu_interpolate(mask_d):
     interp_2d = interp.interp2d(x0[0, :], y0[:, 0], f0)
     f1 = np.flip(interp_2d(x1[0, :], y1[:, 0]), axis=0)  # interp2d returns interpolation results with increasing y
 
-    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
+    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d)
     f1_gpu = f1_d.get()
 
     assert np.allclose(f1, f1_gpu, _identity_tolerance)
@@ -134,7 +134,7 @@ def test_gpu_interpolate_mask(ndarrays_regression):
     y0_d = gpuarray.to_gpu(y0[:, 0])
     y1_d = gpuarray.to_gpu(y1[:, 0])
 
-    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask_d=mask_d)
+    f1_d = gpu_process.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d)
     ndarrays_regression.check({'f1': f1_d.get()})
 
 

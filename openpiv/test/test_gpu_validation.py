@@ -133,7 +133,7 @@ def mask_d(peaks_d):
 @pytest.fixture
 def sig2noise_d(correlation_gpu, piv_field):
     _, _ = correlation_gpu(piv_field)
-    sig2noise_d = correlation_gpu.sig2noise_d
+    sig2noise_d = correlation_gpu.sig2noise
 
     return sig2noise_d
 
@@ -166,8 +166,8 @@ def test_validation_gpu_median_mean(num_fields, type_, validation_gpu, peaks_d):
     validation_gpu._f = peaks_d[:num_fields]
     validation_gpu._num_fields = num_fields
 
-    assert isinstance(validation_gpu.median_d, type_)
-    assert isinstance(validation_gpu.mean_d, type_)
+    assert isinstance(validation_gpu.median, type_)
+    assert isinstance(validation_gpu.mean, type_)
 
 
 def test_validation_gpu_s2n_validation(validation_gpu, sig2noise_d):

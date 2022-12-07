@@ -57,12 +57,12 @@ def gpu_smoothn(*y, **kwargs):
     n = len(y)
 
     # Get data from GPUArrays.
-    y = [y.get() for y in y]
+    y_h = [y.get() for y in y]
     for key, value in kwargs.items():
         if isinstance(value, gpuarray.GPUArray):
             kwargs[key] = value.get()
 
-    z = smoothn(*y, **kwargs)[0]
+    z = smoothn(*y_h, **kwargs)[0]
     if n == 1:
         z = gpuarray.to_gpu(z)
     else:
@@ -81,7 +81,8 @@ def smoothn(*y,
             tol_z=1e-3,
             weight_method='bisquare',
             smooth_order=2,
-            spacing=None):
+            spacing=None
+            ):
     """Robust spline smoothing for 1-D to n-D data.
 
     smoothn provides a fast, automatized and robust discretized smoothing spline for data of any dimension. z =
