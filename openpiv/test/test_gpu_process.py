@@ -273,7 +273,7 @@ def test_sig2noise(s2n_method):
             'sig2noise_method': s2n_method,
             }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
 @pytest.mark.parametrize('subpixel_method', ('gaussian', 'centroid', 'parabolic'))
@@ -292,7 +292,7 @@ def test_subpixel_peak(subpixel_method):
             'subpixel_method': subpixel_method,
             }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
 # s2n must not cause invalid numbers to be passed to smoothn.
@@ -311,7 +311,7 @@ def test_validation(validation_method):
             'validation_method': validation_method,
             }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
 
 # sweep the input variables to ensure everything is same

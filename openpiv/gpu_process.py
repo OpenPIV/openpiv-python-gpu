@@ -347,23 +347,21 @@ class PIVFieldGPU:
         self.spacing = spacing
         self.shape = get_field_shape(frame_shape, window_size, spacing)
         self.size = prod(self.shape)
-        self._x, self._y = get_field_coords(frame_shape, window_size, spacing, center_field=center_field)
         assert kwargs == {}
 
+        self._x, self._y = get_field_coords(frame_shape, window_size, spacing, center_field=center_field)
+        self._x_grid = gpuarray.to_gpu(self._x[0, :].astype(DTYPE_f))
+        self._y_grid = gpuarray.to_gpu(self._y[:, 0].astype(DTYPE_f))
         self.is_masked = frame_mask is not None
         self.mask = _get_field_mask(self._x, self._y, frame_mask)
         self._mask = gpuarray.to_gpu(self.mask)
 
-        self._x_grid = gpuarray.to_gpu(self._x[0, :].astype(DTYPE_f))
-        self._y_grid = gpuarray.to_gpu(self._y[:, 0].astype(DTYPE_f))
-
-    # TODO make this the only way to get mask
-    def get_mask(self, return_zeros=False):
+    def get_mask(self, return_array=False):
         """Returns GPUArray containing field mack if frame is masked, None otherwise.
 
         Parameters
         ----------
-        return_zeros : bool
+        return_array : bool
             Whether to return an array of zeros if field when mask is None. False returns None when mask is None.
 
         Returns
@@ -371,7 +369,7 @@ class PIVFieldGPU:
         GPUArray or None
 
         """
-        return self._mask if self.is_masked else None
+        return self._mask if (self.is_masked or return_array) else None
 
     def free_data(self):
         """Frees data from GPU."""
@@ -505,7 +503,7 @@ def gpu_piv(frame_a, frame_b,
     return_sig2noise = kwargs['return_sig2noise'] if 'return_sig2noise' in kwargs else False
     x, y = piv_gpu.coords
     u, v = piv_gpu(frame_a, frame_b)
-    mask = piv_gpu.mask
+    mask = piv_gpu.field_mask
     s2n = piv_gpu.s2n if return_sig2noise else None
     return x, y, u, v, mask, s2n
 
@@ -593,8 +591,7 @@ class PIVGPU:
         self.ws_iters = (window_size_iters,) if isinstance(window_size_iters, int) else tuple(window_size_iters)
         self.overlap_ratio = float(overlap_ratio)
         self.dt = dt
-        # TODO rename to mask
-        self.frame_mask = mask.astype(DTYPE_i) if mask is not None else None
+        self.mask = mask.astype(DTYPE_i) if mask is not None else None
         self.deform = deform
         self.smooth = smooth
         self.nb_validation_iter = nb_validation_iter
@@ -612,7 +609,7 @@ class PIVGPU:
         self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
         self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
 
-        self._frame_mask = gpuarray.to_gpu(self.frame_mask) if mask is not None else None
+        self._frame_mask = gpuarray.to_gpu(self.mask) if mask is not None else None
         self._nb_iter = sum(self.ws_iters)
         self._corr = None
         self._piv_fields = None
@@ -689,9 +686,8 @@ class PIVGPU:
     def coords(self):
         return self._piv_fields[-1].coords
 
-    # TODO call this field_mask
     @property
-    def mask(self):
+    def field_mask(self):
         return self._piv_fields[-1].mask
 
     @property
@@ -702,7 +698,7 @@ class PIVGPU:
         """Frees data from GPU."""
         self._corr = None
         self._piv_fields = None
-        self.frame_mask = None
+        self.mask = None
 
     def _init_fields(self):
         """Creates piv-field object at each iteration."""
@@ -713,7 +709,7 @@ class PIVGPU:
             self._piv_fields.append(PIVFieldGPU(self.frame_shape,
                                                 window_size,
                                                 spacing,
-                                                frame_mask=self.frame_mask,
+                                                frame_mask=self.mask,
                                                 center_field=self.center_field))
 
     def _mask_frame(self, frame_a, frame_b):
@@ -739,7 +735,7 @@ class PIVGPU:
 
     def _get_window_deformation(self, dp_u, dp_v):
         """Returns the shift and strain arguments to the correlation class."""
-        mask = self._piv_field_k._mask
+        mask = self._piv_field_k.get_mask(return_array=True)
         shift = None
         strain = None
 
@@ -752,7 +748,7 @@ class PIVGPU:
 
     def _update_values(self, i_peak, j_peak, dp_x, dp_y):
         """Updates the velocity values after each iteration."""
-        mask = self._piv_field_k._mask
+        mask = self._piv_field_k.get_mask(return_array=True)
 
         if dp_x is None:
             u = gpu_mask(j_peak, mask)
@@ -871,8 +867,8 @@ class PIVGPU:
             raise ValueError('overlap ratio must be between 0 and 1.')
         if self.dt != float(self.dt):
             raise ValueError('dt must be a number.')
-        if self.frame_mask is not None:
-            if self.frame_mask.shape != self.frame_shape:
+        if self.mask is not None:
+            if self.mask.shape != self.frame_shape:
                 raise ValueError('mask is not same shape as frame.')
         if self.deform != bool(self.deform):
             raise ValueError('deform must have a boolean value.')
@@ -1540,10 +1536,7 @@ def _gpu_cross_correlate(win_a, win_b):
     cufft.fft(win_b, win_b_fft, plan_forward)
 
     # Multiply the FFTs.
-    win_a_fft = win_a_fft.conj()
-    win_fft_product = win_b_fft * win_a_fft
-    # TODO make this one line
-    # win_fft_product = win_a_fft.conj() * win_b_fft
+    win_fft_product = win_b_fft * win_a_fft.conj()
 
     # Inverse transform.
     plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
