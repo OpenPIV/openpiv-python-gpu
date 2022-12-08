@@ -1,10 +1,9 @@
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA GPU Support.
 
-All identifiers ending with '_d' exist on the GPU and not the CPU. The GPU is referred to as the device, and therefore
-"_d" signifies that it is a device variable. Please adhere to this standard as it makes developing and debugging much
-easier. Note that all data must 32-bit at most to be stored on GPUs. Numpy types should be always 32-bit for
-compatibility with GPU. Scalars should be python types in general to work as function arguments. The block-size
-argument to GPU kernels should be multiples of 32 to avoid wasting GPU resources--e.g. (32, 1, 1), (8, 8, 1), etc.
+All identifiers ending with '_d' exist on the GPU and not the CPU. Note that all data must 32-bit at most to be stored
+on GPUs. Numpy types should be always 32-bit for compatibility with GPU. Scalars should be python types in general to
+work as function arguments. The block-size argument to GPU kernels should be multiples of 32 to avoid wasting GPU
+resources--e.g. (32, 1, 1), (8, 8, 1), etc.
 
 """
 import logging
@@ -388,6 +387,25 @@ class PIVFieldGPU:
         return _get_center_buffer(self.frame_shape, self.window_size, self.spacing)
 
 
+class PIVSettings:
+
+    def __init__(self, kwargs):
+        self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
+        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else S2N_TOL
+        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else MEDIAN_TOL
+        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else MEAN_TOL
+        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else RMS_TOL
+        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else SMOOTHING_PAR
+        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
+        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
+        self.s2n_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else S2N_METHOD
+        self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
+        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
+
+    def check_inputs(self):
+        pass
+
+
 def gpu_piv(frame_a, frame_b,
             mask=None,
             window_size_iters=(1, 2),
@@ -609,13 +627,15 @@ class PIVGPU:
         self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
         self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
 
-        self._frame_mask = gpuarray.to_gpu(self.mask) if mask is not None else None
+        # self.settings = PIVSettings()
+        # self.settings.check_inputs()
+
         self._nb_iter = sum(self.ws_iters)
         self._corr = None
         self._piv_fields = None
+        self._frame_mask = None
 
         self._check_inputs()
-        self._init_fields()
 
     def __call__(self, frame_a, frame_b):
         """Processes an image pair.
@@ -650,7 +670,7 @@ class PIVGPU:
         # MAIN LOOP
         for k in range(self._nb_iter):
             self._k = k
-            self._piv_field_k = self._piv_fields[k]
+            self._piv_field_k = self._get_piv_fields()[k]
             logging.info('ITERATION {}'.format(k))
 
             # CROSS-CORRELATION
@@ -684,11 +704,13 @@ class PIVGPU:
 
     @property
     def coords(self):
-        return self._piv_fields[-1].coords
+        piv_fields = self._get_piv_fields()
+        return piv_fields[-1].coords
 
     @property
     def field_mask(self):
-        return self._piv_fields[-1].mask
+        piv_fields = self._get_piv_fields()
+        return piv_fields[-1].mask
 
     @property
     def s2n(self):
@@ -698,10 +720,17 @@ class PIVGPU:
         """Frees data from GPU."""
         self._corr = None
         self._piv_fields = None
-        self.mask = None
+        self._frame_mask = None
 
-    def _init_fields(self):
-        """Creates piv-field object at each iteration."""
+    def _get_piv_fields(self):
+        """Returns piv-field object for each iteration."""
+        if self._piv_fields is None:
+            self._init_piv_fields()
+
+        return self._piv_fields
+
+    def _init_piv_fields(self):
+        """Creates piv-field objects for all iterations."""
         self._piv_fields = []
         for window_size in _get_window_sizes(self.ws_iters, self.min_window_size):
             window_size = window_size
@@ -715,15 +744,23 @@ class PIVGPU:
     def _mask_frame(self, frame_a, frame_b):
         """Mask the frames before sending to device."""
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2)
+        frame_mask = self._get_frame_mask()
 
-        if self._frame_mask is not None:
-            frame_a_masked = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), self._frame_mask)
-            frame_b_masked = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), self._frame_mask)
+        if frame_mask is not None:
+            frame_a_masked = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), frame_mask)
+            frame_b_masked = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), frame_mask)
         else:
             frame_a_masked = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
             frame_b_masked = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
         return frame_a_masked, frame_b_masked
+
+    def _get_frame_mask(self):
+        """Returns the mask for the frame as a GPUArray."""
+        if self.mask is not None and self._frame_mask is None:
+            self._frame_mask = gpuarray.to_gpu(self.mask)
+
+        return self._frame_mask
 
     def _get_extended_size(self):
         """Returns the extended size used during the first iteration."""
@@ -802,6 +839,7 @@ class PIVGPU:
     def _gpu_replace_vectors(self, u, v, u_previous, v_previous, u_mean, v_mean, val_locations):
         """Replace spurious vectors by the mean or median of the surrounding points."""
         _check_arrays(u, v, u_mean, v_mean, val_locations, array_type=gpuarray.GPUArray, shape=u.shape)
+        piv_fields = self._get_piv_fields()
 
         # First iteration, just replace with mean velocity.
         if self._k == 0:
@@ -809,16 +847,16 @@ class PIVGPU:
             v = gpuarray.if_positive(val_locations, v_mean, v)
 
         # Case if different dimensions: interpolation using previous iteration.
-        elif self._k > 0 and self._piv_field_k.shape != self._piv_fields[self._k - 1].shape:
-            x0, y0 = self._piv_fields[self._k - 1].grid_coords
-            x1, y1 = self._piv_fields[self._k].grid_coords
-            mask = self._piv_fields[self._k - 1].get_mask()
+        elif self._k > 0 and self._piv_field_k.shape != piv_fields[self._k - 1].shape:
+            x0, y0 = piv_fields[self._k - 1].grid_coords
+            x1, y1 = self._piv_field_k.grid_coords
+            mask = piv_fields[self._k - 1].get_mask()
 
             u = _interpolate_replace(x0, y0, x1, y1, u_previous, u, val_locations, mask=mask)
             v = _interpolate_replace(x0, y0, x1, y1, v_previous, v, val_locations, mask=mask)
 
         # Case if same dimensions.
-        elif self._k > 0 and self._piv_field_k.shape == self._piv_fields[self._k - 1].shape:
+        elif self._k > 0 and self._piv_field_k.shape == piv_fields[self._k - 1].shape:
             u = gpuarray.if_positive(val_locations, u_previous, u)
             v = gpuarray.if_positive(val_locations, v_previous, v)
 
@@ -827,12 +865,13 @@ class PIVGPU:
     def _get_next_iteration_predictions(self, u, v):
         """Returns the velocity field to begin the next iteration."""
         _check_arrays(u, v, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u.shape, ndim=2)
+        piv_fields = self._get_piv_fields()
         x0, y0 = self._piv_field_k.grid_coords
-        x1, y1 = self._piv_fields[self._k + 1].grid_coords
+        x1, y1 = piv_fields[self._k + 1].grid_coords
         mask = self._piv_field_k.get_mask()
 
         # Interpolate if dimensions do not agree.
-        if self._piv_fields[self._k + 1].window_size != self._piv_field_k.window_size:
+        if piv_fields[self._k + 1].window_size != self._piv_field_k.window_size:
             dp_u = gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
             dp_v = gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
         else:
@@ -1220,7 +1259,6 @@ def _get_spacing(window_size, overlap_ratio):
 def _get_field_mask(x, y, frame_mask=None):
     """Creates field mask from frame mask."""
     if frame_mask is not None:
-        # TODO do this on GPU with .get()
         mask = frame_mask[y.astype(DTYPE_i), x.astype(DTYPE_i)]
     else:
         mask = np.zeros_like(x, dtype=DTYPE_i)
