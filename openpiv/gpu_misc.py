@@ -114,8 +114,8 @@ def gpu_scalar_mod(f, m):
     d_type = f.dtype
     size = f.size
 
-    i = gpuarray.empty_like(f, dtype=d_type)
-    r = gpuarray.empty_like(f, dtype=d_type)
+    i = gpuarray.empty_like(f)
+    r = gpuarray.empty_like(f)
 
     block_size = 32
     grid_size = ceil(size / block_size)
@@ -211,43 +211,21 @@ def gpu_remove_negative(f):
 
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
-    if not all([array.flags.c_contiguous for array in arrays]):
-        raise ValueError('{} input(s) must be C-contiguous.'.format(len(arrays)))
-    if array_type is not None:
-        if not all([isinstance(array, array_type) for array in arrays]):
-            raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
-    if dtype is not None:
-        if not all([array.dtype == dtype for array in arrays]):
-            raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
-    if shape is not None:
-        if not all([array.shape == shape for array in arrays]):
-            raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
-    if ndim is not None:
-        if not all([array.ndim == ndim for array in arrays]):
-            raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
-    if size is not None:
-        if not all([array.size == size for array in arrays]):
-            raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
-
-
-# TODO compare speed with above function.
-# def _check_arrays1(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
-#     """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
-#     for array in arrays:
-#         if not array.flags.c_contiguous:
-#             raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
-#         if array_type is not None:
-#             if not isinstance(array, array_type):
-#                 raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
-#         if dtype is not None:
-#             if not array.dtype == dtype:
-#                 raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
-#         if shape is not None:
-#             if not array.shape == shape:
-#                 raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
-#         if ndim is not None:
-#             if not array.ndim == ndim:
-#                 raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
-#         if size is not None:
-#             if not array.size == size:
-#                 raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
+    for array in arrays:
+        if not array.flags.c_contiguous:
+            raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
+        if array_type is not None:
+            if not isinstance(array, array_type):
+                raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
+        if dtype is not None:
+            if not array.dtype == dtype:
+                raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
+        if shape is not None:
+            if not array.shape == shape:
+                raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
+        if ndim is not None:
+            if not array.ndim == ndim:
+                raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
+        if size is not None:
+            if not array.size == size:
+                raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
