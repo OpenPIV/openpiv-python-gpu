@@ -11,6 +11,8 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
+_BLOCK_SIZE = 64
+
 mod_mask = SourceModule("""
 __global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
 {
@@ -55,7 +57,7 @@ def gpu_mask(f, mask):
 
     f_masked = gpuarray.empty_like(f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     if d_type == DTYPE_f:
         mask_gpu = mod_mask.get_function('gpu_mask_f')
@@ -117,7 +119,7 @@ def gpu_scalar_mod(f, m):
     i = gpuarray.empty_like(f)
     r = gpuarray.empty_like(f)
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     if d_type == DTYPE_f:
         scalar_mod_gpu = mod_scalar_mod.get_function('scalar_mod_f')
@@ -156,7 +158,7 @@ def gpu_remove_nan(f):
     _check_arrays(f, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     size = f.size
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     replace_nan = mod_replace_nan.get_function('replace_nan')
     replace_nan(f, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
@@ -198,7 +200,7 @@ def gpu_remove_negative(f):
     d_type = f.dtype
     size = f.size
 
-    block_size = 32
+    block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     if d_type == DTYPE_f:
         replace_negative = mod_replace_negative.get_function('replace_negative_f')
@@ -209,23 +211,54 @@ def gpu_remove_negative(f):
     replace_negative(f, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
-def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None):
-    """Checks that all array inputs match either each other's or the given array type, dtype, shape and dim."""
+def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None, c_contiguous=True):
+    """Checks that all arrays match the given attributes."""
     for array in arrays:
-        if not array.flags.c_contiguous:
-            raise TypeError('{} input(s) must be C-contiguous.'.format(len(arrays)))
         if array_type is not None:
-            if not isinstance(array, array_type):
-                raise TypeError('{} input(s) must be {}.'.format(len(arrays), array_type))
+            _check_array_type(array, array_type)
         if dtype is not None:
-            if not array.dtype == dtype:
-                raise ValueError('{} input(s) must have dtype {}.'.format(len(arrays), dtype))
+            _check_array_dtype(array, dtype)
         if shape is not None:
-            if not array.shape == shape:
-                raise ValueError('{} input(s) must have shape {}.'.format(len(arrays), shape))
+            _check_array_shape(array, shape)
         if ndim is not None:
-            if not array.ndim == ndim:
-                raise ValueError('{} input(s) must have ndim {}.'.format(len(arrays), ndim))
+            _check_array_ndim(array, ndim)
         if size is not None:
-            if not array.size == size:
-                raise ValueError('{} input(s) must have size {}.'.format(len(arrays), size))
+            _check_array_size(array, size)
+        if c_contiguous is not None:
+            _check_array_c_contiguous(array)
+
+
+def _check_array_c_contiguous(array):
+    """Checks that arrays are C-contiguous"""
+    if not array.flags.c_contiguous:
+        raise TypeError('Array(s) must be C-contiguous.')
+
+
+def _check_array_type(array, array_type):
+    """Checks that arrays are the correct type."""
+    if not isinstance(array, array_type):
+        raise TypeError('Array(s) must be {}.')
+
+
+def _check_array_dtype(array, dtype):
+    """Checks that arrays have the correct dtype."""
+    if not array.dtype == dtype:
+        raise ValueError('Array(s) must have dtype {}.')
+
+
+def _check_array_shape(array, shape):
+    """Checks that arrays have the correct shape."""
+    if not array.shape == shape:
+        raise ValueError('Array(s) must have shape {}.')
+
+
+def _check_array_ndim(array, ndim):
+    """Checks that arrays have the correct ndim."""
+    if not array.ndim == ndim:
+        raise ValueError('Array(s) must have ndim {}.')
+
+
+def _check_array_size(array, size):
+    """Checks that arrays have the correct size."""
+    if not array.size == size:
+        raise ValueError('Array(s) must have size {}.')
