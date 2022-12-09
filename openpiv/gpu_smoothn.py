@@ -51,6 +51,8 @@ def gpu_smoothn(*y, **kwargs):
     -------
     GPUArray
         nD float, same size as y_d. Smoothed field.
+    **kwargs
+        Arguments to smoothn. See smoothn().
 
     """
     _check_arrays(*y, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
@@ -71,7 +73,8 @@ def gpu_smoothn(*y, **kwargs):
     return z
 
 
-def smoothn(*y,
+def smoothn(
+            *y,
             mask=None,
             w=None,
             s=None,
@@ -96,16 +99,16 @@ def smoothn(*y,
     ----------
     y : ndarray
         Input array can be numeric or logical. The returned array is of type double.
-    mask : ndarray, optional
+    mask : ndarray or None, optional
         Locations where the data should be masked.
-    w : ndarray, optional
+    w : ndarray or None, optional
         Specifies a weighting array w of real positive values, that must have the same size as y. Note that a nil weight
         corresponds to a missing value.
-    s : float, optional
+    s : float or None, optional
         Smooths the array y using the smoothing parameter s. s must be a real positive scalar. The larger s is, the
         smoother the output will be. If the smoothing parameter s is omitted (see previous option) or empty (i.e. s =
         None), it is automatically determined using the generalized cross-validation (GCV) method.
-    robust : bool, optional
+    robust : bool or None, optional
         Carries out a robust smoothing that minimizes the influence of outlying data.
     max_iter : int, optional
         Maximum number of iterations allowed (default = 100).
@@ -117,7 +120,7 @@ def smoothn(*y,
         Weight function for robust smoothing.
     smooth_order : {0, 1, 2}, optional
         Order criterion.
-    spacing : ndarray or iterable, optional
+    spacing : ndarray or iterable or None, optional
         Spacing between points in each dimension.
 
     Returns
@@ -331,9 +334,9 @@ def gpu_fft(y, norm='backward', full_frequency=False):
     ----------
     y : GPUArray
         1D data to be transformed, with serial data along rows.
-    norm : {'forward', 'backward', 'ortho'}
+    norm : {'forward', 'backward', 'ortho'}, optional
         Normalization of the forward-backward transform pair.
-    full_frequency : bool
+    full_frequency : bool or None, optional
         Whether to return the full or non-redundant Fourier coefficients.
 
     Returns
@@ -368,11 +371,11 @@ def gpu_ifft(y, norm='backward', inverse_width=None, full_frequency=False):
     ----------
     y : GPUArray
         1D data to be transformed, with serial data along rows.
-    norm : {'forward', 'backward', 'ortho'}
+    norm : {'forward', 'backward', 'ortho'}, optional
         Normalization of the forward-backward transform pair.
-    inverse_width : int
+    inverse_width : int or None, optional
         Size of the inverse transform. This ensures that the forward-backward pair is the same size.
-    full_frequency : bool
+    full_frequency : bool or None, optional
         Whether the transform data includes redundant frequencies.
 
     Returns
@@ -410,7 +413,7 @@ def gpu_dct(y, norm='backward'):
     ----------
     y : GPUArray
         1D data to be transformed, with serial data along rows.
-    norm : {'forward', 'backward', 'ortho'}
+    norm : {'forward', 'backward', 'ortho'}, optional
         Normalization of the forward-backward transform pair.
 
     Returns
@@ -468,7 +471,7 @@ def gpu_idct(y, norm='backward'):
     ----------
     y : GPUArray
         1D data to be transformed, with serial data along rows.
-    norm : {'forward', 'backward', 'ortho'}
+    norm : {'forward', 'backward', 'ortho'}, optional
         Normalization of the forward-backward transform pair.
 
     Returns

@@ -269,8 +269,8 @@ def test_sig2noise(s2n_method):
             'smooth': True,
             'nb_validation_iter': 2,
             'validation_method': 'median_velocity',
-            'return_sig2noise': True,
-            'sig2noise_method': s2n_method,
+            'return_s2n': True,
+            's2n_method': s2n_method,
             }
 
     _ = gpu_process.gpu_piv(frame_a, frame_b, **args)

@@ -41,9 +41,8 @@ S2N_METHOD = 'peak2peak'
 S2N_WIDTH = 2
 _BLOCK_SIZE = 64
 
-
 class CorrelationGPU:
-    """A class that performs the cross-correlation of interrogation windows.
+    """Performs the cross-correlation of interrogation windows.
 
     Can perform correlation by extended search area, where the first window is larger than the first window, allowing a
     for displacements larger than the nominal window size to be found.
@@ -314,7 +313,7 @@ class CorrelationGPU:
 
 
 class PIVFieldGPU:
-    """Object storing geometric information of PIV windows.
+    """Geometric information of PIV windows.
 
     Parameters
     ----------
@@ -387,38 +386,53 @@ class PIVFieldGPU:
         return _get_center_buffer(self.frame_shape, self.window_size, self.spacing)
 
 
-class PIVSettings:
+def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
+    """Convenience wrapper-function for PIVGPU.
 
-    def __init__(self, kwargs):
-        self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else S2N_TOL
-        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else MEDIAN_TOL
-        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else MEAN_TOL
-        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else RMS_TOL
-        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else SMOOTHING_PAR
-        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
-        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
-        self.s2n_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else S2N_METHOD
-        self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
-        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
+    Parameters
+    ----------
+    frame_a, frame_b : ndarray
+        2D int (ht, wd), grey levels of the first and second frames.
+    return_s2n : bool
+        Sets whether to return the signal-to-noise ratio. Not returning the signal-to-noise speeds up computation
+        significantly, which is default behaviour.
+    **kwargs
+        PIV settings. See PIVGPU.
 
-    def check_inputs(self):
-        pass
+    Returns
+    -------
+    x : ndarray
+        2D float (m, n), x-coordinates where the velocity field has been computed.
+    y : ndarray
+        2D float (m, n), y-coordinates where the velocity field has been computed.
+    u : ndarray
+        2D float (m, n), horizontal component of velocity in pixel/time units.
+    v : ndarray
+        2D float (m, n), vertical component of velocity in pixel/time units.
+    mask : ndarray
+        2D int (m, n), boolean values (True for vectors interpolated from previous iteration).
+    s2n : ndarray
+        2D float (m, n), signal-to-noise ratio of the final velocity field.
+
+    Example
+    -------
+    x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None, window_size_iters=(1, 2), min_window_size=16,
+    overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2, validation_method='median_velocity',
+    median_tol=2)
+
+    """
+    piv_gpu = PIVGPU(frame_a.shape, **kwargs)
+
+    x, y = piv_gpu.coords
+    u, v = piv_gpu(frame_a, frame_b)
+    mask = piv_gpu.field_mask
+    s2n = piv_gpu.s2n if return_s2n else None
+
+    return x, y, u, v, mask, s2n
 
 
-def gpu_piv(frame_a, frame_b,
-            mask=None,
-            window_size_iters=(1, 2),
-            min_window_size=16,
-            overlap_ratio=0.5,
-            dt=1,
-            deform=True,
-            smooth=True,
-            nb_validation_iter=1,
-            validation_method='median_velocity',
-            **kwargs
-            ):
-    """An iterative GPU-accelerated algorithm that uses translation and deformation of interrogation windows.
+class PIVGPU:
+    """Iterative GPU-accelerated algorithm that uses translation and deformation of interrogation windows.
 
     At every iteration, the estimate of the displacement and gradient are used to shift and deform the interrogation
     windows used in the next iteration. One or more iterations can be performed before the estimated velocity is
@@ -445,92 +459,6 @@ def gpu_piv(frame_a, frame_b,
 
     Parameters
     ----------
-    frame_a, frame_b : ndarray
-        2D int (ht, wd), grey levels of the first and second frames.
-    mask : ndarray or None, optional
-        2D int (ht, wd), array with values 0 for the background, 1 for the flow-field. If the center of a
-        window is on a 0 value the velocity is set to 0.
-    window_size_iters : tuple or int, optional
-        Number of iterations performed at each window size. The length of window_size_iters gives the number of
-        different windows sizes to use, while the value of each entry gives the number of times a window size is use.
-    min_window_size : tuple or int, optional
-        Length of the sides of the square interrogation window. Only supports multiples of 8.
-    overlap_ratio : float, optional
-        Ratio of overlap between two windows (between 0 and 1).
-    dt : float, optional
-        Time delay separating the two frames.
-    deform : bool, optional
-        Whether to deform the windows by the velocity gradient at each iteration.
-    smooth : bool, optional
-        Whether to smooth the intermediate fields.
-    nb_validation_iter : int, optional
-        Number of iterations per validation cycle.
-    validation_method : str {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
-        Method used for validation. Only the mean velocity method is implemented now. The default tolerance is 2 for
-        median validation.
-
-    Returns
-    -------
-    x : ndarray
-        2D float (m, n), x-coordinates where the velocity field has been computed.
-    y : ndarray
-        2D float (m, n), y-coordinates where the velocity field has been computed.
-    u : ndarray
-        2D float (m, n), horizontal component of velocity in pixel/time units.
-    v : ndarray
-        2D float (m, n), vertical component of velocity in pixel/time units.
-    mask : ndarray
-        2D int (m, n), boolean values (True for vectors interpolated from previous iteration).
-    s2n : ndarray
-        2D float (m, n), signal-to-noise ratio of the final velocity field.
-
-    Other Parameters
-    ----------------
-    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
-        Tolerance of the validation methods.
-    smoothing_par : float
-        Smoothing parameter to pass to smoothn to apply to the intermediate velocity fields.
-    extend_ratio : float
-        Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
-        used.
-    subpixel_method : str {'gaussian', 'centroid', 'parabolic'}
-        Method to estimate subpixel location of the peak.
-    return_sig2noise : bool
-        Sets whether to return the signal-to-noise ratio. Not returning the signal-to-noise speeds up computation
-        significantly, which is default behaviour.
-    sig2noise_method : str {'peak2peak', 'peak2mean', 'peak2energy'}
-        Method of signal-to-noise-ratio measurement.
-    s2n_width : int
-        Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
-        Only used if sig2noise_method == 'peak2peak'.
-    n_fft : int or tuple
-        Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
-    center_field : bool
-        Whether to center the vector field on the image.
-
-    Example
-    -------
-    x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None, window_size_iters=(1, 2), min_window_size=16,
-    overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2, validation_method='median_velocity',
-    median_tol=2)
-
-    """
-    piv_gpu = PIVGPU(frame_a.shape, window_size_iters, min_window_size, overlap_ratio, dt, mask, deform, smooth,
-                     nb_validation_iter, validation_method, **kwargs)
-
-    return_sig2noise = kwargs['return_sig2noise'] if 'return_sig2noise' in kwargs else False
-    x, y = piv_gpu.coords
-    u, v = piv_gpu(frame_a, frame_b)
-    mask = piv_gpu.field_mask
-    s2n = piv_gpu.s2n if return_sig2noise else None
-    return x, y, u, v, mask, s2n
-
-
-class PIVGPU:
-    """This class is the object-oriented implementation of the GPU PIV function.
-
-    Parameters
-    ----------
     frame_shape : ndarray or tuple
         Int (ht, wd), size of the images in pixels.
     window_size_iters : tuple or int, optional
@@ -553,44 +481,35 @@ class PIVGPU:
         Number of iterations per validation cycle.
     validation_method : str {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
-
-    Other Parameters
-    ----------------
-    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float
+    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float, optional
         Tolerance of the validation methods.
-    smoothing_par : float
-        Smoothing parameter to pass to smoothn to apply to the intermediate velocity fields. Default is 0.5.
-    extend_ratio : float
+    center_field : bool, optional
+        Whether to center the vector field on the image.
+    extend_ratio : float or None, optional
         Ratio the extended search area to use on the first iteration. If not specified, extended search will not be
         used.
-    subpixel_method : str {'gaussian', 'centroid', 'parabolic'}
+    smoothing_par : float or None, optional
+        Smoothing parameter to pass to smoothn to apply to the intermediate velocity fields.
+    subpixel_method : str {'gaussian', 'centroid', 'parabolic'}, optional
         Method to estimate subpixel location of the peak.
-    sig2noise_method : str {'peak2peak', 'peak2mean', 'peak2energy'}
+    s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
         Method of signal-to-noise-ratio measurement.
-    sig2noise_width : int
+    s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding the second peak. Default is 2.
         Only used if sig2noise_method == 'peak2peak'.
-    n_fft : int or tuple
+    n_fft : int or tuple, optional
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
-    center_field : bool
-        Whether to center the vector field on the image.
 
     Attributes
     ----------
     coords : tuple
         2D ndarray (x, y), coordinates where the velocity field has been computed.
-    mask : ndarray
+    field_mask : ndarray
         2D float (m, n), boolean values (True for vectors interpolated from previous iteration).
     s2n : ndarray
         2D float (m, n), signal-to-noise ratio of the final velocity field.
 
-    Methods
-    -------
-    __call__(frame_a, frame_b)
-        Main method to process image pairs.
-
     """
-
     def __init__(self,
                  frame_shape,
                  window_size_iters=(1, 2),
@@ -602,8 +521,19 @@ class PIVGPU:
                  smooth=True,
                  nb_validation_iter=1,
                  validation_method='median_velocity',
-                 **kwargs
+                 s2n_tol=S2N_TOL,
+                 median_tol=MEDIAN_TOL,
+                 mean_tol=MEAN_TOL,
+                 rms_tol=RMS_TOL,
+                 center_field=True,
+                 extend_ratio=None,
+                 smoothing_par=SMOOTHING_PAR,
+                 subpixel_method=SUBPIXEL_METHOD,
+                 s2n_method=S2N_METHOD,
+                 s2n_width=S2N_WIDTH,
+                 n_fft=N_FFT
                  ):
+
         self.frame_shape = frame_shape.shape if hasattr(frame_shape, 'shape') else tuple(frame_shape)
         self.min_window_size = min_window_size
         self.ws_iters = (window_size_iters,) if isinstance(window_size_iters, int) else tuple(window_size_iters)
@@ -614,31 +544,24 @@ class PIVGPU:
         self.smooth = smooth
         self.nb_validation_iter = nb_validation_iter
         self.validation_method = (validation_method,) if isinstance(validation_method, str) else validation_method
+        self.extend_ratio = extend_ratio
+        self.s2n_tol = s2n_tol
+        self.median_tol = median_tol
+        self.mean_tol = mean_tol
+        self.rms_tol = rms_tol
+        self.smoothing_par = smoothing_par
+        self.n_fft = n_fft
+        self.subpixel_method = subpixel_method
+        self.s2n_method = s2n_method
+        self.s2n_width = s2n_width
+        self.center_field = center_field
 
-        self.extend_ratio = kwargs['extend_ratio'] if 'extend_ratio' in kwargs else None
-        self.s2n_tol = kwargs['s2n_tol'] if 's2n_tol' in kwargs else S2N_TOL
-        self.median_tol = kwargs['median_tol'] if 'median_tol' in kwargs else MEDIAN_TOL
-        self.mean_tol = kwargs['mean_tol'] if 'mean_tol' in kwargs else MEAN_TOL
-        self.rms_tol = kwargs['rms_tol'] if 'rms_tol' in kwargs else RMS_TOL
-        self.smoothing_par = kwargs['smoothing_par'] if 'smoothing_par' in kwargs else SMOOTHING_PAR
-        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
-        self.subpixel_method = kwargs['subpixel_method'] if 'subpixel_method' in kwargs else SUBPIXEL_METHOD
-        self.s2n_method = kwargs['sig2noise_method'] if 'sig2noise_method' in kwargs else S2N_METHOD
-        self.s2n_width = kwargs['sig2noise_width'] if 'sig2noise_width' in kwargs else S2N_WIDTH
-        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
-
-        # self.settings = PIVSettings()
-        # self.settings.check_inputs()
-
-        self._nb_iter = sum(self.ws_iters)
         self._corr = None
         self._piv_fields = None
         self._frame_mask = None
 
-        self._check_inputs()
-
     def __call__(self, frame_a, frame_b):
-        """Processes an image pair.
+        """Computes velocity field from an image pair.
 
         Parameters
         ----------
@@ -655,6 +578,7 @@ class PIVGPU:
         u = v = None
         u_previous = v_previous = None
         dp_u = dp_v = None
+        max_iter = sum(self.ws_iters)
 
         # Send masked frames to device.
         frame_a_masked, frame_b_masked = self._mask_frame(frame_a, frame_b)
@@ -668,7 +592,7 @@ class PIVGPU:
                                     s2n_width=self.s2n_width)
 
         # MAIN LOOP
-        for k in range(self._nb_iter):
+        for k in range(max_iter):
             self._k = k
             self._piv_field_k = self._get_piv_fields()[k]
             logging.info('ITERATION {}'.format(k))
@@ -689,8 +613,8 @@ class PIVGPU:
             u, v = self._validate_fields(u, v, u_previous, v_previous)
 
             # NEXT ITERATION
-            # Compute the predictors dpx and dpy from the current displacements.
-            if k < self._nb_iter - 1:
+            # Compute the predictors dp_x and dp_y from the current displacements.
+            if k < max_iter - 1:
                 u_previous = u
                 v_previous = v
                 dp_u, dp_v = self._get_next_iteration_predictions(u, v)
@@ -880,6 +804,7 @@ class PIVGPU:
 
         return dp_u, dp_v
 
+    # TODO refactor to two functions
     def _log_residual(self, i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
         _check_arrays(i_peak, j_peak, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak.shape)
@@ -894,13 +819,14 @@ class PIVGPU:
         self.normalized_residual = normalized_residual
 
     def _check_inputs(self):
+        """Validate the user-supplied parameters."""
         if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
             raise TypeError('frame_shape must be either tuple of integers or array-like.')
         if len(self.frame_shape) != 2:
             raise ValueError('frame_shape must be 2D.')
         if not all([1 <= ws == int(ws) for ws in self.ws_iters]):
             raise ValueError('Window sizes must be integers greater than or equal to 1.')
-        if not self._nb_iter >= 1:
+        if not sum(self.ws_iters) >= 1:
             raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
         if not 0 < self.overlap_ratio < 1:
             raise ValueError('overlap ratio must be between 0 and 1.')
@@ -1204,7 +1130,7 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
         1D float, grid coordinates of the field to be interpolated.
     f0 : GPUArray
         2D float (y0_d.size, x0_d.size), field to be interpolated.
-    mask : (y0_d.size, x0_d.size): GPUArray, optional
+    mask : (y0_d.size, x0_d.size), GPUArray or None, optional
         2D float, value of one where masked values are.
 
     Returns
@@ -1897,14 +1823,14 @@ def _gpu_mask_peak(correlation_positive, row_peak, col_peak, mask_width):
     assert 0 <= mask_width < int(min(ht, wd) / 2), \
         'Mask width must be integer from 0 and to less than half the correlation window height or width.' \
         'Recommended value is 2.'
-    mask_dim_i = DTYPE_i(mask_width * 2 + 1)
+    mask_dim = mask_width * 2 + 1
 
     correlation_masked = correlation_positive.copy()
 
     block_size = 8
-    grid_size = ceil(mask_dim_i / block_size)
+    grid_size = ceil(mask_dim / block_size)
     fft_shift = mod_mask_peak.get_function('mask_peak')
-    fft_shift(correlation_masked, row_peak, col_peak, DTYPE_i(mask_width), DTYPE_i(ht), DTYPE_i(wd), mask_dim_i,
+    fft_shift(correlation_masked, row_peak, col_peak, DTYPE_i(mask_width), DTYPE_i(ht), DTYPE_i(wd), DTYPE_i(mask_dim),
               DTYPE_i(window_size), block=(block_size, block_size, 1), grid=(n_windows, grid_size, grid_size))
 
     return correlation_masked

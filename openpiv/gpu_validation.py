@@ -24,7 +24,8 @@ RMS_TOL = 2
 _BLOCK_SIZE = 64
 
 
-def gpu_validation(*f,
+def gpu_validation(
+                   *f,
                    sig2noise=None,
                    mask=None,
                    validation_method='median_velocity',
@@ -33,15 +34,15 @@ def gpu_validation(*f,
                    mean_tol=MEAN_TOL,
                    rms_tol=RMS_TOL
                    ):
-    """Validation for vector-fields that returns an array indicating which location need to be validated.
+    """Validates vector-fields and returns an array indicating which location need to be validated.
 
     Parameters
     ----------
     f : GPUArray
         2D float (m, n), velocity fields to be validated.
-    sig2noise : GPUArray, optional
+    sig2noise : GPUArray or None, optional
         2D float (m, n), signal-to-noise ratio of each velocity.
-    mask : GPUArray
+    mask : GPUArray or None
         2D int (m, n), mask for the velocity field.
     validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
@@ -66,13 +67,13 @@ def gpu_validation(*f,
 
 
 class ValidationGPU:
-    """Validation for vector-fields that returns an array indicating which location need to be validated.
+    """Validates vector-fields and returns an array indicating which location need to be validated.
 
     Parameters
     ----------
     f_shape : GPUArray or tuple
         (ht, wd) of the fields to be validated.
-    mask : GPUArray
+    mask : GPUArray or None
         2D float, mask for the velocity field.
     validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
         Method(s) to use for validation.
@@ -114,7 +115,7 @@ class ValidationGPU:
         ----------
         f : GPUArray
             2D float (m, n), velocity fields to be validated.
-        sig2noise : GPUArray, optional
+        sig2noise : GPUArray or None, optional
             2D float (m, n), signal-to-noise ratio of each velocity.
 
         Returns
@@ -343,7 +344,7 @@ def _gpu_find_neighbours(shape, mask=None):
     ----------
     shape : tuple
         Int (m, n), shape of the array to find neighbours for.
-    mask : GPUArray
+    mask : GPUArray or None
         2D int (m, n), value of one where masked.
 
     Returns
