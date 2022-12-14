@@ -41,6 +41,7 @@ S2N_METHOD = 'peak2peak'
 S2N_WIDTH = 2
 _BLOCK_SIZE = 64
 
+
 class CorrelationGPU:
     """Performs the cross-correlation of interrogation windows.
 
@@ -479,9 +480,9 @@ class PIVGPU:
         Whether to smooth the intermediate fields.
     nb_validation_iter : int, optional
         Number of iterations per validation cycle.
-    validation_method : str {tuple, 's2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'} or tuple, optional
         Method(s) to use for validation.
-    s2n_tol, median_tol, mean_tol, median_tol, rms_tol : float, optional
+    s2n_tol, median_tol, mean_tol, rms_tol : float, optional
         Tolerance of the validation methods.
     center_field : bool, optional
         Whether to center the vector field on the image.
@@ -510,6 +511,7 @@ class PIVGPU:
         2D float (m, n), signal-to-noise ratio of the final velocity field.
 
     """
+
     def __init__(self,
                  frame_shape,
                  window_size_iters=(1, 2),
@@ -531,7 +533,8 @@ class PIVGPU:
                  subpixel_method=SUBPIXEL_METHOD,
                  s2n_method=S2N_METHOD,
                  s2n_width=S2N_WIDTH,
-                 n_fft=N_FFT
+                 n_fft=N_FFT,
+                 **kwargs
                  ):
 
         self.frame_shape = frame_shape.shape if hasattr(frame_shape, 'shape') else tuple(frame_shape)
@@ -555,6 +558,7 @@ class PIVGPU:
         self.s2n_method = s2n_method
         self.s2n_width = s2n_width
         self.center_field = center_field
+        assert kwargs == {}
 
         self._corr = None
         self._piv_fields = None
@@ -595,7 +599,7 @@ class PIVGPU:
         for k in range(max_iter):
             self._k = k
             self._piv_field_k = self._get_piv_fields()[k]
-            logging.info('ITERATION {}'.format(k))
+            _log_iteration(k)
 
             # CROSS-CORRELATION
             # Get arguments for the correlation class.
@@ -607,7 +611,8 @@ class PIVGPU:
 
             # Update the field with new values.
             u, v = self._update_values(i_peak, j_peak, dp_u, dp_v)
-            self._log_residual(i_peak, j_peak)
+            residual = self._get_residual(i_peak, j_peak)
+            _log_residual(residual)
 
             # VALIDATION
             u, v = self._validate_fields(u, v, u_previous, v_previous)
@@ -744,13 +749,11 @@ class PIVGPU:
 
             # Replace invalid vectors.
             n_val = int(gpuarray.sum(val_locations).get())
+            _log_validation(n_val, size)
             if n_val > 0:
-                logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
                 u, v = self._gpu_replace_vectors(u, v, u_previous, v_previous, u_mean, v_mean, val_locations)
             else:
-                logging.info('No invalid vectors.')
                 break
-
             validation_gpu.free_data()
 
         # Smooth the validated field.
@@ -804,61 +807,113 @@ class PIVGPU:
 
         return dp_u, dp_v
 
-    # TODO refactor to two functions
-    def _log_residual(self, i_peak, j_peak):
+    def _get_residual(self, i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
         _check_arrays(i_peak, j_peak, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=i_peak.shape)
-
         try:
-            normalized_residual = sqrt(int(gpuarray.sum(i_peak ** 2 + j_peak ** 2).get()) / i_peak.size) / 0.5
-            logging.info('Normalized residual : {}.'.format(normalized_residual))
+            self.residual = sqrt(int(gpuarray.sum(i_peak ** 2 + j_peak ** 2).get()) / i_peak.size) / 0.5
         except OverflowError:
-            logging.warning('Overflow in residuals.')
-            normalized_residual = np.nan
+            self.residual = np.nan
 
-        self.normalized_residual = normalized_residual
+        return self.residual
 
     def _check_inputs(self):
         """Validate the user-supplied parameters."""
-        if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
-            raise TypeError('frame_shape must be either tuple of integers or array-like.')
-        if len(self.frame_shape) != 2:
-            raise ValueError('frame_shape must be 2D.')
-        if not all([1 <= ws == int(ws) for ws in self.ws_iters]):
-            raise ValueError('Window sizes must be integers greater than or equal to 1.')
-        if not sum(self.ws_iters) >= 1:
-            raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
-        if not 0 < self.overlap_ratio < 1:
-            raise ValueError('overlap ratio must be between 0 and 1.')
-        if self.dt != float(self.dt):
-            raise ValueError('dt must be a number.')
-        if self.mask is not None:
-            if self.mask.shape != self.frame_shape:
-                raise ValueError('mask is not same shape as frame.')
-        if self.deform != bool(self.deform):
-            raise ValueError('deform must have a boolean value.')
-        if self.smooth != bool(self.smooth):
-            raise ValueError('smooth must have a boolean value.')
-        if not 0 <= self.nb_validation_iter == int(self.nb_validation_iter):
-            raise ValueError('nb_validation_iter must be 0 or a positive integer.')
-        if not all([method in ALLOWED_VALIDATION_METHODS for method in self.validation_method]):
-            raise ValueError('validation_method is not allowed. Allowed are: {}'.format(ALLOWED_VALIDATION_METHODS))
-        if self.extend_ratio is not None:
-            if not 1 < self.extend_ratio == float(self.extend_ratio):
-                raise ValueError('extend_ratio must be a number greater than unity.')
-        if not all(0 < tol == float(tol) or tol is None for tol in
-                   [self.s2n_tol, self.median_tol, self.mean_tol, self.rms_tol]):
-            raise ValueError('Validation tolerances must be positive numbers.')
-        if not 1 < self.n_fft == float(self.n_fft):
-            raise ValueError('n_fft must be an number equal to or greater than 1.')
-        if self.s2n_method not in ALLOWED_S2N_METHODS:
-            raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_S2N_METHODS))
-        if self.subpixel_method not in ALLOWED_SUBPIXEL_METHODS:
-            raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
-        if not 1 < self.s2n_width == int(self.s2n_width):
-            raise ValueError('s2n_width must be an integer.')
-        if self.center_field != bool(self.center_field):
-            raise ValueError('center_field must have a boolean value.')
+        pass
+
+
+#     # TODO break this into individual functions
+#     def _check_inputs(self):
+#         """Validate the user-supplied parameters."""
+#         _check_frame_shape()
+#         _check_window_sizes()
+#         _check_overlap_ratio()
+#         _
+#
+#
+# def _check_frame_shape():
+#     if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
+#         raise TypeError('frame_shape must be either tuple of integers or array-like.')
+#     if len(self.frame_shape) != 2:
+#         raise ValueError('frame_shape must be 2D.')
+#
+#
+# def _check_window_sizes():
+#     if not all([1 <= ws == int(ws) for ws in self.ws_iters]):
+#         raise ValueError('Window sizes must be integers greater than or equal to 1.')
+#     if not sum(self.ws_iters) >= 1:
+#         raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
+#
+#
+# def _check_overlap_ratio():
+#     if not 0 < self.overlap_ratio < 1:
+#         raise ValueError('overlap ratio must be between 0 and 1.')
+#
+#
+# def _check_dt():
+#     if self.dt != float(self.dt):
+#         raise ValueError('dt must be a number.')
+#
+#
+# def _check_mask():
+#     if self.mask is not None:
+#         if self.mask.shape != self.frame_shape:
+#             raise ValueError('mask is not same shape as frame.')
+#
+#
+# def _check_deform():
+#     if self.deform != bool(self.deform):
+#         raise ValueError('deform must have a boolean value.')
+#
+#
+# def _check_smooth():
+#     if self.smooth != bool(self.smooth):
+#         raise ValueError('smooth must have a boolean value.')
+#
+#
+# # TODO check this using the validation object
+# def _check_val_methods():
+#     if not 0 <= self.nb_validation_iter == int(self.nb_validation_iter):
+#         raise ValueError('nb_validation_iter must be 0 or a positive integer.')
+#     if not all([method in ALLOWED_VALIDATION_METHODS for method in self.validation_method]):
+#         raise ValueError('validation_method is not allowed. Allowed are: {}'.format(ALLOWED_VALIDATION_METHODS))
+#
+#
+# def _check_val_tols():
+#     if not all(0 < tol == float(tol) or tol is None for tol in
+#                [self.s2n_tol, self.median_tol, self.mean_tol, self.rms_tol]):
+#         raise ValueError('Validation tolerances must be positive numbers.')
+#
+#
+# def _check_extend_ratio():
+#     if self.extend_ratio is not None:
+#         if not 1 < self.extend_ratio == float(self.extend_ratio):
+#             raise ValueError('extend_ratio must be a number greater than unity.')
+#
+#
+# def _check_nfft():
+#     if not 1 < self.n_fft == float(self.n_fft):
+#         raise ValueError('n_fft must be an number equal to or greater than 1.')
+#
+#
+# def _check_s2n_method():
+#     if self.s2n_method not in ALLOWED_S2N_METHODS:
+#         raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_S2N_METHODS))
+#
+#
+# def _check_subpixel_method():
+#     if self.subpixel_method not in ALLOWED_SUBPIXEL_METHODS:
+#         raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
+#
+#
+# def _check_s2n_methods():
+#     if not 1 < self.s2n_width == int(self.s2n_width):
+#         raise ValueError('s2n_width must be an integer.')
+#
+#
+# def _check_center_field():
+#     if self.center_field != bool(self.center_field):
+#         raise ValueError('center_field must have a boolean value.')
 
 
 def get_field_shape(frame_shape, window_size, spacing):
@@ -1951,3 +2006,24 @@ def _interpolate_replace(x0, y0, x1, y1, f0, f1, val_locations, mask=None):
     f1_val = gpuarray.if_positive(val_locations, f1_val, f1)
 
     return f1_val
+
+
+def _log_iteration(k):
+    """Logs the iteration number."""
+    logging.info('ITERATION {}'.format(k))
+
+
+def _log_residual(residual):
+    """Logs the normalized residual."""
+    if residual != np.nan:
+        logging.info('Normalized residual : {}.'.format(residual))
+    else:
+        logging.warning('Overflow in residuals.')
+
+
+def _log_validation(n_val, size):
+    """Logs the number of vectors to be validated."""
+    if n_val > 0:
+        logging.info('Validating {} out of {} vectors ({:.2%}).'.format(n_val, size, n_val / size))
+    else:
+        logging.info('No invalid vectors.')
