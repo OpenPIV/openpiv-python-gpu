@@ -1,5 +1,7 @@
 """This module contains miscellaneous GPU functions."""
 from math import ceil
+from abc import ABC, abstractmethod
+from numbers import Number
 
 import numpy as np
 import pycuda.autoinit
@@ -55,6 +57,7 @@ def gpu_mask(f, mask):
     d_type = f.dtype
     size = f.size
 
+    # This could also just write to f directly.
     f_masked = gpuarray.empty_like(f)
 
     block_size = _BLOCK_SIZE
@@ -211,6 +214,185 @@ def gpu_remove_negative(f):
     replace_negative(f, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
 
+class _Validator(ABC):
+    """Validates user inputs."""
+
+    def __set_name__(self, owner, name):
+        self.public_name = name
+        self.private_name = '_' + name
+
+    def __get__(self, obj, objtype=None):
+        return getattr(obj, self.private_name)
+
+    def __set__(self, obj, value):
+        value = self.validate(value)
+        setattr(obj, self.private_name, value)
+
+    @abstractmethod
+    def validate(self, value):
+        pass
+
+
+class _Bool(_Validator):
+    """Bool from a numeric input."""
+
+    def validate(self, value):
+        if not isinstance(value, Number):
+            raise TypeError('{} must be either bool or numeric type.'.format(self.public_name))
+        if value != bool(value):
+            raise ValueError('{} must have a boolean value.'.format(self.public_name))
+
+        return bool(value) if value is not None else None
+
+
+class _Number(_Validator):
+    """Float from a numeric input.
+
+    Parameters
+    ----------
+    min_value, max_value : float or None, optional
+        Minimum and maximum values, respectively. None for no restriction.
+    min-closure, max_closure : float or None, optional
+        Closures of the minimum and maximum values, respectively.
+
+    """
+
+    def __init__(self, min_value=None, max_value=None, min_closure=True, max_closure=True, allow_none=False):
+        self.min_value = min_value
+        self.max_value = max_value
+        self.min_closure = min_closure
+        self.max_closure = max_closure
+        self.allow_none = allow_none
+
+    def validate(self, value):
+        if value is None and self.allow_none:
+            return None
+        if not isinstance(value, (Number, float, int)):
+            or_none = ' or None' if self.allow_none else ''
+            raise TypeError('{} must be a numeric type{}.'.format(self.public_name, or_none))
+        value_error = False
+        if self.min_value is not None:
+            if value < self.min_value or (value == self.min_value and not self.min_closure):
+                value_error = True
+        elif self.max_value is not None:
+            if value > self.max_value or (value == self.max_value and not self.max_closure):
+                value_error = True
+        if value_error:
+            expected_interval = _get_allowed_interval(self.min_value, self.max_value, self.min_closure,
+                                                      self.max_closure)
+            raise ValueError('{} must be in {}. {}'.format(self.public_name, expected_interval, value))
+
+        return float(value)
+
+
+class _Integer(_Number):
+    """Int from a numeric, integer input."""
+
+    def validate(self, value):
+        if value is None and self.allow_none:
+            return None
+        if not float.is_integer(_Number.validate(self, value)):
+            raise ValueError('{} must have an integer value.'.format(self.public_name))
+
+        return int(value)
+
+
+class _Element(_Validator):
+    """Element of a given set.
+
+    Parameters
+    ----------
+    *allowed_values : str or numeric
+        Valid set of values.
+    allow_none : bool
+        Whether value can be None.
+
+    """
+
+    def __init__(self, *allowed_values, allow_none=False):
+        self.allowed_values = set(allowed_values)
+        self.allow_none = allow_none
+
+    def validate(self, value):
+        if value is None and self.allow_none:
+            return None
+        if value not in self.allowed_values:
+            or_none = ' or None' if self.allow_none else ''
+            raise ValueError('{} must be one of: {}{}.'.format(self.public_name, self.allowed_values, or_none))
+
+        return value
+
+
+class _Subset(_Validator):
+    """Subset of a given set.
+
+    Parameters
+    ----------
+    *allowed_values : str or numeric
+        Valid set of values.
+    allow_none : bool
+        Whether value can be None.
+
+    """
+
+    def __init__(self, *allowed_values, allow_none=False):
+        self.allowed_values = set(allowed_values)
+        self.allow_none = allow_none
+
+    def validate(self, value):
+        if value is None and self.allow_none:
+            return None
+        if not isinstance(value, (tuple, list, set)):
+            value = {value}
+        if not self.allowed_values.issuperset(value):
+            or_none = ' or None' if self.allow_none else ''
+            raise ValueError('{} must be in: {}{}.'.format(self.public_name, self.allowed_values, or_none))
+
+        return value
+
+
+class _Array(_Validator):
+    """Array.
+
+    Parameters
+    ----------
+    d_type : np.
+        np.dtype of resulting array.
+    enforce_type : bool
+        Whether the input array must have the desired dtype.
+    allow_none : bool
+        Whether value can be None.
+
+    """
+
+    def __init__(self, d_type=None, enforce_type=False, allow_none=False):
+        self.d_type = d_type
+        self.enforce_type = enforce_type
+        self.allow_none = allow_none
+
+    def validate(self, array):
+        """"""
+        if array is None and self.allow_none:
+            return
+        if not isinstance(array, np.ndarray):
+            or_none = ' or None' if self.allow_none else ''
+            raise TypeError('{} must be an np.ndarray{}.'.format(self.public_name, or_none))
+        if array.dtype != self.d_type and self.enforce_type:
+            raise ValueError('{} must contain {} type.'.format(self.public_name, self.d_type))
+
+        return array.astype(self.d_type) if array is not None else None
+
+
+def _get_allowed_interval(min_value, max_value, min_closure, max_closure):
+    """Returns a string representation of the allowed interval of the reals."""
+    left_value = str(min_value) if min_value is not None else '-∞'
+    right_value = str(max_value) if max_value is not None else '+∞'
+    left_brace = '[' if min_closure and min_value is not None else '('
+    right_brace = ']' if max_closure and max_value is not None else ')'
+
+    return ''.join((left_brace, ', '.join((left_value, right_value)), right_brace))
+
+
 def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, size=None, c_contiguous=True):
     """Checks that all arrays match the given attributes."""
     for array in arrays:
@@ -226,12 +408,6 @@ def _check_arrays(*arrays, array_type=None, dtype=None, shape=None, ndim=None, s
             _check_array_size(array, size)
         if c_contiguous is not None:
             _check_array_c_contiguous(array)
-
-
-def _check_array_c_contiguous(array):
-    """Checks that arrays are C-contiguous"""
-    if not array.flags.c_contiguous:
-        raise TypeError('Array(s) must be C-contiguous.')
 
 
 def _check_array_type(array, array_type):
@@ -262,3 +438,9 @@ def _check_array_size(array, size):
     """Checks that arrays have the correct size."""
     if not array.size == size:
         raise ValueError('Array(s) must have size {}.')
+
+
+def _check_array_c_contiguous(array):
+    """Checks that arrays are C-contiguous"""
+    if not array.flags.c_contiguous:
+        raise TypeError('Array(s) must be C-contiguous.')

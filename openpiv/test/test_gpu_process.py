@@ -343,7 +343,7 @@ def test_mask_rms():
 #             'dt': 1,
 #             'deform': True,
 #             'smooth': True,
-#             'nb_validation_iter': 1,
+#             'num_validation_iters': 1,
 #             'validation_method': 'median_velocity',
 #             }
 #
@@ -365,7 +365,7 @@ def test_gpu_piv_fast(image_size):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 1,
+            'num_validation_iters': 1,
             'validation_method': 'median_velocity',
             }
 
@@ -386,7 +386,7 @@ def test_gpu_piv_zero(image_size):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 1,
+            'num_validation_iters': 1,
             'validation_method': 'median_velocity',
             }
 
@@ -406,7 +406,7 @@ def test_extended_search_area():
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'extend_ratio': 2
             }
 
@@ -427,7 +427,7 @@ def test_sig2noise(s2n_method):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': 'median_velocity',
             'return_s2n': True,
             's2n_method': s2n_method,
@@ -447,7 +447,7 @@ def test_subpixel_peak(subpixel_method):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': 'median_velocity',
             'subpixel_method': subpixel_method,
             }
@@ -467,7 +467,7 @@ def test_validation(validation_method):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': validation_method,
             }
 
@@ -477,8 +477,8 @@ def test_validation(validation_method):
 # sweep the input variables to ensure everything is same
 @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
 @pytest.mark.parametrize('min_window_size', [8, 16])
-@pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
-def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndarrays_regression):
+@pytest.mark.parametrize('num_validation_iters', [0, 1, 2])
+def test_gpu_piv_py(window_size_iters, min_window_size, num_validation_iters, ndarrays_regression):
     """This test checks that the output remains the same."""
     frame_a = imread('../data/test1/exp1_001_a.bmp')
     frame_b = imread('../data/test1/exp1_001_b.bmp')
@@ -489,7 +489,7 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndar
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': nb_validation_iter,
+            'num_validation_iters': num_validation_iters,
             'validation_method': 'median_velocity',
             'smoothing_par': 0.5,
             'center_field': False
@@ -513,7 +513,7 @@ def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': 'median_velocity',
             }
 
@@ -1059,6 +1059,9 @@ def test_interpolate_replace():
     assert np.allclose(f1_gpu, f1)
 
 
+# TODO check that input validation works
+
+
 # INTEGRATION TESTS
 @pytest.mark.integtest
 def test_gpu_piv_fast():
@@ -1074,7 +1077,7 @@ def test_gpu_piv_fast():
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 1,
+            'num_validation_iters': 1,
             'validation_method': 'median_velocity',
             }
 
@@ -1089,8 +1092,8 @@ def test_gpu_piv_fast():
 @pytest.mark.integtest
 @pytest.mark.parametrize('window_size_iters', [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)])
 @pytest.mark.parametrize('min_window_size', [8, 16])
-@pytest.mark.parametrize('nb_validation_iter', [0, 1, 2])
-def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndarrays_regression):
+@pytest.mark.parametrize('num_validation_iters', [0, 1, 2])
+def test_gpu_piv_py(window_size_iters, min_window_size, num_validation_iters, ndarrays_regression):
     """This test checks that the output remains the same."""
     frame_a = imread(data_dir + 'test1/exp1_001_a.bmp')
     frame_b = imread(data_dir + 'test1/exp1_001_b.bmp')
@@ -1101,7 +1104,7 @@ def test_gpu_piv_py(window_size_iters, min_window_size, nb_validation_iter, ndar
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': nb_validation_iter,
+            'num_validation_iters': num_validation_iters,
             'validation_method': 'median_velocity',
             'smoothing_par': 0.5,
             'center_field': False
@@ -1135,7 +1138,7 @@ def test_extended_search_area():
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'extend_ratio': 2
             }
 
@@ -1161,7 +1164,7 @@ def test_gpu_piv_benchmark(benchmark, frame_shape, window_size_iters, min_window
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': 'median_velocity',
             }
 
@@ -1182,7 +1185,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
             'dt': 1,
             'deform': True,
             'smooth': True,
-            'nb_validation_iter': 2,
+            'num_validation_iters': 2,
             'validation_method': 'median_velocity',
             }
     frame_a, frame_b = create_pair_shift(shape, u_shift, v_shift)

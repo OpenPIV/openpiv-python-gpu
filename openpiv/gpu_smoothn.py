@@ -537,7 +537,7 @@ def replace_non_finite(y, finite=None, spacing=None):
 
 def _initial_guess(y):
     """Returns initial guess for z using coarse, fast smoothing."""
-    assert isinstance(y, list) or isinstance(y, tuple)
+    assert isinstance(y, (list, tuple))
     n_y = len(y)
 
     # Forward transform.
@@ -616,7 +616,7 @@ def _dct_nd(data, f=dct):
 
 def _gcv(p, y, y_dct, w, lambda_, is_finite, w_mean, nof):
     """Returns the GCV score for given p-value and y-data."""
-    assert isinstance(y, list) or isinstance(y, tuple)
+    assert isinstance(y, (list, tuple))
     n_y = len(y)
     y_size = y[0].size
     s = 10 ** p

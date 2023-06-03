@@ -9,6 +9,7 @@ resources--e.g. (32, 1, 1), (8, 8, 1), etc.
 import logging
 import warnings
 from math import sqrt, ceil, log2, prod
+from numbers import Number
 
 import numpy as np
 import pycuda.autoinit
@@ -16,9 +17,10 @@ import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu_validation import ValidationGPU, ALLOWED_VALIDATION_METHODS, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+from openpiv.gpu_validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu_smoothn import gpu_smoothn
-from openpiv.gpu_misc import _check_arrays, gpu_scalar_mod, gpu_remove_nan, gpu_remove_negative, gpu_mask
+import gpu_misc
+from openpiv.gpu_misc import _check_arrays, _Validator, _Bool, _Number, _Integer, _Element, _Array
 
 # Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen that don't autoinit.
 with warnings.catch_warnings():
@@ -42,6 +44,22 @@ S2N_WIDTH = 2
 _BLOCK_SIZE = 64
 
 
+class _NFFT(_Integer):
+    """Tuple of integers."""
+    def validate(self, value):
+        if not isinstance(value, (Number, tuple, list)):
+            raise TypeError('{} must be a number or sequence of integers.'.format(self.public_name))
+        if isinstance(value, (tuple, list)):
+            if len(value) != 2:
+                raise ValueError('{} must have length of 2 if sequence.'.format(self.public_name))
+            value = value[0]
+            logging.warning('Using the same n_fft_x for both directions. ({})'.format(value))
+        _Integer.validate(self, value)
+
+        return int(value), int(value)
+
+
+# TODO implement real properties rather than getters.
 class CorrelationGPU:
     """Performs the cross-correlation of interrogation windows.
 
@@ -58,43 +76,38 @@ class CorrelationGPU:
     Other Parameters
     ----------------
     n_fft : int or tuple
-        (n_fft_x, n_fft_y), Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers.
+        (n_fft_x, n_fft_y), Window size multiplier for fft. Pass a tuple of length 2 for asymmetric multipliers -- this
+        is not yet implemented.
     center_field : bool
-        Whether to center the vector field on the image.
+        Whether to center the vector field on the frame.
     s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
         Method for evaluating the signal-to-noise ratio value from the correlation map.
-    mask_width : int, optional
+    s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding the second peak. Only used
         if 'sig2noise_method == peak2peak'.
 
-    Attributes
-    ----------
-    sig2noise : GPUArray
-        Signal-to-noise ratio of the cross-correlation.
-
     """
+    subpixel_method = _Element(*ALLOWED_SUBPIXEL_METHODS)
+    s2n_method = _Element(*ALLOWED_S2N_METHODS)
+    s2n_width = _Integer(min_value=1)
+    n_fft = _NFFT(min_value=1)
 
-    def __init__(self, frame_a, frame_b, subpixel_method=SUBPIXEL_METHOD, **kwargs):
+    def __init__(self,
+                 frame_a,
+                 frame_b,
+                 subpixel_method=SUBPIXEL_METHOD,
+                 center_field=True,
+                 s2n_method=S2N_METHOD,
+                 s2n_width=S2N_WIDTH,
+                 n_fft=N_FFT):
         self.frame_a = frame_a
         self.frame_b = frame_b
         self.frame_shape = frame_a.shape
         self.subpixel_method = subpixel_method
-        assert subpixel_method in ALLOWED_SUBPIXEL_METHODS, \
-            'subpixel_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
-
-        self.n_fft = kwargs['n_fft'] if 'n_fft' in kwargs else N_FFT
-        assert np.all(1 <= DTYPE_i(self.n_fft) == self.n_fft)
-        if isinstance(self.n_fft, int):
-            self.n_fft_x = self.n_fft_y = int(self.n_fft)
-        else:
-            self.n_fft_x = int(self.n_fft[0])
-            self.n_fft_y = self.n_fft_x
-            logging.info('For now, n_fft is the same in both directions. ({} is used here.)'.format(self.n_fft_x))
-        self.center_field = kwargs['center_field'] if 'center_field' in kwargs else True
-        self.s2n_width = kwargs['s2n_width'] if 's2n_width' in kwargs else S2N_WIDTH
-        self.s2n_method = kwargs['s2n_method'] if 's2n_method' in kwargs else S2N_METHOD
-        assert self.s2n_method in ALLOWED_S2N_METHODS, \
-            'subpixel_method_method is invalid. Must be one of {}.'.format(ALLOWED_SUBPIXEL_METHODS)
+        self.center_field = center_field
+        self.s2n_method = s2n_method
+        self.s2n_width = s2n_width
+        self.n_fft = n_fft
 
     def __call__(self, piv_field, extended_size=None, shift=None, strain=None):
         """Returns the pixel peaks using the specified correlation method.
@@ -120,7 +133,6 @@ class CorrelationGPU:
         self.piv_field = piv_field
         assert piv_field.window_size >= 8 and piv_field.window_size % 8 == 0, 'Window size must be a multiple of 8.'
         self._extended_size = extended_size if extended_size is not None else piv_field.window_size
-        assert (self._extended_size & (self._extended_size - 1)) == 0, 'Window size (extended) must be power of 2.'
         self._sig2noise = None
 
         self._init_fft_shape()
@@ -137,10 +149,10 @@ class CorrelationGPU:
 
         # Get row and column of peak.
         # TODO Does storing these save time?
-        self.row_peak, self.col_peak = gpu_scalar_mod(self.peak_idx, self.fft_wd)
+        self.row_peak, self.col_peak = gpu_misc.gpu_scalar_mod(self.peak_idx, self.fft_wd)
         self._check_zero_correlation()
 
-        # Get the subpixel location.z
+        # Get the subpixel location.
         row_sp, col_sp = _gpu_subpixel_approximation(self.correlation, self.row_peak, self.col_peak,
                                                      self.subpixel_method)
 
@@ -156,12 +168,20 @@ class CorrelationGPU:
 
     @property
     def sig2noise(self):
+        """Returns signal-to-noise ratio of the cross-correlation.
+
+        Returns
+        -------
+        GPUArray
+            2D float
+
+        """
         return self._get_s2n()
 
     def _init_fft_shape(self):
         """Creates the shape of the fft windows padded up to power of 2 to boost speed."""
-        self.fft_wd = 2 ** ceil(log2(self._extended_size * self.n_fft_x))
-        self.fft_ht = 2 ** ceil(log2(self._extended_size * self.n_fft_y))
+        self.fft_wd = 2 ** ceil(log2(self._extended_size * self.n_fft[0]))
+        self.fft_ht = 2 ** ceil(log2(self._extended_size * self.n_fft[1]))
         self.fft_shape = (self.fft_ht, self.fft_wd)
         self.fft_size = self.fft_wd * self.fft_ht
 
@@ -254,7 +274,7 @@ class CorrelationGPU:
 
         The signal-to-noise ratio is computed from the correlation and is a measure of the quality of the matching
         between two interrogation windows. Note that this method returns the base-10 logarithm of the sig2noise ratio.
-        The sig2noise field contains +np.Inf values where there is no noise.
+        The signal-to-noise field takes +np.Inf values where there is no noise.
 
         Returns
         -------
@@ -327,18 +347,8 @@ class PIVFieldGPU:
     spacing : int
         Number of pixels between interrogation windows.
 
-    Attributes
-    ----------
-    coords : tuple
-        2D ndarray float (x, y), full coordinates of the PIV field.
-    grid_coords : tuple
-        1D ndarray float (x, y), vectors containing the grid coordinates of the PIV field.
-    window_buffer : tuple
-        1D int (buffer_x, buffer_y), offset in pixel units to the window positions to align them with the vector field.
-    mask : ndarray
-        Mask for velocity field.
-
     """
+    center_field = _Bool()
 
     def __init__(self, frame_shape, window_size, spacing, frame_mask=None, center_field=True, **kwargs):
         self.frame_shape = frame_shape
@@ -376,14 +386,38 @@ class PIVFieldGPU:
 
     @property
     def coords(self):
+        """Returns full coordinates of the PIV field.
+
+        Returns
+        -------
+        tuple
+            2D ndarray float (x, y)
+
+        """
         return self._x, self._y
 
     @property
     def grid_coords(self):
+        """Returns vectors containing the grid coordinates of the PIV field.
+
+        Returns
+        -------
+        tuple
+            1D ndarray float (x, y)
+
+        """
         return self._x_grid, self._y_grid
 
     @property
     def center_buffer(self):
+        """Returns offsets in pixel units to the window positions to center the velocity field on the frame.
+
+        Returns
+        -------
+        tuple
+            1D int (buffer_x, buffer_y), offsets in pixel units to the window positions to center them on the frame.
+
+        """
         return _get_center_buffer(self.frame_shape, self.window_size, self.spacing)
 
 
@@ -432,6 +466,48 @@ def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
     return x, y, u, v, mask, s2n
 
 
+class _FrameShape(_Validator):
+    """Tuple of integers."""
+
+    def validate(self, frame_shape):
+        """"""
+        if int(frame_shape[0]) != frame_shape[0] or int(frame_shape[1]) != frame_shape[1]:
+            raise TypeError('frame_shape must be either a tuple of integers or array-like.')
+        frame_shape = frame_shape.shape if hasattr(frame_shape, 'shape') else tuple(frame_shape)
+        if len(frame_shape) != 2:
+            raise ValueError('frame_shape must be 2D.')
+
+        return frame_shape
+
+
+class _WindowSizeIters(_Validator):
+    """Tuple of integers."""
+
+    def validate(self, ws_iters):
+        """"""
+        if not isinstance(ws_iters, (Number, list, tuple)):
+            raise TypeError('{} must be an integer or sequence of integers.')
+        ws_iters = (int(ws_iters),) if isinstance(ws_iters, (Number, float, int)) else tuple(ws_iters)
+        if not all([1 <= ws == int(ws) for ws in ws_iters]):
+            raise ValueError('Window sizes must be integers greater than or equal to 1.')
+        if not sum(ws_iters) >= 1:
+            raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
+
+        return ws_iters
+
+
+class _MinWindowSize(_Integer):
+    """Integer."""
+
+    def validate(self, value):
+        """"""
+        value = _Integer.validate(self, value)
+        if value % 8 != 0:
+            raise ValueError('{} must be a multiple of 8.'.format(self.public_name))
+
+        return value
+
+
 class PIVGPU:
     """Iterative GPU-accelerated algorithm that uses translation and deformation of interrogation windows.
 
@@ -478,9 +554,9 @@ class PIVGPU:
         Whether to deform the windows by the velocity gradient at each iteration.
     smooth : bool, optional
         Whether to smooth the intermediate fields.
-    nb_validation_iter : int, optional
+    num_validation_iters : int, optional
         Number of iterations per validation cycle.
-    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'} or tuple, optional
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, tuple or None, optional
         Method(s) to use for validation.
     s2n_tol, median_tol, mean_tol, rms_tol : float, optional
         Tolerance of the validation methods.
@@ -501,16 +577,18 @@ class PIVGPU:
     n_fft : int or tuple, optional
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is recommended.
 
-    Attributes
-    ----------
-    coords : tuple
-        2D ndarray (x, y), coordinates where the velocity field has been computed.
-    field_mask : ndarray
-        2D float (m, n), boolean values (True for vectors interpolated from previous iteration).
-    s2n : ndarray
-        2D float (m, n), signal-to-noise ratio of the final velocity field.
-
     """
+    frame_shape = _FrameShape()
+    window_size_iters = _WindowSizeIters()
+    min_window_size = _MinWindowSize(min_value=8)
+    overlap_ratio = _Number(min_value=0, max_value=1, min_closure=False, max_closure=False)
+    dt = _Number()
+    mask = _Array(allow_none=True)
+    deform = _Bool()
+    smooth = _Bool()
+    num_validation_iters = _Integer(min_value=0)  # TODO move into validation object.
+    extend_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
+    smoothing_par = _Number(min_value=0, min_closure=False, allow_none=True)
 
     def __init__(self,
                  frame_shape,
@@ -521,7 +599,7 @@ class PIVGPU:
                  mask=None,
                  deform=True,
                  smooth=True,
-                 nb_validation_iter=1,
+                 num_validation_iters=1,
                  validation_method='median_velocity',
                  s2n_tol=S2N_TOL,
                  median_tol=MEDIAN_TOL,
@@ -533,32 +611,29 @@ class PIVGPU:
                  subpixel_method=SUBPIXEL_METHOD,
                  s2n_method=S2N_METHOD,
                  s2n_width=S2N_WIDTH,
-                 n_fft=N_FFT,
-                 **kwargs
+                 n_fft=N_FFT
                  ):
-
-        self.frame_shape = frame_shape.shape if hasattr(frame_shape, 'shape') else tuple(frame_shape)
+        self.frame_shape = frame_shape
+        self.window_size_iters = window_size_iters
         self.min_window_size = min_window_size
-        self.ws_iters = (window_size_iters,) if isinstance(window_size_iters, int) else tuple(window_size_iters)
-        self.overlap_ratio = float(overlap_ratio)
+        self.overlap_ratio = overlap_ratio
         self.dt = dt
-        self.mask = mask.astype(DTYPE_i) if mask is not None else None
+        self.mask = mask
         self.deform = deform
         self.smooth = smooth
-        self.nb_validation_iter = nb_validation_iter
-        self.validation_method = (validation_method,) if isinstance(validation_method, str) else validation_method
-        self.extend_ratio = extend_ratio
+        self.num_validation_iters = num_validation_iters
+        self.validation_method = validation_method
         self.s2n_tol = s2n_tol
         self.median_tol = median_tol
         self.mean_tol = mean_tol
         self.rms_tol = rms_tol
+        self.center_field = center_field
+        self.extend_ratio = extend_ratio
         self.smoothing_par = smoothing_par
-        self.n_fft = n_fft
         self.subpixel_method = subpixel_method
         self.s2n_method = s2n_method
         self.s2n_width = s2n_width
-        self.center_field = center_field
-        assert kwargs == {}
+        self.n_fft = n_fft
 
         self._corr = None
         self._piv_fields = None
@@ -582,18 +657,19 @@ class PIVGPU:
         u = v = None
         u_previous = v_previous = None
         dp_u = dp_v = None
-        max_iter = sum(self.ws_iters)
+        max_iter = sum(self.window_size_iters)
 
         # Send masked frames to device.
         frame_a_masked, frame_b_masked = self._mask_frame(frame_a, frame_b)
 
         # Create the correlation object.
-        self._corr = CorrelationGPU(frame_a_masked, frame_b_masked,
-                                    n_fft=self.n_fft,
+        self._corr = CorrelationGPU(frame_a_masked,
+                                    frame_b_masked,
                                     subpixel_method=self.subpixel_method,
                                     center_field=self.center_field,
                                     s2n_method=self.s2n_method,
-                                    s2n_width=self.s2n_width)
+                                    s2n_width=self.s2n_width,
+                                    n_fft=self.n_fft)
 
         # MAIN LOOP
         for k in range(max_iter):
@@ -633,16 +709,38 @@ class PIVGPU:
 
     @property
     def coords(self):
+        """Returns coordinates where the velocity field has been computed.
+
+        Returns
+        -------
+        tuple
+            2D ndarray (x, y)
+
+        """
         piv_fields = self._get_piv_fields()
         return piv_fields[-1].coords
 
     @property
     def field_mask(self):
+        """Returns mask corresponding to the resulting vector field.
+
+        Returns
+        -------
+        ndarray
+            2D int (m, n), boolean values (True for vectors interpolated from previous iteration)."""
         piv_fields = self._get_piv_fields()
         return piv_fields[-1].mask
 
     @property
     def s2n(self):
+        """Returns signal-to-noise ratio of the final velocity field.
+
+        Returns
+        -------
+        ndarray
+            2D float (m, n)
+
+        """
         return self._corr.sig2noise
 
     def free_data(self):
@@ -661,7 +759,7 @@ class PIVGPU:
     def _init_piv_fields(self):
         """Creates piv-field objects for all iterations."""
         self._piv_fields = []
-        for window_size in _get_window_sizes(self.ws_iters, self.min_window_size):
+        for window_size in _get_window_sizes(self.window_size_iters, self.min_window_size):
             window_size = window_size
             spacing = _get_spacing(window_size, self.overlap_ratio)
             self._piv_fields.append(PIVFieldGPU(self.frame_shape,
@@ -676,8 +774,8 @@ class PIVGPU:
         frame_mask = self._get_frame_mask()
 
         if frame_mask is not None:
-            frame_a_masked = gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), frame_mask)
-            frame_b_masked = gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), frame_mask)
+            frame_a_masked = gpu_misc.gpu_mask(gpuarray.to_gpu(frame_a.astype(DTYPE_f)), frame_mask)
+            frame_b_masked = gpu_misc.gpu_mask(gpuarray.to_gpu(frame_b.astype(DTYPE_f)), frame_mask)
         else:
             frame_a_masked = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
             frame_b_masked = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
@@ -717,8 +815,8 @@ class PIVGPU:
         mask = self._piv_field_k.get_mask(return_array=True)
 
         if dp_x is None:
-            u = gpu_mask(j_peak, mask)
-            v = gpu_mask(i_peak, mask)
+            u = gpu_misc.gpu_mask(j_peak, mask)
+            v = gpu_misc.gpu_mask(i_peak, mask)
         else:
             u = _gpu_update_field(dp_x, j_peak, mask)
             v = _gpu_update_field(dp_y, i_peak, mask)
@@ -732,10 +830,11 @@ class PIVGPU:
         mask = self._piv_field_k.get_mask()
         # Retrieve signal-to-noise ratio only if required for validation.
         sig2noise = None
-        if 's2n' in self.validation_method and self.nb_validation_iter > 0:
+        if 's2n' in self.validation_method and self.num_validation_iters > 0:
             sig2noise = self._corr.sig2noise
 
         # Do the validation.
+        # TODO skip this for no validation--make val_locations into property.
         validation_gpu = ValidationGPU(u.shape,
                                        mask=mask,
                                        validation_method=self.validation_method,
@@ -743,7 +842,7 @@ class PIVGPU:
                                        median_tol=self.median_tol,
                                        mean_tol=self.mean_tol,
                                        rms_tol=self.rms_tol)
-        for i in range(self.nb_validation_iter):
+        for i in range(self.num_validation_iters):
             val_locations = validation_gpu(u, v, sig2noise=sig2noise)
             u_mean, v_mean = validation_gpu.median
 
@@ -756,6 +855,7 @@ class PIVGPU:
                 break
             validation_gpu.free_data()
 
+        # TODO decouple this.
         # Smooth the validated field.
         if self.smooth:
             w = (1 - val_locations) if val_locations is not None else None
@@ -814,106 +914,9 @@ class PIVGPU:
             self.residual = sqrt(int(gpuarray.sum(i_peak ** 2 + j_peak ** 2).get()) / i_peak.size) / 0.5
         except OverflowError:
             self.residual = np.nan
+            logging.warning('Overflow in residuals.')
 
         return self.residual
-
-    def _check_inputs(self):
-        """Validate the user-supplied parameters."""
-        pass
-
-
-#     # TODO break this into individual functions
-#     def _check_inputs(self):
-#         """Validate the user-supplied parameters."""
-#         _check_frame_shape()
-#         _check_window_sizes()
-#         _check_overlap_ratio()
-#         _
-#
-#
-# def _check_frame_shape():
-#     if int(self.frame_shape[0]) != self.frame_shape[0] or int(self.frame_shape[1]) != self.frame_shape[1]:
-#         raise TypeError('frame_shape must be either tuple of integers or array-like.')
-#     if len(self.frame_shape) != 2:
-#         raise ValueError('frame_shape must be 2D.')
-#
-#
-# def _check_window_sizes():
-#     if not all([1 <= ws == int(ws) for ws in self.ws_iters]):
-#         raise ValueError('Window sizes must be integers greater than or equal to 1.')
-#     if not sum(self.ws_iters) >= 1:
-#         raise ValueError('Sum of window_size_iters must be equal to or greater than 1.')
-#
-#
-# def _check_overlap_ratio():
-#     if not 0 < self.overlap_ratio < 1:
-#         raise ValueError('overlap ratio must be between 0 and 1.')
-#
-#
-# def _check_dt():
-#     if self.dt != float(self.dt):
-#         raise ValueError('dt must be a number.')
-#
-#
-# def _check_mask():
-#     if self.mask is not None:
-#         if self.mask.shape != self.frame_shape:
-#             raise ValueError('mask is not same shape as frame.')
-#
-#
-# def _check_deform():
-#     if self.deform != bool(self.deform):
-#         raise ValueError('deform must have a boolean value.')
-#
-#
-# def _check_smooth():
-#     if self.smooth != bool(self.smooth):
-#         raise ValueError('smooth must have a boolean value.')
-#
-#
-# # TODO check this using the validation object
-# def _check_val_methods():
-#     if not 0 <= self.nb_validation_iter == int(self.nb_validation_iter):
-#         raise ValueError('nb_validation_iter must be 0 or a positive integer.')
-#     if not all([method in ALLOWED_VALIDATION_METHODS for method in self.validation_method]):
-#         raise ValueError('validation_method is not allowed. Allowed are: {}'.format(ALLOWED_VALIDATION_METHODS))
-#
-#
-# def _check_val_tols():
-#     if not all(0 < tol == float(tol) or tol is None for tol in
-#                [self.s2n_tol, self.median_tol, self.mean_tol, self.rms_tol]):
-#         raise ValueError('Validation tolerances must be positive numbers.')
-#
-#
-# def _check_extend_ratio():
-#     if self.extend_ratio is not None:
-#         if not 1 < self.extend_ratio == float(self.extend_ratio):
-#             raise ValueError('extend_ratio must be a number greater than unity.')
-#
-#
-# def _check_nfft():
-#     if not 1 < self.n_fft == float(self.n_fft):
-#         raise ValueError('n_fft must be an number equal to or greater than 1.')
-#
-#
-# def _check_s2n_method():
-#     if self.s2n_method not in ALLOWED_S2N_METHODS:
-#         raise ValueError('sig2noise_method is not allowed. Allowed is one of: {}'.format(ALLOWED_S2N_METHODS))
-#
-#
-# def _check_subpixel_method():
-#     if self.subpixel_method not in ALLOWED_SUBPIXEL_METHODS:
-#         raise ValueError('subpixel_method is not allowed. Allowed is one of: {}'.format(ALLOWED_SUBPIXEL_METHODS))
-#
-#
-# def _check_s2n_methods():
-#     if not 1 < self.s2n_width == int(self.s2n_width):
-#         raise ValueError('s2n_width must be an integer.')
-#
-#
-# def _check_center_field():
-#     if self.center_field != bool(self.center_field):
-#         raise ValueError('center_field must have a boolean value.')
 
 
 def get_field_shape(frame_shape, window_size, spacing):
@@ -1390,7 +1393,7 @@ def _gpu_window_slice(frame, field_shape, window_size, spacing, buffer, dt=0, sh
     assert len(field_shape) == 2
     assert -1 <= dt <= 1
     assert np.all(buffer == DTYPE_i(buffer))
-    if isinstance(buffer, int):
+    if isinstance(buffer, Number):
         buffer_x_i = buffer_y_i = DTYPE_i(buffer)
     else:
         buffer_x_i, buffer_y_i = DTYPE_i(buffer)
@@ -1463,8 +1466,7 @@ def _gpu_normalize_intensity(win):
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
     normalize = mod_norm.get_function('normalize')
-    normalize(win, win_norm, mean, DTYPE_i(window_size), DTYPE_i(size), block=(block_size, 1, 1),
-              grid=(grid_size, 1))
+    normalize(win, win_norm, mean, DTYPE_i(window_size), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
 
     return win_norm
 
@@ -1508,7 +1510,7 @@ def _gpu_zero_pad(win, fft_shape, extended_search_offset=0):
     """
     _check_arrays(win, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     assert 0 <= extended_search_offset == int(extended_search_offset)
-    if isinstance(extended_search_offset, int):
+    if isinstance(extended_search_offset, Number):
         offset_x_i = offset_y_i = DTYPE_i(extended_search_offset)
     else:
         offset_x_i, offset_y_i = DTYPE_i(extended_search_offset)
@@ -1806,13 +1808,13 @@ def _peak2energy(correlation, corr_peak):
     size = wd * ht
 
     # Remove negative correlation values.
-    gpu_remove_negative(corr_peak)
-    gpu_remove_negative(correlation)
+    gpu_misc.gpu_remove_negative(corr_peak)
+    gpu_misc.gpu_remove_negative(correlation)
 
     corr_reshape = correlation.reshape(n_windows, size)
     corr_mean = cumisc.mean(corr_reshape, axis=1)
     sig2noise = DTYPE_f(2) * cumath.log10(corr_peak / corr_mean)
-    gpu_remove_nan(sig2noise)
+    gpu_misc.gpu_remove_nan(sig2noise)
 
     return sig2noise
 
@@ -1822,11 +1824,11 @@ def _peak2peak(corr_peak1, corr_peak2):
     _check_arrays(corr_peak1, corr_peak2, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=corr_peak1.shape)
 
     # Remove negative peaks.
-    gpu_remove_negative(corr_peak1)
-    gpu_remove_negative(corr_peak2)
+    gpu_misc.gpu_remove_negative(corr_peak1)
+    gpu_misc.gpu_remove_negative(corr_peak2)
 
     sig2noise = cumath.log10(corr_peak1 / corr_peak2)
-    gpu_remove_nan(sig2noise)
+    gpu_misc.gpu_remove_nan(sig2noise)
 
     return sig2noise
 

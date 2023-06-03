@@ -3,13 +3,12 @@
 from math import ceil, prod, log10
 
 import numpy as np
-# Create the PyCUDA context.
 import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
 # import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu_misc import _check_arrays, gpu_mask
+from openpiv.gpu_misc import _check_arrays, gpu_mask, _Subset, _Number
 
 # Define 32-bit types
 DTYPE_i = np.int32
@@ -24,8 +23,7 @@ RMS_TOL = 2
 _BLOCK_SIZE = 64
 
 
-def gpu_validation(
-                   *f,
+def gpu_validation(*f,
                    sig2noise=None,
                    mask=None,
                    validation_method='median_velocity',
@@ -87,13 +85,25 @@ class ValidationGPU:
         Tolerance for rms validation.
 
     """
-    def __init__(self, f_shape, mask=None, validation_method='median_velocity', s2n_tol=S2N_TOL,
-                 median_tol=MEDIAN_TOL, mean_tol=MEAN_TOL, rms_tol=RMS_TOL):
+    validation_method = _Subset(*ALLOWED_VALIDATION_METHODS)
+    s2n_tol = _Number(min_value=0)
+    median_tol = _Number(min_value=0, min_closure=False)
+    mean_tol = _Number(min_value=0, min_closure=False)
+    rms_tol = _Number(min_value=0, min_closure=False)
+
+    def __init__(self,
+                 f_shape,
+                 mask=None,
+                 validation_method='median_velocity',
+                 s2n_tol=S2N_TOL,
+                 median_tol=MEDIAN_TOL,
+                 mean_tol=MEAN_TOL,
+                 rms_tol=RMS_TOL):
         self.f_shape = f_shape.shape if hasattr(f_shape, 'shape') else tuple(f_shape)
         if mask is not None:
             _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
         self.mask = mask
-        self.validation_method = validation_method if not isinstance(validation_method, str) else (validation_method,)
+        self.validation_method = validation_method
         self.validation_tols = {'s2n': s2n_tol, 'median': median_tol, 'mean': mean_tol, 'rms': rms_tol}
 
         self._val_locations = None
