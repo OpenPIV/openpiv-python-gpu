@@ -22,7 +22,9 @@ def generate_np_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
 
 def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
-    f = generate_np_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
+    f = generate_np_array(
+        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+    )
     f_d = gpuarray.to_gpu(f)
 
     return f_d
@@ -30,7 +32,9 @@ def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0)
 
 def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_np_array(shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed)
+    f = generate_np_array(
+        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+    )
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
@@ -61,7 +65,7 @@ def generate_array_pair1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
 
 
 # UNIT TESTS
-@pytest.mark.parametrize('d_type', [DTYPE_i, DTYPE_f])
+@pytest.mark.parametrize("d_type", [DTYPE_i, DTYPE_f])
 def test_gpu_mask(d_type):
     shape = (16, 16)
 
@@ -74,7 +78,7 @@ def test_gpu_mask(d_type):
     assert np.array_equal(f_masked_gpu, f_masked)
 
 
-@pytest.mark.parametrize('d_type', [DTYPE_i, DTYPE_f])
+@pytest.mark.parametrize("d_type", [DTYPE_i, DTYPE_f])
 def test_gpu_scalar_mod_i(d_type):
     shape = (16, 16)
     m = 3
@@ -106,7 +110,7 @@ def test_gpu_replace_nan_f():
     assert np.array_equal(f_finite_gpu, f_finite)
 
 
-@pytest.mark.parametrize('d_type', [DTYPE_i, DTYPE_f])
+@pytest.mark.parametrize("d_type", [DTYPE_i, DTYPE_f])
 def test_gpu_replace_negative_f(d_type):
     shape = (16, 16)
 

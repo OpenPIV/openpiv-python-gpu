@@ -3,10 +3,11 @@
 from math import ceil, prod, log10
 
 import numpy as np
-import pycuda.autoinit
 import pycuda.gpuarray as gpuarray
-# import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
+# import pycuda.cumath as cumath
+# noinspection PyUnresolvedReferences
+import pycuda.autoinit
 
 from openpiv.gpu_misc import _check_arrays, gpu_mask, _Subset, _Number
 
@@ -15,24 +16,26 @@ DTYPE_i = np.int32
 DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
-ALLOWED_VALIDATION_METHODS = {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}
+ALLOWED_VALIDATION_METHODS = {"s2n", "median_velocity", "mean_velocity", "rms_velocity"}
 S2N_TOL = 2
 MEDIAN_TOL = 2
 MEAN_TOL = 2
 RMS_TOL = 2
 _BLOCK_SIZE = 64
 
-
-def gpu_validation(*f,
-                   sig2noise=None,
-                   mask=None,
-                   validation_method='median_velocity',
-                   s2n_tol=S2N_TOL,
-                   median_tol=MEDIAN_TOL,
-                   mean_tol=MEAN_TOL,
-                   rms_tol=RMS_TOL
-                   ):
-    """Validates vector-fields and returns an array indicating which location need to be validated.
+# TODO rename sig2noise
+def gpu_validation(
+    *f,
+    sig2noise=None,
+    mask=None,
+    validation_method="median_velocity",
+    s2n_tol=S2N_TOL,
+    median_tol=MEDIAN_TOL,
+    mean_tol=MEAN_TOL,
+    rms_tol=RMS_TOL
+):
+    """Validates vector-fields and returns an array indicating which location need to be
+    validated.
 
     Parameters
     ----------
@@ -42,10 +45,11 @@ def gpu_validation(*f,
         2D float (m, n), signal-to-noise ratio of each velocity.
     mask : GPUArray or None
         2D int (m, n), mask for the velocity field.
-    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'},
+        optional
         Method(s) to use for validation.
     s2n_tol : float, optional
-        Minimum value for sig2noise validation.
+        Minimum value for validation by signal-to-noise ratio.
     median_tol : float, optional
         Tolerance for median velocity validation.
     mean_tol : float, optional
@@ -56,16 +60,20 @@ def gpu_validation(*f,
     Returns
     -------
     GPUArray
-        2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
+        2D int (m, n), array of indices that need to be validated. 1s indicate locations
+        of invalid vectors.
 
     """
-    validation_gpu = ValidationGPU(f[0], mask, validation_method, s2n_tol, median_tol, mean_tol, rms_tol)
+    validation_gpu = ValidationGPU(
+        f[0], mask, validation_method, s2n_tol, median_tol, mean_tol, rms_tol
+    )
 
     return validation_gpu(*f, sig2noise=sig2noise)
 
 
 class ValidationGPU:
-    """Validates vector-fields and returns an array indicating which location need to be validated.
+    """Validates vector-fields and returns an array indicating which location need to be
+    validated.
 
     Parameters
     ----------
@@ -73,10 +81,11 @@ class ValidationGPU:
         (ht, wd) of the fields to be validated.
     mask : GPUArray or None
         2D float, mask for the velocity field.
-    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'}, optional
+    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'},
+        optional
         Method(s) to use for validation.
     s2n_tol : float, optional
-        Minimum value for sig2noise.
+        Minimum value for validation by signal-to-noise ratio.
     median_tol : float, optional
         Tolerance for median velocity validation.
     mean_tol : float, optional
@@ -85,26 +94,36 @@ class ValidationGPU:
         Tolerance for rms validation.
 
     """
+
     validation_method = _Subset(*ALLOWED_VALIDATION_METHODS)
     s2n_tol = _Number(min_value=0)
     median_tol = _Number(min_value=0, min_closure=False)
     mean_tol = _Number(min_value=0, min_closure=False)
     rms_tol = _Number(min_value=0, min_closure=False)
 
-    def __init__(self,
-                 f_shape,
-                 mask=None,
-                 validation_method='median_velocity',
-                 s2n_tol=S2N_TOL,
-                 median_tol=MEDIAN_TOL,
-                 mean_tol=MEAN_TOL,
-                 rms_tol=RMS_TOL):
-        self.f_shape = f_shape.shape if hasattr(f_shape, 'shape') else tuple(f_shape)
+    def __init__(
+        self,
+        f_shape,
+        mask=None,
+        validation_method="median_velocity",
+        s2n_tol=S2N_TOL,
+        median_tol=MEDIAN_TOL,
+        mean_tol=MEAN_TOL,
+        rms_tol=RMS_TOL,
+    ):
+        self.f_shape = f_shape.shape if hasattr(f_shape, "shape") else tuple(f_shape)
         if mask is not None:
-            _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape)
+            _check_arrays(
+                mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=self.f_shape
+            )
         self.mask = mask
         self.validation_method = validation_method
-        self.validation_tols = {'s2n': s2n_tol, 'median': median_tol, 'mean': mean_tol, 'rms': rms_tol}
+        self.validation_tols = {
+            "s2n": s2n_tol,
+            "median": median_tol,
+            "mean": mean_tol,
+            "rms": rms_tol,
+        }
 
         self._val_locations = None
         self._f = None
@@ -131,22 +150,25 @@ class ValidationGPU:
         Returns
         -------
         val_locations : GPUArray
-            2D int (m, n), array of indices that need to be validated. 1s indicate locations of invalid vectors.
+            2D int (m, n), array of indices that need to be validated. 1s indicate
+            locations of invalid vectors.
 
         """
         self.free_data()
-        _check_arrays(*f, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape)
+        _check_arrays(
+            *f, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape
+        )
         self._num_fields = len(f)
         self._f = f
 
         # Do the validations.
-        if 's2n' in self.validation_method:
+        if "s2n" in self.validation_method:
             self._s2n_validation(sig2noise)
-        if 'median_velocity' in self.validation_method:
+        if "median_velocity" in self.validation_method:
             self._median_validation()
-        if 'mean_velocity' in self.validation_method:
+        if "mean_velocity" in self.validation_method:
             self._mean_validation()
-        if 'rms_velocity' in self.validation_method:
+        if "rms_velocity" in self.validation_method:
             self._rms_validation()
 
         # Apply the mask to the final result.
@@ -179,9 +201,16 @@ class ValidationGPU:
 
     def _s2n_validation(self, sig2noise):
         """Performs signal-to-noise validation on each field."""
-        assert sig2noise is not None, 'signal-to-noise validation requires sig2noise to be passed.'
-        _check_arrays(sig2noise, array_type=gpuarray.GPUArray, dtype=DTYPE_f, size=prod(self.f_shape))
-        s2n_tol = log10(self.validation_tols['s2n'])
+        assert (
+            sig2noise is not None
+        ), "signal-to-noise validation requires sig2noise to be passed."
+        _check_arrays(
+            sig2noise,
+            array_type=gpuarray.GPUArray,
+            dtype=DTYPE_f,
+            size=prod(self.f_shape),
+        )
+        s2n_tol = log10(self.validation_tols["s2n"])
 
         sig2noise_tol = sig2noise / DTYPE_f(s2n_tol)
         self._val_locations = _local_validation(sig2noise_tol, 1, self._val_locations)
@@ -190,33 +219,41 @@ class ValidationGPU:
         """Performs median validation on each field."""
         f_neighbours = self._get_neighbours()
         f_median = self._get_median()
-        median_tol = self.validation_tols['median']
+        median_tol = self.validation_tols["median"]
 
         for k in range(self._num_fields):
-            f_median_fluc = _gpu_median_fluc(f_median[k], f_neighbours[k], self._neighbours_present)
-            self._val_locations = _neighbour_validation(self._f[k], f_median[k], f_median_fluc,
-                                                        median_tol, self._val_locations)
+            f_median_fluc = _gpu_median_fluc(
+                f_median[k], f_neighbours[k], self._neighbours_present
+            )
+            self._val_locations = _neighbour_validation(
+                self._f[k], f_median[k], f_median_fluc, median_tol, self._val_locations
+            )
 
     def _mean_validation(self):
         """Performs mean validation on each field."""
         f_neighbours = self._get_neighbours()
         f_mean = self._get_mean()
-        mean_tol = self.validation_tols['mean']
+        mean_tol = self.validation_tols["mean"]
 
         for k in range(self._num_fields):
-            f_mean_fluc = _gpu_mean_fluc(f_mean[k], f_neighbours[k], self._neighbours_present)
-            self._val_locations = _neighbour_validation(self._f[k], f_mean[k], f_mean_fluc, mean_tol,
-                                                        self._val_locations)
+            f_mean_fluc = _gpu_mean_fluc(
+                f_mean[k], f_neighbours[k], self._neighbours_present
+            )
+            self._val_locations = _neighbour_validation(
+                self._f[k], f_mean[k], f_mean_fluc, mean_tol, self._val_locations
+            )
 
     def _rms_validation(self):
         """Performs RMS validation on each field."""
         f_neighbours = self._get_neighbours()
         f_mean = self._get_mean()
-        rms_tol = self.validation_tols['rms']
+        rms_tol = self.validation_tols["rms"]
 
         for k in range(self._num_fields):
             f_rms = _gpu_rms(f_mean[k], f_neighbours[k], self._neighbours_present)
-            self._val_locations = _neighbour_validation(self._f[k], f_mean[k], f_rms, rms_tol, self._val_locations)
+            self._val_locations = _neighbour_validation(
+                self._f[k], f_mean[k], f_rms, rms_tol, self._val_locations
+            )
 
     def _mask_val_locations(self):
         """Removes masked locations from the validation locations."""
@@ -226,7 +263,9 @@ class ValidationGPU:
     def _get_neighbours(self):
         """Returns neighbouring values for each field."""
         if self._f_neighbours is None:
-            self._f_neighbours = [_gpu_get_neighbours(f, self._neighbours_present) for f in self._f]
+            self._f_neighbours = [
+                _gpu_get_neighbours(f, self._neighbours_present) for f in self._f
+            ]
 
         return self._f_neighbours
 
@@ -235,8 +274,10 @@ class ValidationGPU:
         f_neighbours = self._get_neighbours()
 
         if self._f_median is None:
-            self._f_median = [_gpu_median_velocity(f_neighbours[k], self._neighbours_present)
-                              for k in range(self._num_fields)]
+            self._f_median = [
+                _gpu_median_velocity(f_neighbours[k], self._neighbours_present)
+                for k in range(self._num_fields)
+            ]
 
         return self._f_median
 
@@ -245,24 +286,39 @@ class ValidationGPU:
         f_neighbours = self._get_neighbours()
 
         if self._f_mean is None:
-            self._f_mean = [_gpu_mean_velocity(f_neighbours[k], self._neighbours_present)
-                            for k in range(self._num_fields)]
+            self._f_mean = [
+                _gpu_mean_velocity(f_neighbours[k], self._neighbours_present)
+                for k in range(self._num_fields)
+            ]
 
         return self._f_mean
 
     def _check_validation_methods(self):
         """Checks that input validation methods are allowed."""
-        if not all([val_method in ALLOWED_VALIDATION_METHODS for val_method in self.validation_method]):
+        if not all(
+            [
+                val_method in ALLOWED_VALIDATION_METHODS
+                for val_method in self.validation_method
+            ]
+        ):
             raise ValueError(
-                'Invalid validation method(s). Allowed validation methods are: {}'.format(ALLOWED_VALIDATION_METHODS))
+                "Invalid validation method(s). Allowed validation methods are: "
+                "{}".format(
+                    ALLOWED_VALIDATION_METHODS
+                )
+            )
 
     def _check_validation_tolerances(self):
         """Checks that input validation methods are allowed."""
         if not all([val_tol > 0 for val_tol in self.validation_tols.values()]):
-            raise ValueError('Invalid validation tolerances(s). Validation tolerances must be greater than 0.')
+            raise ValueError(
+                "Invalid validation tolerances(s). Validation tolerances must be "
+                "greater than 0."
+            )
 
 
-mod_validation = SourceModule("""
+mod_validation = SourceModule(
+    """
 __global__ void local_validation(int *val_locations, float *f, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -271,19 +327,23 @@ __global__ void local_validation(int *val_locations, float *f, float tol, int si
     val_locations[t_idx] = val_locations[t_idx] || (f[t_idx] > tol);
 }
 
-__global__ void neighbour_validation(int *val_locations, float *f, float *f_mean, float *f_fluc, float tol, int size)
+__global__ void neighbour_validation(int *val_locations, float *f, float *f_mean, float
+                    *f_fluc, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    // a small number is added to prevent singularities in uniform flow (Scarano & Westerweel, 2005)
-    val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx]) / (f_fluc[t_idx] + 0.1f) > tol);
+    // a small number is added to prevent singularities in uniform flow
+    val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx])
+                                                   / (f_fluc[t_idx] + 0.1f) > tol);
 }
-""")
+"""
+)
 
 
 def _local_validation(f, tol, val_locations=None):
-    """Updates the validation list by checking if the array elements exceed the tolerance."""
+    """Updates the validation list by checking if the array elements exceed the
+    tolerance."""
     size = f.size
 
     if val_locations is None:
@@ -291,14 +351,22 @@ def _local_validation(f, tol, val_locations=None):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    local_validation = mod_validation.get_function('local_validation')
-    local_validation(val_locations, f, DTYPE_f(tol), DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    local_validation = mod_validation.get_function("local_validation")
+    local_validation(
+        val_locations,
+        f,
+        DTYPE_f(tol),
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return val_locations
 
 
 def _neighbour_validation(f, f_mean, f_mean_fluc, tol, val_locations=None):
-    """Updates the validation list by checking if the neighbouring elements exceed the tolerance."""
+    """Updates the validation list by checking if the neighbouring elements exceed the
+    tolerance."""
     size = f.size
 
     if val_locations is None:
@@ -306,14 +374,23 @@ def _neighbour_validation(f, f_mean, f_mean_fluc, tol, val_locations=None):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    neighbour_validation = mod_validation.get_function('neighbour_validation')
-    neighbour_validation(val_locations, f, f_mean, f_mean_fluc, DTYPE_f(tol), DTYPE_i(size), block=(block_size, 1, 1),
-                         grid=(grid_size, 1))
+    neighbour_validation = mod_validation.get_function("neighbour_validation")
+    neighbour_validation(
+        val_locations,
+        f,
+        f_mean,
+        f_mean_fluc,
+        DTYPE_f(tol),
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return val_locations
 
 
-mod_neighbours = SourceModule("""
+mod_neighbours = SourceModule(
+    """
 __global__ void find_neighbours(int *np, int *mask, int n, int m, int size)
 {
     // np : neighbours_present
@@ -344,7 +421,8 @@ __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
     // get neighbouring values
     nb[t_idx] = f[(row_idx * n + col_idx) * np[t_idx]] * np[t_idx];
 }
-""")
+"""
+)
 
 
 def _gpu_find_neighbours(shape, mask=None):
@@ -372,9 +450,16 @@ def _gpu_find_neighbours(shape, mask=None):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    find_neighbours = mod_neighbours.get_function('find_neighbours')
-    find_neighbours(neighbours_present, mask, DTYPE_i(n), DTYPE_i(m), DTYPE_i(size), block=(block_size, 1, 1),
-                    grid=(grid_size, 1))
+    find_neighbours = mod_neighbours.get_function("find_neighbours")
+    find_neighbours(
+        neighbours_present,
+        mask,
+        DTYPE_i(n),
+        DTYPE_i(m),
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return neighbours_present
 
@@ -402,14 +487,22 @@ def _gpu_get_neighbours(f, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    get_neighbours = mod_neighbours.get_function('get_neighbours')
-    get_neighbours(neighbours, neighbours_present, f, DTYPE_i(n), DTYPE_i(size), block=(block_size, 1, 1),
-                   grid=(grid_size, 1))
+    get_neighbours = mod_neighbours.get_function("get_neighbours")
+    get_neighbours(
+        neighbours,
+        neighbours_present,
+        f,
+        DTYPE_i(n),
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return neighbours
 
 
-mod_median_velocity = SourceModule("""
+mod_median_velocity = SourceModule(
+    """
 // device-side function to swap elements of two arrays.
 __device__ void swap(float *A, int a, int b)
 {
@@ -492,7 +585,8 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
     f_median[t_idx] = median(A, B);
 }
 
-__global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, int *np, int size)
+__global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, int *np,
+                    int size)
 {
     // nb : value of the neighbouring points
     // np : 1 if there is a neighbour, 0 if no neighbour
@@ -516,11 +610,13 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
 
     f_median_fluc[t_idx] = median(A, B);
 }
-""")
+"""
+)
 
 
 def _gpu_median_velocity(f_neighbours, neighbours_present):
-    """Calculates the median velocity on a 3x3 grid around each point in a velocity field.
+    """Calculates the median velocity on a 3x3 grid around each point in a velocity
+    field.
 
     Parameters
     ----------
@@ -542,15 +638,22 @@ def _gpu_median_velocity(f_neighbours, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    median_velocity = mod_median_velocity.get_function('median_velocity')
-    median_velocity(f_median, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
-                    grid=(grid_size, 1))
+    median_velocity = mod_median_velocity.get_function("median_velocity")
+    median_velocity(
+        f_median,
+        f_neighbours,
+        neighbours_present,
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return f_median
 
 
 def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
-    """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around each point in a velocity field.
+    """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around
+    each point in a velocity field.
 
     Parameters
     ----------
@@ -574,18 +677,27 @@ def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    median_u_fluc = mod_median_velocity.get_function('median_fluc')
-    median_u_fluc(f_median_fluc, f_median, f_neighbours, neighbours_present, DTYPE_i(size),
-                  block=(block_size, 1, 1), grid=(grid_size, 1))
+    median_u_fluc = mod_median_velocity.get_function("median_fluc")
+    median_u_fluc(
+        f_median_fluc,
+        f_median,
+        f_neighbours,
+        neighbours_present,
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return f_median_fluc
 
 
-mod_mean_velocity = SourceModule("""
+mod_mean_velocity = SourceModule(
+    """
 __device__ float num_neighbours(int *np, int t_idx)
 {
-    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2] + np[t_idx * 8 + 3]
-                        + np[t_idx * 8 + 4] + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
+    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2]
+                      + np[t_idx * 8 + 3] + np[t_idx * 8 + 4]
+                      + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
     return denominator + (denominator == 0.0f);
 }
 
@@ -598,8 +710,9 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
     if (t_idx >= size) {return;}
 
     // Sum terms of the mean.
-    float numerator = nb[t_idx * 8 + 0] + nb[t_idx * 8 + 1] + nb[t_idx * 8 + 2] + nb[t_idx * 8 + 3]
-                        + nb[t_idx * 8 + 4] + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
+    float numerator = nb[t_idx * 8 + 0] + nb[t_idx * 8 + 1] + nb[t_idx * 8 + 2]
+                    + nb[t_idx * 8 + 3] + nb[t_idx * 8 + 4]
+                    + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
 
     // Mean is normalized by number of terms summed.
     float denominator = num_neighbours(np, t_idx);
@@ -634,17 +747,22 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
 
     // Sum terms of the rms fluctuations.
     float f_m = f_mean[t_idx];
-    float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2) + powf(nb[t_idx * 8 + 1] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 2] - f_m, 2) + powf(nb[t_idx * 8 + 3] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 4] - f_m, 2) + powf(nb[t_idx * 8 + 5] - f_m, 2)
-                       + powf(nb[t_idx * 8 + 6] - f_m, 2) + powf(nb[t_idx * 8 + 7] - f_m, 2));
+    float numerator = (powf(nb[t_idx * 8 + 0] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 1] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 2] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 3] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 4] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 5] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 6] - f_m, 2)
+                    + powf(nb[t_idx * 8 + 7] - f_m, 2));
 
     // RMS is normalized by number of terms summed.
     float denominator = num_neighbours(np, t_idx);
     f_rms[t_idx] = sqrtf(numerator / denominator);
 
 }
-""")
+"""
+)
 
 
 def _gpu_mean_velocity(f_neighbours, neighbours_present):
@@ -670,15 +788,22 @@ def _gpu_mean_velocity(f_neighbours, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_velocity = mod_mean_velocity.get_function('mean_velocity')
-    mean_velocity(f_mean, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
-                  grid=(grid_size, 1))
+    mean_velocity = mod_mean_velocity.get_function("mean_velocity")
+    mean_velocity(
+        f_mean,
+        f_neighbours,
+        neighbours_present,
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return f_mean
 
 
 def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
-    """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around each point in a velocity field.
+    """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around
+    each point in a velocity field.
 
     Parameters
     ----------
@@ -702,9 +827,16 @@ def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_fluc = mod_mean_velocity.get_function('mean_fluc')
-    mean_fluc(f_fluc, f_mean, f_neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1),
-              grid=(grid_size, 1))
+    mean_fluc = mod_mean_velocity.get_function("mean_fluc")
+    mean_fluc(
+        f_fluc,
+        f_mean,
+        f_neighbours,
+        neighbours_present,
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return f_fluc
 
@@ -734,7 +866,15 @@ def _gpu_rms(f_mean, neighbours, neighbours_present):
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    u_rms = mod_mean_velocity.get_function('rms')
-    u_rms(f_rms, f_mean, neighbours, neighbours_present, DTYPE_i(size), block=(block_size, 1, 1), grid=(grid_size, 1))
+    u_rms = mod_mean_velocity.get_function("rms")
+    u_rms(
+        f_rms,
+        f_mean,
+        neighbours,
+        neighbours_present,
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
 
     return f_rms
