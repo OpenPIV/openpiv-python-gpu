@@ -119,7 +119,7 @@ def smoothn(
         Maximum number of iterations allowed (default = 100).
     tol_z : float, optional
         Termination tolerance on Z (default = 1e-3). TolZ must be in [0,1].
-    z0 : ndarray or list, optional
+    z0 : ndarray or sequence, optional
         Initial value for the iterative process (default = original data)
     weight_method : {'bisquare', 'talworth', 'cauchy'}, optional
         Weight function for robust smoothing.
@@ -221,11 +221,10 @@ def smoothn(
         # convergence. For that purpose, a
         # nearest neighbor interpolation followed by a coarse smoothing are performed.
         if z0 is not None:  # an initial guess (z0) has been provided
-            if not isinstance(z0, list):
+            if not isinstance(z0, (list, tuple)):
                 z0 = [z0]
             if not len(z0) == n_y:
                 raise ValueError("z0 must have same number of components as y.")
-            # TODO
             if not all([z0[i].shape == y_shape for i in range(n_y)]):
                 raise ValueError(
                     "Arrays in z0 must all have same shape as arrays in y."

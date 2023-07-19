@@ -406,16 +406,13 @@ class _Array(_Validator):
     ----------
     d_type : np.dtype
         dtype of resulting array.
-    enforce_type : bool
-        Whether the input array must have the desired dtype.
     allow_none : bool
         Whether value can be None.
 
     """
 
-    def __init__(self, d_type=None, enforce_type=False, allow_none=False):
+    def __init__(self, d_type=None, allow_none=False):
         self.d_type = d_type
-        self.enforce_type = enforce_type
         self.allow_none = allow_none
 
     def validate(self, array):
@@ -427,15 +424,11 @@ class _Array(_Validator):
             raise TypeError(
                 "{} must be an np.ndarray{}.".format(self.public_name, or_none)
             )
-        if array.dtype != self.d_type and self.enforce_type:
-            raise ValueError(
-                "{} must contain {} type.".format(self.public_name, self.d_type)
-            )
+        d_type = self.d_type if self.d_type is not None else array.d_type
 
-        return array.astype(self.d_type) if array is not None else None
+        return array.astype(d_type)
 
 
-# TODO
 def _get_allowed_interval(min_value, max_value, min_closure, max_closure):
     """Returns a string representation of the allowed interval of the reals."""
     left_value = str(min_value) if min_value is not None else "-∞"
