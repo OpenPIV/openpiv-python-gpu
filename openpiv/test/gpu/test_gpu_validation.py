@@ -10,11 +10,12 @@ import numpy as np
 import pytest
 from imageio.v2 import imread
 import pycuda.gpuarray as gpuarray
+# noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
 import gpu_process
 import gpu_validation
-from openpiv.test.test_gpu_misc import generate_gpu_array, generate_array_pair
+from test.gpu.test_gpu_misc import generate_gpu_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32

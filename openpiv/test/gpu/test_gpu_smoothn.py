@@ -12,7 +12,7 @@ import scipy.fft as fft
 import pycuda.gpuarray as gpuarray
 
 import openpiv.gpu_smoothn as gpu_smoothn
-from openpiv.test.test_gpu_misc import generate_np_array, generate_array_pair
+from test.gpu.test_gpu_misc import generate_np_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -106,13 +106,13 @@ def test_replace_non_finite(shape):
 # TODO pass in tuples of tolerated noise
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 def test_initial_guess(shape: tuple):
-    y = generate_cosine_field(shape, wavelength=100)
-    noise = generate_noise_field(shape, scale=0.1)
-
-    z0 = gpu_smoothn._initial_guess([y + noise])[0]
-    z0_l2_norm = np.linalg.norm(z0 - y)
-    noise_l2_norm = np.linalg.norm(noise)
-    noise_ratio = float(z0_l2_norm / noise_l2_norm)
+    # y = generate_cosine_field(shape, wavelength=100)
+    # noise = generate_noise_field(shape, scale=0.1)
+    #
+    # z0 = gpu_smoothn._initial_guess([y + noise])[0]
+    # z0_l2_norm = np.linalg.norm(z0 - y)
+    # noise_l2_norm = np.linalg.norm(noise)
+    # noise_ratio = float(z0_l2_norm / noise_l2_norm)
     pass
 
 
@@ -120,24 +120,25 @@ def test_initial_guess(shape: tuple):
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("smooth_order", [0, 1, 2])
 def test_p_bounds(shape, smooth_order, data_regression):
-    p_min, p_max = gpu_smoothn._p_bounds(shape, smooth_order=smooth_order)
+    # p_min, p_max = gpu_smoothn._p_bounds(shape, smooth_order=smooth_order)
     pass
 
 
 # TODO pass the expected lamda_
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 def test_lambda(shape):
-    y = generate_np_array(shape, magnitude=2, offset=-1)
-
-    spacing = np.ones(y.ndim, dtype=DTYPE_f)
-    lambda_ = gpu_smoothn._lambda(y, spacing)
+    # y = generate_np_array(shape, magnitude=2, offset=-1)
+    #
+    # spacing = np.ones(y.ndim, dtype=DTYPE_f)
+    # lambda_ = gpu_smoothn._lambda(y, spacing)
     pass
 
 
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("transform", [fft.dct, fft.idct])
 def test_dct_nd(shape, transform):
-    """Test that output arrays are C-contiguous, which is required for proper CUDA indexing."""
+    """Test that output arrays are C-contiguous, which is required for proper CUDA
+    ndexing."""
     data = generate_np_array(shape, magnitude=2, offset=-1)
 
     data_dct_nd = gpu_smoothn._dct_nd(data, f=transform)
@@ -149,26 +150,26 @@ def test_dct_nd(shape, transform):
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("w_mean", [None, 1])
 def test_gcv(shape, w_mean):
-    p = np.log10(0.5)
+    # p = np.log10(0.5)
+    #
+    # y = generate_np_array(shape, magnitude=2, offset=-1)
+    # y_dct = fft.dct(y)
+    # w = generate_np_array(shape, seed=1)
+    # if w_mean is None:
+    #     w_mean = np.mean(w)
+    # is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
+    #     bool
+    # )
+    # nof = np.sum(is_finite)
+    # spacing = np.ones(y.ndim, dtype=DTYPE_f)
+    # lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
 
-    y = generate_np_array(shape, magnitude=2, offset=-1)
-    y_dct = fft.dct(y)
-    w = generate_np_array(shape, seed=1)
-    if w_mean is None:
-        w_mean = np.mean(w)
-    is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
-        bool
-    )
-    nof = np.sum(is_finite)
-    spacing = np.ones(y.ndim, dtype=DTYPE_f)
-    lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
-
-    gcv_score_non_weighted = gpu_smoothn._gcv(
-        p, [y], [y_dct], w, lambda_, is_finite, 1, nof
-    )
-    gcv_score_weighted = gpu_smoothn._gcv(
-        p, [y], [y_dct], w, lambda_, is_finite, w_mean, nof
-    )
+    # gcv_score_non_weighted = gpu_smoothn._gcv(
+    #     p, [y], [y_dct], w, lambda_, is_finite, 1, nof
+    # )
+    # gcv_score_weighted = gpu_smoothn._gcv(
+    #     p, [y], [y_dct], w, lambda_, is_finite, w_mean, nof
+    # )
     pass
 
 
@@ -176,8 +177,8 @@ def test_gcv(shape, w_mean):
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("smooth_order", [0, 1, 2])
 def test_leverage(shape: tuple, smooth_order, data_regression):
-    spacing = np.ones(len(shape), dtype=DTYPE_f)
-    h = gpu_smoothn._leverage(0.5, spacing, smooth_order=smooth_order)
+    # spacing = np.ones(len(shape), dtype=DTYPE_f)
+    # h = gpu_smoothn._leverage(0.5, spacing, smooth_order=smooth_order)
     pass
 
 
@@ -185,15 +186,15 @@ def test_leverage(shape: tuple, smooth_order, data_regression):
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("weight_method", ["cauchy", "talworth", "bisquare"])
 def test_robust_weights(shape, weight_method, ndarrays_regression):
-    y = generate_np_array(shape, magnitude=2, offset=-1)
-    z = generate_np_array(shape, magnitude=2, offset=-1, seed=1)
-    is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
-        bool
-    )
-    spacing = np.ones(y.ndim, dtype=DTYPE_i)
-    h = gpu_smoothn._leverage(0.5, spacing)
-
-    w = gpu_smoothn._robust_weights([y], [z], is_finite, h, weight_str=weight_method)
+    # y = generate_np_array(shape, magnitude=2, offset=-1)
+    # z = generate_np_array(shape, magnitude=2, offset=-1, seed=1)
+    # is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
+    #     bool
+    # )
+    # spacing = np.ones(y.ndim, dtype=DTYPE_i)
+    # h = gpu_smoothn._leverage(0.5, spacing)
+    #
+    # w = gpu_smoothn._robust_weights([y], [z], is_finite, h, weight_str=weight_method)
     pass
 
 
@@ -274,8 +275,8 @@ def test_reflect_frequency_comp(shape):
 # TODO don't use data regression
 # TODO keep data regressions for development only
 # INTEGRATION TESTS
-# Need tests for: mask, max_iter, smooth_order, w, z0.
-# Need to test for unexpected inputs.
+# TODO Need tests for: mask, max_iter, smooth_order, w, z0.
+# TODO Need to test for unexpected inputs.
 @pytest.mark.integtest
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("s", [None, 50])

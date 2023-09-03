@@ -313,7 +313,7 @@ class _Number(_Validator):
             ):
                 value_error = True
         if value_error:
-            expected_interval = _get_allowed_interval(
+            expected_interval = _allowed_interval(
                 self.min_value, self.max_value, self.min_closure, self.max_closure
             )
             raise ValueError(
@@ -424,12 +424,12 @@ class _Array(_Validator):
             raise TypeError(
                 "{} must be an np.ndarray{}.".format(self.public_name, or_none)
             )
-        d_type = self.d_type if self.d_type is not None else array.d_type
+        d_type = self.d_type if self.d_type is not None else array.dtype
 
         return array.astype(d_type)
 
 
-def _get_allowed_interval(min_value, max_value, min_closure, max_closure):
+def _allowed_interval(min_value, max_value, min_closure, max_closure):
     """Returns a string representation of the allowed interval of the reals."""
     left_value = str(min_value) if min_value is not None else "-∞"
     right_value = str(max_value) if max_value is not None else "+∞"
