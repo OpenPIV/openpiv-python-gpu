@@ -8,14 +8,11 @@ from math import log10
 
 import numpy as np
 import pytest
-from imageio.v2 import imread
 import pycuda.gpuarray as gpuarray
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-import gpu_process
 import gpu_validation
-from test.gpu.test_gpu_misc import generate_gpu_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -97,63 +94,6 @@ def get_neighbours_np(f, neighbours_present):
     )  # bottom right
 
     return f_neighbours
-
-
-# FIXTURES
-@pytest.fixture
-def correlation_gpu():
-    frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
-    frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
-    frame_a_d = gpuarray.to_gpu(frame_a)
-    frame_b_d = gpuarray.to_gpu(frame_b)
-
-    correlation_gpu = gpu_process.CorrelationGPU(frame_a_d, frame_b_d)
-
-    return correlation_gpu
-
-
-@pytest.fixture
-def piv_field(correlation_gpu):
-    window_size = 32
-    spacing = 16
-    frame_shape = correlation_gpu.frame_shape
-
-    return gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
-
-
-@pytest.fixture
-def peaks_d(correlation_gpu, piv_field):
-    i_peaks_d, j_peaks_d = correlation_gpu(piv_field)
-
-    return i_peaks_d, j_peaks_d
-
-
-@pytest.fixture
-def mask_d(peaks_d):
-    i_peaks_d, j_peaks_d = peaks_d
-
-    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2, d_type=DTYPE_i, seed=0)
-
-    return mask_d
-
-
-@pytest.fixture
-def sig2noise_d(correlation_gpu, piv_field):
-    _, _ = correlation_gpu(piv_field)
-    sig2noise_d = correlation_gpu.sig2noise
-
-    return sig2noise_d
-
-
-@pytest.fixture
-def validation_gpu(peaks_d):
-    i_peaks_d, j_peaks_d = peaks_d
-
-    mask_d = generate_gpu_array(i_peaks_d.shape, magnitude=2.0, d_type=DTYPE_i, seed=1)
-
-    validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask=mask_d)
-
-    return validation_gpu
 
 
 # UNIT TESTS
@@ -269,11 +209,11 @@ def test_validation_gpu_rms_validation(validation_gpu, peaks_d, mask_d):
     assert np.array_equal(val_locations, val_locations_gpu)
 
 
-def test_validation_gpu_mask_val_locations(validation_gpu, mask_d):
+def test_validation_gpu_mask_val_locations(validation_gpu, mask_d, array_pair):
     # Use an example fixture based on the first test case
     validation_gpu.mask = mask_d
 
-    val_locations, val_locations_d = generate_array_pair(
+    val_locations, val_locations_d = array_pair(
         mask_d.shape, magnitude=2, d_type=DTYPE_i, seed=1
     )
 
@@ -339,12 +279,12 @@ def test_validation_gpu_get_mean(validation_gpu, peaks_d):
     assert all([np.array_equal(f_mean_gpu_l[i], f_mean_l[i]) for i in range(n)])
 
 
-def test_local_validation():
+def test_local_validation(array_pair):
     shape = (16, 16)
     tol = 0.5
 
-    f, f_d = generate_array_pair(shape, magnitude=1.0, d_type=DTYPE_f)
-    val_locations, val_locations_d = generate_array_pair(
+    f, f_d = array_pair(shape, magnitude=1.0, d_type=DTYPE_f)
+    val_locations, val_locations_d = array_pair(
         shape, magnitude=2, d_type=DTYPE_i, seed=1
     )
 
@@ -356,16 +296,16 @@ def test_local_validation():
     assert np.array_equal(val_locations_gpu, val_locations_np)
 
 
-def test_neighbour_validation():
+def test_neighbour_validation(array_pair):
     shape = (16, 16)
     tol = 0.5
 
-    f, f_d = generate_array_pair(shape, magnitude=1.0, d_type=DTYPE_f)
-    f_mean, f_mean_d = generate_array_pair(shape, magnitude=1.0, d_type=DTYPE_f, seed=1)
-    f_mean_fluc, f_mean_fluc_d = generate_array_pair(
+    f, f_d = array_pair(shape, magnitude=1.0, d_type=DTYPE_f)
+    f_mean, f_mean_d = array_pair(shape, magnitude=1.0, d_type=DTYPE_f, seed=1)
+    f_mean_fluc, f_mean_fluc_d = array_pair(
         shape, magnitude=1.0, d_type=DTYPE_f, seed=2
     )
-    val_locations, val_locations_d = generate_array_pair(
+    val_locations, val_locations_d = array_pair(
         shape, magnitude=2, d_type=DTYPE_i, seed=3
     )
 
@@ -379,10 +319,10 @@ def test_neighbour_validation():
     assert np.array_equal(val_locations_gpu, val_locations_np)
 
 
-def test_gpu_find_neighbours():
+def test_gpu_find_neighbours(array_pair):
     shape = (16, 16)
 
-    mask, mask_d = generate_array_pair(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    mask, mask_d = array_pair(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_np = find_neighbours_np(shape, mask)
     neighbours_present_gpu = gpu_validation._gpu_find_neighbours(shape, mask_d).get()
@@ -390,11 +330,11 @@ def test_gpu_find_neighbours():
     assert np.array_equal(neighbours_present_gpu, neighbours_present_np)
 
 
-def test_gpu_get_neighbours():
+def test_gpu_get_neighbours(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_np = get_neighbours_np(
@@ -407,11 +347,11 @@ def test_gpu_get_neighbours():
     assert np.array_equal(f_neighbours_gpu, f_neighbours_np)
 
 
-def test_gpu_median_velocity():
+def test_gpu_median_velocity(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
@@ -423,11 +363,11 @@ def test_gpu_median_velocity():
     assert np.array_equal(f_median_gpu, f_median_np)
 
 
-def test_gpu_median_fluc():
+def test_gpu_median_fluc(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
@@ -444,11 +384,11 @@ def test_gpu_median_fluc():
     assert np.array_equal(f_median_fluc_gpu, f_median_fluc_np)
 
 
-def test_gpu_mean_velocity():
+def test_gpu_mean_velocity(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
@@ -460,11 +400,11 @@ def test_gpu_mean_velocity():
     assert np.allclose(f_mean_gpu, f_mean_np)
 
 
-def test_gpu_mean_fluc():
+def test_gpu_mean_fluc(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
@@ -479,11 +419,11 @@ def test_gpu_mean_fluc():
     assert np.allclose(f_mean_fluc_gpu, f_mean_fluc_np)
 
 
-def test_gpu_rms():
+def test_gpu_rms(array_pair, gpu_array):
     shape = (16, 16)
 
-    f, f_d = generate_array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
-    mask_d = generate_gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
+    f, f_d = array_pair(shape, magnitude=2.0, offset=-1.0, d_type=DTYPE_f)
+    mask_d = gpu_array(shape, magnitude=2, d_type=DTYPE_i, seed=1)
 
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)

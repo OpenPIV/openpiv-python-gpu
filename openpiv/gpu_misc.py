@@ -416,7 +416,6 @@ class _Array(_Validator):
         self.allow_none = allow_none
 
     def validate(self, array):
-        """"""
         if array is None and self.allow_none:
             return
         if not isinstance(array, np.ndarray):
@@ -467,31 +466,31 @@ def _check_arrays(
 def _check_array_type(array, array_type):
     """Checks that arrays are the correct type."""
     if not isinstance(array, array_type):
-        raise TypeError("Array(s) must be {}.")
+        raise TypeError("Array(s) must be {}.".format(array_type))
 
 
 def _check_array_dtype(array, dtype):
     """Checks that arrays have the correct dtype."""
     if not array.dtype == dtype:
-        raise ValueError("Array(s) must have dtype {}.")
+        raise ValueError("Array(s) must have dtype {}.".format(dtype))
 
 
 def _check_array_shape(array, shape):
     """Checks that arrays have the correct shape."""
     if not array.shape == shape:
-        raise ValueError("Array(s) must have shape {}.")
+        raise ValueError("Array(s) must have shape {}.".format(shape))
 
 
 def _check_array_ndim(array, ndim):
     """Checks that arrays have the correct ndim."""
     if not array.ndim == ndim:
-        raise ValueError("Array(s) must have ndim {}.")
+        raise ValueError("Array(s) must have ndim {}.".format(ndim))
 
 
 def _check_array_size(array, size):
     """Checks that arrays have the correct size."""
     if not array.size == size:
-        raise ValueError("Array(s) must have size {}.")
+        raise ValueError("Array(s) must have size {}.".format(size))
 
 
 def _check_array_c_contiguous(array):

@@ -1,12 +1,25 @@
 import pytest
 import numpy as np
 
+from imageio.v2 import imread
 import pycuda.gpuarray as gpuarray
 
+import gpu_process
+import gpu_validation
+
+# GLOBAL VARIABLES
 DTYPE_i = np.int32
 DTYPE_f = np.float32
 
+# dirs
+data_dir = "../data/"
 
+# test data
+frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
+frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
+
+
+# UTILS
 def generate_np_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
     np.random.seed(seed)
@@ -17,7 +30,8 @@ def generate_np_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
 
 def generate_gpu_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
-    f = generate_np_array1(shape, center=center, width=width, d_type=d_type, seed=seed)
+    f = generate_np_array1(shape, center=center, width=width, d_type=d_type,
+                           seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f_d
@@ -25,7 +39,141 @@ def generate_gpu_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
 
 def generate_array_pair1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_np_array1(shape, center=center, width=width, d_type=d_type, seed=seed)
+    f = generate_np_array1(shape, center=center, width=width, d_type=d_type,
+                           seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
+
+
+def generate_np_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+    """Returns ndarray with pseudo-random values."""
+    np.random.seed(seed)
+    f = (np.random.random(shape) * magnitude + offset).astype(d_type)
+
+    return f
+
+
+def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+    """Returns ndarray with pseudo-random values."""
+    f = generate_np_array(
+        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+    )
+    f_d = gpuarray.to_gpu(f)
+
+    return f_d
+
+
+def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+    """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
+    f = generate_np_array(
+        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+    )
+    f_d = gpuarray.to_gpu(f)
+
+    return f, f_d
+
+
+# FIXTURES
+@pytest.fixture
+def np_array():
+    return generate_np_array
+
+
+@pytest.fixture
+def gpu_array():
+    return generate_gpu_array
+
+
+@pytest.fixture
+def array_pair():
+    return generate_array_pair
+
+
+@pytest.fixture
+def np_array1():
+    return generate_np_array1
+
+
+@pytest.fixture
+def gpu_array1():
+    return generate_gpu_array1
+
+
+@pytest.fixture
+def array_pair1():
+    return generate_array_pair1
+
+
+@pytest.fixture
+def piv_field_gpu():
+    frame_shape = (512, 512)
+    window_size = 32
+    spacing = 16
+
+    piv_field_gpu = gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
+
+    return piv_field_gpu
+
+
+@pytest.fixture
+def correlation_gpu(piv_field_gpu):
+    frame_a_d = gpuarray.to_gpu(frame_a)
+    frame_b_d = gpuarray.to_gpu(frame_b)
+
+    correlation_gpu = gpu_process.CorrelationGPU(frame_a_d, frame_b_d)
+    correlation_gpu(piv_field_gpu)
+
+    return correlation_gpu
+
+
+@pytest.fixture
+def piv_field(correlation_gpu):
+    window_size = 32
+    spacing = 16
+    frame_shape = correlation_gpu.frame_shape
+
+    return gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
+
+
+@pytest.fixture
+def peaks_d(correlation_gpu, piv_field):
+    i_peaks_d, j_peaks_d = correlation_gpu(piv_field)
+
+    return i_peaks_d, j_peaks_d
+
+
+@pytest.fixture
+def mask_d(peaks_d, gpu_array):
+    i_peaks_d, j_peaks_d = peaks_d
+
+    mask_d = gpu_array(i_peaks_d.shape, magnitude=2, d_type=DTYPE_i, seed=0)
+
+    return mask_d
+
+
+@pytest.fixture
+def sig2noise_d(correlation_gpu, piv_field):
+    _, _ = correlation_gpu(piv_field)
+    sig2noise_d = correlation_gpu.sig2noise
+
+    return sig2noise_d
+
+
+@pytest.fixture
+def validation_gpu(peaks_d, gpu_array):
+    i_peaks_d, j_peaks_d = peaks_d
+
+    mask_d = gpu_array(i_peaks_d.shape, magnitude=2.0, d_type=DTYPE_i, seed=1)
+
+    validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask=mask_d)
+
+    return validation_gpu
+
+
+@pytest.fixture
+def piv_gpu():
+    piv_gpu = gpu_process.PIVGPU(frame_a)
+    piv_gpu(frame_a, frame_b)
+
+    return piv_gpu
