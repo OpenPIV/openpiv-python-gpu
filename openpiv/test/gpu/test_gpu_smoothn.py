@@ -7,12 +7,12 @@ Still need to test for non-isotropic spacing and n-dim vector fields.
 import numpy as np
 import pytest
 from math import floor
+from numbers import Number
 
 import scipy.fft as fft
 import pycuda.gpuarray as gpuarray
 
 import openpiv.gpu_smoothn as gpu_smoothn
-from test.gpu.test_gpu_misc import generate_np_array, generate_array_pair
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -39,8 +39,8 @@ def generate_noise_field(shape, scale: float = 1):
 # UNIT TESTS
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
-def test_gpu_fft(shape, norm):
-    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
+def test_gpu_fft(shape, norm, array_pair):
+    y, y_d = array_pair(shape, magnitude=2, offset=-1)
 
     f_fft = fft.fft(y, norm=norm)
     f_fft_gpu = gpu_smoothn.gpu_fft(y_d, norm=norm, full_frequency=True).get()
@@ -50,10 +50,10 @@ def test_gpu_fft(shape, norm):
 
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
-def test_gpu_ifft(shape, norm):
+def test_gpu_ifft(shape, norm, np_array):
     m, n = shape
 
-    y = generate_np_array(shape, magnitude=2, offset=-1)
+    y = np_array(shape, magnitude=2, offset=-1)
     y_fft = fft.fft(y, norm=norm)
     y_fft_d = gpuarray.to_gpu(y_fft)
 
@@ -67,8 +67,8 @@ def test_gpu_ifft(shape, norm):
 
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
-def test_gpu_dct(shape, norm):
-    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
+def test_gpu_dct(shape, norm, array_pair):
+    y, y_d = array_pair(shape, magnitude=2, offset=-1)
 
     y_dct = fft.dct(y, norm=norm)
     y_dct_gpu = gpu_smoothn.gpu_dct(y_d, norm=norm).get()
@@ -78,8 +78,8 @@ def test_gpu_dct(shape, norm):
 
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
-def test_gpu_idct(shape, norm):
-    y = generate_np_array(shape, magnitude=2, offset=-1)
+def test_gpu_idct(shape, norm, np_array):
+    y = np_array(shape, magnitude=2, offset=-1)
     y_dct = fft.dct(y, norm=norm)
     y_dct_d = gpuarray.to_gpu(y_dct)
 
@@ -89,120 +89,136 @@ def test_gpu_idct(shape, norm):
     assert np.allclose(y_idct_gpu, y_idct, rtol=1.0e-4)
 
 
-# TODO check that nans are replaced.
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-def test_replace_non_finite(shape):
+def test_replace_non_finite(shape, np_array):
     # Test doesn't check whether nans are replaced by nearest neighbour.
-    y = generate_np_array(shape, magnitude=2, offset=-1)
-    finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
-    f0 = y.copy()
+    y = np_array(shape, magnitude=2, offset=-1)
+    finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
+    y0 = y.copy()
     y[finite == 0] = np.nan
 
     gpu_smoothn.replace_non_finite(y, finite)
 
-    assert np.array_equal(y[finite], f0[finite])
+    assert np.array_equal(y[finite], y0[finite])
+    assert np.all(np.isfinite(y))
 
 
-# TODO pass in tuples of tolerated noise
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-def test_initial_guess(shape: tuple):
-    # y = generate_cosine_field(shape, wavelength=100)
-    # noise = generate_noise_field(shape, scale=0.1)
-    #
-    # z0 = gpu_smoothn._initial_guess([y + noise])[0]
-    # z0_l2_norm = np.linalg.norm(z0 - y)
-    # noise_l2_norm = np.linalg.norm(noise)
-    # noise_ratio = float(z0_l2_norm / noise_l2_norm)
-    pass
+@pytest.mark.parametrize(
+    "shape, allowed_noise_ratio",
+    [((16,), 0.75), ((16, 16), 0.58), ((16, 16, 16), 0.69)],
+)
+def test_initial_guess(shape: tuple, allowed_noise_ratio):
+    y = generate_cosine_field(shape, wavelength=100)
+    noise = generate_noise_field(shape, scale=0.1)
+
+    z0 = gpu_smoothn._initial_guess([y + noise])[0]
+    z0_l2_norm = np.linalg.norm(z0 - y)
+    noise_l2_norm = np.linalg.norm(noise)
+    noise_ratio = float(z0_l2_norm / noise_l2_norm)
+
+    assert noise_ratio < allowed_noise_ratio
 
 
-# TODO pass in the p_min, p_max as tuples
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-@pytest.mark.parametrize("smooth_order", [0, 1, 2])
-def test_p_bounds(shape, smooth_order, data_regression):
-    # p_min, p_max = gpu_smoothn._p_bounds(shape, smooth_order=smooth_order)
-    pass
+@pytest.mark.parametrize(
+    "shape, p",
+    [
+        ((16,), (-3.777, 10.193)),
+        ((16, 16), (-4.079, 4.196)),
+        ((16, 16, 16), (-4.255, 2.21)),
+    ],
+)
+def test_p_bounds(shape, p):
+    # Need to test different smooth orders.
+    p_min, p_max = gpu_smoothn._p_bounds(shape)
+    assert abs(p_min - p[0]) < 0.001
+    assert abs(p_max - p[1]) < 0.001
 
 
-# TODO pass the expected lamda_
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-def test_lambda(shape):
-    # y = generate_np_array(shape, magnitude=2, offset=-1)
-    #
-    # spacing = np.ones(y.ndim, dtype=DTYPE_f)
-    # lambda_ = gpu_smoothn._lambda(y, spacing)
-    pass
+@pytest.mark.parametrize(
+    "shape, expected_lambda",
+    [((16,), 3.961), ((16, 16), 7.923), ((16, 16, 16), 11.885)],
+)
+def test_lambda(shape, expected_lambda, np_array):
+    y = np_array(shape, magnitude=2, offset=-1)
+
+    spacing = np.ones(y.ndim, dtype=DTYPE_f)
+    lambda_ = gpu_smoothn._lambda(y, spacing)
+
+    assert lambda_.flatten()[0] == 0
+    assert abs(lambda_.flatten()[-1] - expected_lambda) < 0.001
 
 
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("transform", [fft.dct, fft.idct])
-def test_dct_nd(shape, transform):
+def test_dct_nd(shape, transform, np_array):
     """Test that output arrays are C-contiguous, which is required for proper CUDA
     ndexing."""
-    data = generate_np_array(shape, magnitude=2, offset=-1)
+    data = np_array(shape, magnitude=2, offset=-1)
 
     data_dct_nd = gpu_smoothn._dct_nd(data, f=transform)
 
     assert data_dct_nd.flags.c_contiguous
 
 
-# TODO pass gcv for a know seed? Or compute a know gcv
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-@pytest.mark.parametrize("w_mean", [None, 1])
-def test_gcv(shape, w_mean):
-    # p = np.log10(0.5)
-    #
-    # y = generate_np_array(shape, magnitude=2, offset=-1)
-    # y_dct = fft.dct(y)
-    # w = generate_np_array(shape, seed=1)
-    # if w_mean is None:
-    #     w_mean = np.mean(w)
-    # is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
-    #     bool
-    # )
-    # nof = np.sum(is_finite)
-    # spacing = np.ones(y.ndim, dtype=DTYPE_f)
-    # lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
+@pytest.mark.parametrize(
+    "shape, expected_gcv", [((16,), 13.283), ((16, 16), 4.30), ((16, 16, 16), 1.702)]
+)
+def test_gcv(shape, expected_gcv, np_array):
+    # Need to test weighted vs non-weighted.
+    p = np.log10(0.5)
 
-    # gcv_score_non_weighted = gpu_smoothn._gcv(
-    #     p, [y], [y_dct], w, lambda_, is_finite, 1, nof
-    # )
-    # gcv_score_weighted = gpu_smoothn._gcv(
-    #     p, [y], [y_dct], w, lambda_, is_finite, w_mean, nof
-    # )
-    pass
+    y = np_array(shape, magnitude=2, offset=-1)
+    y_dct = fft.dct(y)
+    w = np_array(shape, seed=1)
+    w_mean = np.mean(w)
+    is_finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    nof = np.sum(is_finite)
+    spacing = np.ones(y.ndim, dtype=DTYPE_f)
+    lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
+
+    gcv_score = gpu_smoothn._gcv(p, [y], [y_dct], w, lambda_, is_finite, w_mean, nof)
+
+    assert abs(gcv_score - expected_gcv) < 0.001
 
 
-# TODO pass expected h
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-@pytest.mark.parametrize("smooth_order", [0, 1, 2])
-def test_leverage(shape: tuple, smooth_order, data_regression):
-    # spacing = np.ones(len(shape), dtype=DTYPE_f)
-    # h = gpu_smoothn._leverage(0.5, spacing, smooth_order=smooth_order)
-    pass
+@pytest.mark.parametrize(
+    "shape, expected_h", [((16,), 0.471), ((16, 16), 0.222), ((16, 16, 16), 0.105)]
+)
+def test_leverage(shape: tuple, expected_h):
+    # Need to test different smooth orders.
+    spacing = np.ones(len(shape), dtype=DTYPE_f)
+    h = gpu_smoothn._leverage(0.5, spacing)
+
+    assert abs(h - expected_h) < 0.001
 
 
-# TODO check against expected weights
-@pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-@pytest.mark.parametrize("weight_method", ["cauchy", "talworth", "bisquare"])
-def test_robust_weights(shape, weight_method, ndarrays_regression):
-    # y = generate_np_array(shape, magnitude=2, offset=-1)
-    # z = generate_np_array(shape, magnitude=2, offset=-1, seed=1)
-    # is_finite = generate_np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(
-    #     bool
-    # )
-    # spacing = np.ones(y.ndim, dtype=DTYPE_i)
-    # h = gpu_smoothn._leverage(0.5, spacing)
-    #
-    # w = gpu_smoothn._robust_weights([y], [z], is_finite, h, weight_str=weight_method)
-    pass
+@pytest.mark.parametrize(
+    "shape, expected_w",
+    [
+        ((16,), (0.989, 0.795)),
+        ((16, 16), (0.991, 0.734)),
+        ((16, 16, 16), (0.991, 0.956)),
+    ],
+)
+def test_robust_weights(shape, expected_w, np_array):
+    # Need to test different weight methods.
+    y = np_array(shape, magnitude=2, offset=-1)
+    z = np_array(shape, magnitude=2, offset=-1, seed=1)
+    is_finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    spacing = np.ones(y.ndim, dtype=DTYPE_i)
+    h = gpu_smoothn._leverage(0.5, spacing)
+
+    w = gpu_smoothn._robust_weights([y], [z], is_finite, h)
+
+    assert abs(w.flatten()[0] - expected_w[0]) < 0.001
+    assert abs(w.flatten()[-1] - expected_w[1]) < 0.001
 
 
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("direction", ["forward", "backward"])
-def test_dct_order_forward(shape, direction):
+def test_dct_order_forward(shape, direction, array_pair):
     m, n = shape
-    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, magnitude=2, offset=-1)
 
     z = gpu_smoothn._dct_order(y_d, direction=direction).get()
     if direction == "backward":
@@ -210,8 +226,8 @@ def test_dct_order_forward(shape, direction):
     # Sequence given by Eq. 20 of Makhoul, 1980.
     y_forward_sequence_a = y[:, [2 * i for i in range(0, floor((n - 1) / 2) + 1)]]
     y_forward_sequence_b = y[
-                           :, [2 * n - 2 * i - 1 for i in range(floor((n + 1) / 2), n)]
-                           ]
+        :, [2 * n - 2 * i - 1 for i in range(floor((n + 1) / 2), n)]
+    ]
     y_forward = np.hstack([y_forward_sequence_a, y_forward_sequence_b])
 
     assert np.array_equal(z, y_forward)
@@ -220,12 +236,12 @@ def test_dct_order_forward(shape, direction):
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("offset", [0, 1])
 @pytest.mark.parametrize("left_pad", [0, 1])
-def test_flip_frequency_real(shape, offset, left_pad):
+def test_flip_frequency_real(shape, offset, left_pad, array_pair):
     m, n = shape
-    y, y_d = generate_array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, magnitude=2, offset=-1)
 
     flip_width = n - 1
-    y_flipped = np.flip(y, axis=1)[:, offset: offset + flip_width - left_pad]
+    y_flipped = np.flip(y, axis=1)[:, offset : offset + flip_width - left_pad]
     z = gpu_smoothn._flip_frequency_real(
         y_d, flip_width=flip_width, offset=offset, left_pad=left_pad
     ).get()
@@ -238,15 +254,15 @@ def test_flip_frequency_real(shape, offset, left_pad):
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("offset", [0, 1])
 @pytest.mark.parametrize("left_pad", [0, 1])
-def test_flip_frequency_comp(shape, offset, left_pad):
+def test_flip_frequency_comp(shape, offset, left_pad, np_array):
     m, n = shape
-    y = generate_np_array(shape, magnitude=2, offset=-1) + 1j * generate_np_array(
+    y = np_array(shape, magnitude=2, offset=-1) + 1j * np_array(
         shape, magnitude=2, offset=-1, seed=1
     )
     y_d = gpuarray.to_gpu(y)
 
     flip_width = n - 1
-    y_flipped = np.flip(y, axis=1)[:, offset: offset + flip_width - left_pad].conj()
+    y_flipped = np.flip(y, axis=1)[:, offset : offset + flip_width - left_pad].conj()
     z = gpu_smoothn._flip_frequency_comp(
         y_d, flip_width=flip_width, offset=offset, left_pad=left_pad
     ).get()
@@ -257,40 +273,123 @@ def test_flip_frequency_comp(shape, offset, left_pad):
 
 
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
-def test_reflect_frequency_comp(shape):
+def test_reflect_frequency_comp(shape, np_array):
     m, n = shape
     freq_width = n // 2 + 1
-    y = generate_np_array(
-        (m, freq_width), magnitude=2, offset=-1
-    ) + 1j * generate_np_array((m, freq_width), magnitude=2, offset=-1, seed=1)
+    y = np_array((m, freq_width), magnitude=2, offset=-1) + 1j * np_array(
+        (m, freq_width), magnitude=2, offset=-1, seed=1
+    )
     y_d = gpuarray.to_gpu(y)
 
-    y_full = np.hstack([y, np.flip(y[:, 1: n - freq_width + 1], axis=1).conj()])
+    y_full = np.hstack([y, np.flip(y[:, 1 : n - freq_width + 1], axis=1).conj()])
     z = gpu_smoothn._reflect_frequency_comp(y_d, full_width=n).get()
 
     assert np.array_equal(y_full, z)
 
 
-# TODO separate into test for smoothing and for differences
-# TODO don't use data regression
-# TODO keep data regressions for development only
-# INTEGRATION TESTS
-# TODO Need tests for: mask, max_iter, smooth_order, w, z0.
-# TODO Need to test for unexpected inputs.
+# # INTEGRATION TESTS
 @pytest.mark.integtest
+class TestSmoothnParams:
+    @pytest.mark.parametrize("mask", [True, False])
+    def test_mask(self, mask, boolean_np_array):
+        shape = (16, 16)
+        mask = boolean_np_array(shape) if mask else None
+        smoothn(shape, mask=mask)
+
+    @pytest.mark.parametrize("w", [True, False])
+    def test_w(self, w, np_array1):
+        shape = (16, 16)
+        w = (np_array1(shape, center=0.5, half_width=0.5, seed=1) if w else None)
+        smoothn(shape, w=w)
+
+    @pytest.mark.parametrize("s", [None, 10])
+    def test_s(self, s):
+        shape = (16, 16)
+        smoothn(shape, s=s)
+
+    @pytest.mark.parametrize("robust", [True, False])
+    def test_robust(self, robust):
+        shape = (16, 16)
+        smoothn(shape, robust=robust)
+
+    @pytest.mark.parametrize("z0", [True, False])
+    def test_z0(self, z0, np_array1):
+        shape = (16, 16)
+        z0 = np_array1(shape, seed=2) if z0 is None else None
+        smoothn(shape, z0=z0)
+
+    @pytest.mark.parametrize("max_iter", [1, 10, 100])
+    def test_max_iter(self, max_iter):
+        shape = (16, 16)
+        smoothn(shape, max_iter=max_iter)
+
+    @pytest.mark.parametrize("tol_z", [1e-3, 1e-2, 1])
+    def test_tol_z(self, tol_z):
+        shape = (16, 16)
+        smoothn(shape, tol_z=tol_z)
+
+    @pytest.mark.parametrize("weight_method", ["bisquare", "talworth", "cauchy"])
+    def test_weight_method(self, weight_method):
+        shape = (16, 16)
+        smoothn(shape, weight_method=weight_method)
+
+    @pytest.mark.parametrize("smooth_order", [0, 1, 2])
+    def test_smooth_order(self, smooth_order):
+        shape = (16, 16)
+        smoothn(shape, smooth_order=smooth_order)
+
+    @pytest.mark.parametrize("spacing", [None, (0.5, 0.5), (1, 1)])
+    def test_spacing(self, spacing):
+        shape = (16, 16)
+        smoothn(shape, spacing=spacing)
+
+
+def smoothn(shape, **params):
+    y = generate_cosine_field(shape, wavelength=50)
+    noise = generate_noise_field(shape, scale=0.5)
+
+    z, s = gpu_smoothn.smoothn(y + noise, **params)
+
+    assert isinstance(z, np.ndarray)
+    assert np.all(np.isfinite(z))
+    assert isinstance(s, Number)
+
+
+@pytest.mark.integtest
+@pytest.mark.parametrize(
+    "shape, expected_noise_ratio",
+    [((64,), 0.425), ((64, 64), 0.136), ((64, 64, 64), 0.0641)],
+)
+def test_smoothn_noise_ratio(shape, expected_noise_ratio):
+    """Check noise ratio."""
+    # Need to check all parameters.
+    y = generate_cosine_field(shape, wavelength=50)
+    noise = generate_noise_field(shape, scale=0.5)
+
+    z = gpu_smoothn.smoothn(y + noise)[0]
+    z_l2_norm = np.linalg.norm(z - y)
+    noise_l2_norm = np.linalg.norm(noise)
+    noise_ratio = float(z_l2_norm / noise_l2_norm)
+
+    assert noise_ratio < expected_noise_ratio
+
+
+# REGRESSION
+@pytest.mark.regression
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
 @pytest.mark.parametrize("s", [None, 50])
 @pytest.mark.parametrize("robust", [True, False])
-def test_smoothn(shape, s, robust, data_regression):
+def test_smoothn_regression(shape, s, robust, ndarrays_regression):
+    """Check that output is unchanged.
+
+    This test will fail the first time it is run, and when the saved regression data
+    is deleted.
+
+    """
+    # Need to check all parameters.
     y = generate_cosine_field(shape, wavelength=50)
     noise = generate_noise_field(shape, scale=0.5)
 
     z = gpu_smoothn.smoothn(y + noise, s=s, robust=robust)[0]
-    z_l2_norm = np.linalg.norm(z - y)
-    noise_l2_norm = np.linalg.norm(noise)
-    noise_ratio = float(z_l2_norm / noise_l2_norm)
-    z_gpu = gpu_smoothn.smoothn(y + noise, s=s, robust=robust)[0]
 
-    data_regression.check({'noise_ratio': noise_ratio})
-    assert np.array_equal(z_gpu, z)
-    pass
+    ndarrays_regression.check({"z": z})

@@ -19,28 +19,54 @@ frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
 frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
 
 
+# TODO remove redundant helpers
+# TODO programmatically return required cpu/gpu arrays
 # UTILS
-def generate_np_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
+def pytest_addoption(parser):
+    parser.addoption(
+        "--regression", action="store_true", default=False, help="run regression tests"
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "regression: mark test as using "
+                                       "pytest-regression")
+
+
+def pytest_collection_modifyitems(config, items):
+    """"""
+    if config.getoption("--regression"):
+        return
+    skip_regression = pytest.mark.skip(reason="need --regression option")
+    for item in items:
+        if "regression" in item.keywords:
+            item.add_marker(skip_regression)
+
+
+def generate_boolean_np_array(shape, d_type=DTYPE_i, seed=0):
+    """Returns ndarray with pseudo-random boolean values."""
+    return generate_np_array1(shape, center=1.0, half_width=1.0, d_type=DTYPE_i, seed=seed).astype(d_type)
+
+
+def generate_np_array1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
     np.random.seed(seed)
-    f = ((np.random.random(shape) * 2 - 1) * width + center).astype(d_type)
+    f = ((np.random.random(shape) * 2 - 1) * half_width + center).astype(d_type)
 
     return f
 
 
-def generate_gpu_array1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
+def generate_gpu_array1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
-    f = generate_np_array1(shape, center=center, width=width, d_type=d_type,
-                           seed=seed)
+    f = generate_np_array1(shape, center=center, half_width=half_width, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f_d
 
 
-def generate_array_pair1(shape, center=0.0, width=1.0, d_type=DTYPE_f, seed=0):
+def generate_array_pair1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_np_array1(shape, center=center, width=width, d_type=d_type,
-                           seed=seed)
+    f = generate_np_array1(shape, center=center, half_width=half_width, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
@@ -75,6 +101,11 @@ def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0
 
 
 # FIXTURES
+@pytest.fixture
+def boolean_np_array():
+    return generate_boolean_np_array
+
+
 @pytest.fixture
 def np_array():
     return generate_np_array
@@ -177,3 +208,24 @@ def piv_gpu():
     piv_gpu(frame_a, frame_b)
 
     return piv_gpu
+
+
+@pytest.fixture()
+def param_iter(**params_dict):
+    """Returns list of input parameters from lists of parameters.
+
+    Each list of parameters is swept while using the default (first) value for all
+    other parameters. The resulting list of parameters increase linearly with
+    additional parameterization.
+    """
+    keys = params_dict.keys()
+
+    for i, key_i in enumerate(keys):
+        for value in params_dict[key_i]:
+            test_params = {}
+            for j, key_j in enumerate(keys):
+                if i == j:
+                    test_params[key_j] = value
+                else:
+                    test_params[key_j] = params_dict[key_j][0]
+            yield test_params
