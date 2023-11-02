@@ -40,7 +40,7 @@ def generate_noise_field(shape, scale: float = 1):
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
 def test_gpu_fft(shape, norm, array_pair):
-    y, y_d = array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, center=0.0, half_width=1.0)
 
     f_fft = fft.fft(y, norm=norm)
     f_fft_gpu = gpu_smoothn.gpu_fft(y_d, norm=norm, full_frequency=True).get()
@@ -53,7 +53,7 @@ def test_gpu_fft(shape, norm, array_pair):
 def test_gpu_ifft(shape, norm, np_array):
     m, n = shape
 
-    y = np_array(shape, magnitude=2, offset=-1)
+    y = np_array(shape, center=0.0, half_width=1.0)
     y_fft = fft.fft(y, norm=norm)
     y_fft_d = gpuarray.to_gpu(y_fft)
 
@@ -68,7 +68,7 @@ def test_gpu_ifft(shape, norm, np_array):
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
 def test_gpu_dct(shape, norm, array_pair):
-    y, y_d = array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, center=0.0, half_width=1.0)
 
     y_dct = fft.dct(y, norm=norm)
     y_dct_gpu = gpu_smoothn.gpu_dct(y_d, norm=norm).get()
@@ -79,7 +79,7 @@ def test_gpu_dct(shape, norm, array_pair):
 @pytest.mark.parametrize("shape", [(13, 13), (14, 14), (15, 15), (16, 16)])
 @pytest.mark.parametrize("norm", ["forward", "backward", "ortho"])
 def test_gpu_idct(shape, norm, np_array):
-    y = np_array(shape, magnitude=2, offset=-1)
+    y = np_array(shape, center=0.0, half_width=1.0)
     y_dct = fft.dct(y, norm=norm)
     y_dct_d = gpuarray.to_gpu(y_dct)
 
@@ -90,10 +90,10 @@ def test_gpu_idct(shape, norm, np_array):
 
 
 @pytest.mark.parametrize("shape", [(16,), (16, 16), (16, 16, 16)])
-def test_replace_non_finite(shape, np_array):
+def test_replace_non_finite(shape, np_array, boolean_np_array):
     # Test doesn't check whether nans are replaced by nearest neighbour.
-    y = np_array(shape, magnitude=2, offset=-1)
-    finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=1).astype(bool)
+    y = np_array(shape, center=0.0, half_width=1.0)
+    finite = boolean_np_array(shape, seed=1).astype(bool)
     y0 = y.copy()
     y[finite == 0] = np.nan
 
@@ -139,8 +139,7 @@ def test_p_bounds(shape, p):
     [((16,), 3.961), ((16, 16), 7.923), ((16, 16, 16), 11.885)],
 )
 def test_lambda(shape, expected_lambda, np_array):
-    y = np_array(shape, magnitude=2, offset=-1)
-
+    y = np_array(shape, center=0.0, half_width=1.0)
     spacing = np.ones(y.ndim, dtype=DTYPE_f)
     lambda_ = gpu_smoothn._lambda(y, spacing)
 
@@ -153,7 +152,7 @@ def test_lambda(shape, expected_lambda, np_array):
 def test_dct_nd(shape, transform, np_array):
     """Test that output arrays are C-contiguous, which is required for proper CUDA
     ndexing."""
-    data = np_array(shape, magnitude=2, offset=-1)
+    data = np_array(shape, center=0.0, half_width=1.0)
 
     data_dct_nd = gpu_smoothn._dct_nd(data, f=transform)
 
@@ -163,15 +162,15 @@ def test_dct_nd(shape, transform, np_array):
 @pytest.mark.parametrize(
     "shape, expected_gcv", [((16,), 13.283), ((16, 16), 4.30), ((16, 16, 16), 1.702)]
 )
-def test_gcv(shape, expected_gcv, np_array):
+def test_gcv(shape, expected_gcv, np_array, boolean_np_array):
     # Need to test weighted vs non-weighted.
     p = np.log10(0.5)
 
-    y = np_array(shape, magnitude=2, offset=-1)
+    y = np_array(shape, center=0.0, half_width=1)
     y_dct = fft.dct(y)
     w = np_array(shape, seed=1)
     w_mean = np.mean(w)
-    is_finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    is_finite = boolean_np_array(shape, seed=2).astype(bool)
     nof = np.sum(is_finite)
     spacing = np.ones(y.ndim, dtype=DTYPE_f)
     lambda_ = gpu_smoothn._lambda(y, spacing=spacing)
@@ -200,11 +199,11 @@ def test_leverage(shape: tuple, expected_h):
         ((16, 16, 16), (0.991, 0.956)),
     ],
 )
-def test_robust_weights(shape, expected_w, np_array):
+def test_robust_weights(shape, expected_w, np_array, boolean_np_array):
     # Need to test different weight methods.
-    y = np_array(shape, magnitude=2, offset=-1)
-    z = np_array(shape, magnitude=2, offset=-1, seed=1)
-    is_finite = np_array(shape, magnitude=2, d_type=DTYPE_i, seed=2).astype(bool)
+    y = np_array(shape, center=0.0, half_width=1.0)
+    z = np_array(shape, center=0.0, half_width=1.0, seed=1)
+    is_finite = boolean_np_array(shape, seed=2).astype(bool)
     spacing = np.ones(y.ndim, dtype=DTYPE_i)
     h = gpu_smoothn._leverage(0.5, spacing)
 
@@ -218,7 +217,7 @@ def test_robust_weights(shape, expected_w, np_array):
 @pytest.mark.parametrize("direction", ["forward", "backward"])
 def test_dct_order_forward(shape, direction, array_pair):
     m, n = shape
-    y, y_d = array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, center=0.0, half_width=1.0)
 
     z = gpu_smoothn._dct_order(y_d, direction=direction).get()
     if direction == "backward":
@@ -238,7 +237,7 @@ def test_dct_order_forward(shape, direction, array_pair):
 @pytest.mark.parametrize("left_pad", [0, 1])
 def test_flip_frequency_real(shape, offset, left_pad, array_pair):
     m, n = shape
-    y, y_d = array_pair(shape, magnitude=2, offset=-1)
+    y, y_d = array_pair(shape, center=0.0, half_width=1.0)
 
     flip_width = n - 1
     y_flipped = np.flip(y, axis=1)[:, offset : offset + flip_width - left_pad]
@@ -256,8 +255,8 @@ def test_flip_frequency_real(shape, offset, left_pad, array_pair):
 @pytest.mark.parametrize("left_pad", [0, 1])
 def test_flip_frequency_comp(shape, offset, left_pad, np_array):
     m, n = shape
-    y = np_array(shape, magnitude=2, offset=-1) + 1j * np_array(
-        shape, magnitude=2, offset=-1, seed=1
+    y = np_array(shape, center=0.0, half_width=1.0) + 1j * np_array(
+        shape, center=0.0, half_width=1.0, seed=1
     )
     y_d = gpuarray.to_gpu(y)
 
@@ -276,8 +275,8 @@ def test_flip_frequency_comp(shape, offset, left_pad, np_array):
 def test_reflect_frequency_comp(shape, np_array):
     m, n = shape
     freq_width = n // 2 + 1
-    y = np_array((m, freq_width), magnitude=2, offset=-1) + 1j * np_array(
-        (m, freq_width), magnitude=2, offset=-1, seed=1
+    y = np_array((m, freq_width), center=0.0, half_width=1.0) + 1j * np_array(
+        (m, freq_width), center=0.0, half_width=1.0, seed=1
     )
     y_d = gpuarray.to_gpu(y)
 
@@ -297,9 +296,9 @@ class TestSmoothnParams:
         smoothn(shape, mask=mask)
 
     @pytest.mark.parametrize("w", [True, False])
-    def test_w(self, w, np_array1):
+    def test_w(self, w, np_array):
         shape = (16, 16)
-        w = (np_array1(shape, center=0.5, half_width=0.5, seed=1) if w else None)
+        w = np_array(shape, center=0.5, half_width=0.5) if w else None
         smoothn(shape, w=w)
 
     @pytest.mark.parametrize("s", [None, 10])
@@ -313,9 +312,9 @@ class TestSmoothnParams:
         smoothn(shape, robust=robust)
 
     @pytest.mark.parametrize("z0", [True, False])
-    def test_z0(self, z0, np_array1):
+    def test_z0(self, z0, np_array):
         shape = (16, 16)
-        z0 = np_array1(shape, seed=2) if z0 is None else None
+        z0 = np_array(shape, center=0, half_width=1.0) if z0 is None else None
         smoothn(shape, z0=z0)
 
     @pytest.mark.parametrize("max_iter", [1, 10, 100])

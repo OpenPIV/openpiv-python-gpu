@@ -17,6 +17,7 @@ import numpy as np
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
+
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
@@ -888,7 +889,7 @@ class PIVGPU:
         if self._piv_fields is None:
             self._piv_fields = []
             for window_size in _window_sizes(
-                    self.window_size_iters, self.min_window_size
+                self.window_size_iters, self.min_window_size
             ):
                 window_size = window_size
                 spacing = _spacing(window_size, self.overlap_ratio)

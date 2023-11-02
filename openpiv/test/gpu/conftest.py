@@ -19,8 +19,6 @@ frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
 frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
 
 
-# TODO remove redundant helpers
-# TODO programmatically return required cpu/gpu arrays
 # UTILS
 def pytest_addoption(parser):
     parser.addoption(
@@ -29,8 +27,9 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "regression: mark test as using "
-                                       "pytest-regression")
+    config.addinivalue_line(
+        "markers", "regression: mark test as using " "pytest-regression"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -45,54 +44,66 @@ def pytest_collection_modifyitems(config, items):
 
 def generate_boolean_np_array(shape, d_type=DTYPE_i, seed=0):
     """Returns ndarray with pseudo-random boolean values."""
-    return generate_np_array1(shape, center=1.0, half_width=1.0, d_type=DTYPE_i, seed=seed).astype(d_type)
+    return generate_np_array(shape, center=1.0, d_type=DTYPE_i, seed=seed).astype(
+        d_type
+    )
 
 
-def generate_np_array1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
-    """Returns ndarray with pseudo-random values."""
-    np.random.seed(seed)
-    f = ((np.random.random(shape) * 2 - 1) * half_width + center).astype(d_type)
-
-    return f
+def generate_boolean_gpu_array(shape, d_type=DTYPE_i, seed=0):
+    """Returns GPUArray with pseudo-random boolean values."""
+    f = generate_boolean_np_array(shape, d_type=d_type, seed=seed)
+    return gpuarray.to_gpu(f)
 
 
-def generate_gpu_array1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
-    """Returns ndarray with pseudo-random values."""
-    f = generate_np_array1(shape, center=center, half_width=half_width, d_type=d_type, seed=seed)
-    f_d = gpuarray.to_gpu(f)
-
-    return f_d
-
-
-def generate_array_pair1(shape, center=0.0, half_width=1.0, d_type=DTYPE_f, seed=0):
+def generate_boolean_array_pair(shape, d_type=DTYPE_i, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_np_array1(shape, center=center, half_width=half_width, d_type=d_type, seed=seed)
+    f = generate_boolean_np_array(shape, d_type=d_type, seed=seed)
     f_d = gpuarray.to_gpu(f)
 
     return f, f_d
 
 
-def generate_np_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+def generate_np_array(shape, center=0.5, half_width=0.5, d_type=DTYPE_f, seed=0):
     """Returns ndarray with pseudo-random values."""
     np.random.seed(seed)
-    f = (np.random.random(shape) * magnitude + offset).astype(d_type)
-
-    return f
+    return ((np.random.random(shape) - 0.5) * 2 * half_width + center).astype(d_type)
 
 
-def generate_gpu_array(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
-    """Returns ndarray with pseudo-random values."""
+def generate_gpu_array(shape, center=0.5, half_width=0.5, d_type=DTYPE_f, seed=0):
+    """Returns GPUArray with pseudo-random values."""
     f = generate_np_array(
-        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+        shape, center=center, half_width=half_width, d_type=d_type, seed=seed
+    )
+    return gpuarray.to_gpu(f)
+
+
+def generate_array_pair(shape, center=0.5, half_width=0.5, d_type=DTYPE_f, seed=0):
+    """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
+    f = generate_np_array(
+        shape, center=center, half_width=half_width, d_type=d_type, seed=seed
     )
     f_d = gpuarray.to_gpu(f)
 
-    return f_d
+    return f, f_d
 
 
-def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+def generate_np_array_old(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+    """Returns ndarray with pseudo-random values."""
+    np.random.seed(seed)
+    return (np.random.random(shape) * magnitude + offset).astype(d_type)
+
+
+def generate_gpu_array_old(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
+    """Returns GPUArray with pseudo-random values."""
+    f = generate_np_array_old(
+        shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
+    )
+    return gpuarray.to_gpu(f)
+
+
+def generate_array_pair_old(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0):
     """Returns a pair of numpy and gpu arrays with identical pseudo-random values."""
-    f = generate_np_array(
+    f = generate_np_array_old(
         shape, magnitude=magnitude, offset=offset, d_type=d_type, seed=seed
     )
     f_d = gpuarray.to_gpu(f)
@@ -104,6 +115,16 @@ def generate_array_pair(shape, magnitude=1.0, offset=0.0, d_type=DTYPE_f, seed=0
 @pytest.fixture
 def boolean_np_array():
     return generate_boolean_np_array
+
+
+@pytest.fixture
+def boolean_gpu_array():
+    return generate_boolean_gpu_array
+
+
+@pytest.fixture
+def boolean_array_pair():
+    return generate_boolean_array_pair
 
 
 @pytest.fixture
@@ -119,21 +140,6 @@ def gpu_array():
 @pytest.fixture
 def array_pair():
     return generate_array_pair
-
-
-@pytest.fixture
-def np_array1():
-    return generate_np_array1
-
-
-@pytest.fixture
-def gpu_array1():
-    return generate_gpu_array1
-
-
-@pytest.fixture
-def array_pair1():
-    return generate_array_pair1
 
 
 @pytest.fixture
@@ -175,10 +181,10 @@ def peaks_d(correlation_gpu, piv_field):
 
 
 @pytest.fixture
-def mask_d(peaks_d, gpu_array):
+def mask_d(peaks_d, boolean_gpu_array):
     i_peaks_d, j_peaks_d = peaks_d
 
-    mask_d = gpu_array(i_peaks_d.shape, magnitude=2, d_type=DTYPE_i, seed=0)
+    mask_d = boolean_gpu_array(i_peaks_d.shape, seed=0)
 
     return mask_d
 
@@ -192,10 +198,10 @@ def sig2noise_d(correlation_gpu, piv_field):
 
 
 @pytest.fixture
-def validation_gpu(peaks_d, gpu_array):
+def validation_gpu(peaks_d, boolean_gpu_array):
     i_peaks_d, j_peaks_d = peaks_d
 
-    mask_d = gpu_array(i_peaks_d.shape, magnitude=2.0, d_type=DTYPE_i, seed=1)
+    mask_d = boolean_gpu_array(i_peaks_d.shape, seed=1)
 
     validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask=mask_d)
 

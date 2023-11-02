@@ -17,9 +17,9 @@ from scipy.fft import dct, idct
 from scipy.ndimage import distance_transform_edt
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
+
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
-# import pycuda.cumath as cumath
 
 from openpiv.gpu_misc import _check_arrays
 
@@ -132,7 +132,6 @@ def smoothn(
     -------
     z : ndarray or list
     s : float
-    w_tot : ndarray
 
     Example
     -------
