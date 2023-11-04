@@ -5,6 +5,7 @@ from math import ceil, prod, log10
 import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
+
 # import pycuda.cumath as cumath
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
@@ -23,6 +24,7 @@ MEAN_TOL = 2
 RMS_TOL = 2
 _BLOCK_SIZE = 64
 
+
 # TODO rename sig2noise
 def gpu_validation(
     *f,
@@ -34,8 +36,8 @@ def gpu_validation(
     mean_tol=MEAN_TOL,
     rms_tol=RMS_TOL
 ):
-    """Validates vector-fields and returns an array indicating which location need to be
-    validated.
+    """Validates 2D vector-fields and returns an array indicating which location need to
+    be validated.
 
     Parameters
     ----------
@@ -303,9 +305,7 @@ class ValidationGPU:
         ):
             raise ValueError(
                 "Invalid validation method(s). Allowed validation methods are: "
-                "{}".format(
-                    ALLOWED_VALIDATION_METHODS
-                )
+                "{}".format(ALLOWED_VALIDATION_METHODS)
             )
 
     def _check_validation_tolerances(self):

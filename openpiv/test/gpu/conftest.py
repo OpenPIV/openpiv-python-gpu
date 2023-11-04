@@ -174,36 +174,44 @@ def piv_field(correlation_gpu):
 
 
 @pytest.fixture
-def peaks_d(correlation_gpu, piv_field):
-    i_peaks_d, j_peaks_d = correlation_gpu(piv_field)
+def peaks(correlation_gpu, piv_field):
+    i_peaks, j_peaks = correlation_gpu(piv_field)
 
-    return i_peaks_d, j_peaks_d
-
-
-@pytest.fixture
-def mask_d(peaks_d, boolean_gpu_array):
-    i_peaks_d, j_peaks_d = peaks_d
-
-    mask_d = boolean_gpu_array(i_peaks_d.shape, seed=0)
-
-    return mask_d
+    return i_peaks, j_peaks
 
 
 @pytest.fixture
-def sig2noise_d(correlation_gpu, piv_field):
+def mask(peaks, boolean_gpu_array):
+    i_peaks, _ = peaks
+
+    mask = boolean_gpu_array(i_peaks.shape, seed=0)
+
+    return mask
+
+
+@pytest.fixture
+def sig2noise(correlation_gpu, piv_field):
     _, _ = correlation_gpu(piv_field)
-    sig2noise_d = correlation_gpu.sig2noise
+    sig2noise = correlation_gpu.sig2noise
 
-    return sig2noise_d
+    return sig2noise
 
 
 @pytest.fixture
-def validation_gpu(peaks_d, boolean_gpu_array):
-    i_peaks_d, j_peaks_d = peaks_d
+def validation_gpu(peaks, boolean_gpu_array):
+    i_peaks, _ = peaks
 
-    mask_d = boolean_gpu_array(i_peaks_d.shape, seed=1)
+    mask_d = boolean_gpu_array(i_peaks.shape, seed=1)
 
-    validation_gpu = gpu_validation.ValidationGPU(i_peaks_d, mask=mask_d)
+    validation_gpu = gpu_validation.ValidationGPU(
+        i_peaks,
+        mask=mask_d,
+        validation_method="median_velocity",
+        s2n_tol=2,
+        median_tol=2,
+        mean_tol=2,
+        rms_tol=2,
+    )
 
     return validation_gpu
 

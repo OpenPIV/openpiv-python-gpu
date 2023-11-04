@@ -288,89 +288,107 @@ def test_reflect_frequency_comp(shape, np_array):
 
 # # INTEGRATION TESTS
 @pytest.mark.integtest
-class TestSmoothnParams:
-    @pytest.mark.parametrize("mask", [True, False])
-    def test_mask(self, mask, boolean_np_array):
-        shape = (16, 16)
-        mask = boolean_np_array(shape) if mask else None
-        smoothn(shape, mask=mask)
-
-    @pytest.mark.parametrize("w", [True, False])
-    def test_w(self, w, np_array):
-        shape = (16, 16)
-        w = np_array(shape, center=0.5, half_width=0.5) if w else None
-        smoothn(shape, w=w)
-
-    @pytest.mark.parametrize("s", [None, 10])
-    def test_s(self, s):
-        shape = (16, 16)
-        smoothn(shape, s=s)
-
-    @pytest.mark.parametrize("robust", [True, False])
-    def test_robust(self, robust):
-        shape = (16, 16)
-        smoothn(shape, robust=robust)
-
-    @pytest.mark.parametrize("z0", [True, False])
-    def test_z0(self, z0, np_array):
-        shape = (16, 16)
-        z0 = np_array(shape, center=0, half_width=1.0) if z0 is None else None
-        smoothn(shape, z0=z0)
-
-    @pytest.mark.parametrize("max_iter", [1, 10, 100])
-    def test_max_iter(self, max_iter):
-        shape = (16, 16)
-        smoothn(shape, max_iter=max_iter)
-
-    @pytest.mark.parametrize("tol_z", [1e-3, 1e-2, 1])
-    def test_tol_z(self, tol_z):
-        shape = (16, 16)
-        smoothn(shape, tol_z=tol_z)
-
-    @pytest.mark.parametrize("weight_method", ["bisquare", "talworth", "cauchy"])
-    def test_weight_method(self, weight_method):
-        shape = (16, 16)
-        smoothn(shape, weight_method=weight_method)
-
-    @pytest.mark.parametrize("smooth_order", [0, 1, 2])
-    def test_smooth_order(self, smooth_order):
-        shape = (16, 16)
-        smoothn(shape, smooth_order=smooth_order)
-
-    @pytest.mark.parametrize("spacing", [None, (0.5, 0.5), (1, 1)])
-    def test_spacing(self, spacing):
-        shape = (16, 16)
-        smoothn(shape, spacing=spacing)
-
-
-def smoothn(shape, **params):
-    y = generate_cosine_field(shape, wavelength=50)
-    noise = generate_noise_field(shape, scale=0.5)
-
-    z, s = gpu_smoothn.smoothn(y + noise, **params)
-
-    assert isinstance(z, np.ndarray)
-    assert np.all(np.isfinite(z))
-    assert isinstance(s, Number)
-
-
-@pytest.mark.integtest
 @pytest.mark.parametrize(
     "shape, expected_noise_ratio",
     [((64,), 0.425), ((64, 64), 0.136), ((64, 64, 64), 0.0641)],
 )
 def test_smoothn_noise_ratio(shape, expected_noise_ratio):
-    """Check noise ratio."""
+    """Check against expected noise ratio."""
     # Need to check all parameters.
     y = generate_cosine_field(shape, wavelength=50)
     noise = generate_noise_field(shape, scale=0.5)
 
-    z = gpu_smoothn.smoothn(y + noise)[0]
+    z = gpu_smoothn.smoothn(
+        y + noise,
+        mask=None,
+        w=None,
+        s=None,
+        robust=False,
+        z0=None,
+        max_iter=100,
+        tol_z=1e-3,
+        weight_method="bisquare",
+        smooth_order=2,
+        spacing=None
+    )[0]
     z_l2_norm = np.linalg.norm(z - y)
     noise_l2_norm = np.linalg.norm(noise)
     noise_ratio = float(z_l2_norm / noise_l2_norm)
 
     assert noise_ratio < expected_noise_ratio
+
+
+@pytest.fixture
+def smoothn():
+    def smoothn(shape, **params):
+        y = generate_cosine_field(shape, wavelength=50)
+        noise = generate_noise_field(shape, scale=0.5)
+
+        z, s = gpu_smoothn.smoothn(y + noise, **params)
+
+        assert isinstance(z, np.ndarray)
+        assert np.all(np.isfinite(z))
+        assert isinstance(s, Number)
+
+    return smoothn
+
+
+@pytest.mark.integtest
+class TestSmoothnParams:
+    """Test all parameters."""
+
+    @pytest.mark.parametrize("mask_", [True, False])
+    def test_mask(self, mask_, boolean_np_array, smoothn):
+        shape = (16, 16)
+        mask_ = boolean_np_array(shape) if mask_ else None
+        smoothn(shape, mask=mask_)
+
+    @pytest.mark.parametrize("w", [True, False])
+    def test_w(self, w, np_array, smoothn):
+        shape = (16, 16)
+        w = np_array(shape, center=0.5, half_width=0.5) if w else None
+        smoothn(shape, w=w)
+
+    @pytest.mark.parametrize("s", [None, 10])
+    def test_s(self, s, smoothn):
+        shape = (16, 16)
+        smoothn(shape, s=s)
+
+    @pytest.mark.parametrize("robust", [True, False])
+    def test_robust(self, robust, smoothn):
+        shape = (16, 16)
+        smoothn(shape, robust=robust)
+
+    @pytest.mark.parametrize("z0", [True, False])
+    def test_z0(self, z0, np_array, smoothn):
+        shape = (16, 16)
+        z0 = np_array(shape, center=0, half_width=1.0) if z0 is None else None
+        smoothn(shape, z0=z0)
+
+    @pytest.mark.parametrize("max_iter", [1, 10, 100])
+    def test_max_iter(self, max_iter, smoothn):
+        shape = (16, 16)
+        smoothn(shape, max_iter=max_iter)
+
+    @pytest.mark.parametrize("tol_z", [1e-3, 1e-2, 1])
+    def test_tol_z(self, tol_z, smoothn):
+        shape = (16, 16)
+        smoothn(shape, tol_z=tol_z)
+
+    @pytest.mark.parametrize("weight_method", ["bisquare", "talworth", "cauchy"])
+    def test_weight_method(self, weight_method, smoothn):
+        shape = (16, 16)
+        smoothn(shape, weight_method=weight_method)
+
+    @pytest.mark.parametrize("smooth_order", [0, 1, 2])
+    def test_smooth_order(self, smooth_order, smoothn):
+        shape = (16, 16)
+        smoothn(shape, smooth_order=smooth_order)
+
+    @pytest.mark.parametrize("spacing", [None, (0.5, 0.5), (1, 1)])
+    def test_spacing(self, spacing, smoothn):
+        shape = (16, 16)
+        smoothn(shape, spacing=spacing)
 
 
 # REGRESSION
