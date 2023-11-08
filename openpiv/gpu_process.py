@@ -343,7 +343,7 @@ class CorrelationGPU:
 
         The signal-to-noise ratio is computed from the correlation and is a measure of
         the quality of the matching between two interrogation windows. Note that this
-        method returns the base-10 logarithm of the siganl-to-noise ratio.
+        method returns the base-10 logarithm of the signal-to-noise ratio.
         The signal-to-noise field takes +np.Inf values where there is no noise.
 
         Returns

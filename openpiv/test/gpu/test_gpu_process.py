@@ -22,6 +22,7 @@ DTYPE_f = np.float32
 # dirs
 data_dir = "../data/"
 
+# TODO delete these
 _image_size_rectangle = (1024, 1024)
 _image_size_square = (1024, 512)
 _u_shift = 8
@@ -231,6 +232,24 @@ def l2_norm_2d(a, b):
     return np.sqrt(np.sum(a**2 + b**2)) / sqrt(a.size)
 
 
+@pytest.fixture
+def process(request):
+    frame_shape = request.param
+    u_shift = 8
+    v_shift = -4
+    frame_a, frame_b = create_pair_shift(frame_shape, u_shift, v_shift)
+
+    def process(**params):
+        trim_slice = slice(2, -2, 1)
+
+        _, _, u, v, _, _ = gpu_process.gpu_piv(frame_a, frame_b, **params)
+
+        assert np.linalg.norm(u[trim_slice, trim_slice] - u_shift) / sqrt(u.size) < 0.1
+        assert np.linalg.norm(-v[trim_slice, trim_slice] - v_shift) / sqrt(u.size) < 0.1
+
+    return process
+
+
 # UNIT TESTS
 def test_correlation_gpu_free_frame_data(correlation_gpu):
     correlation_gpu.free_frame_data()
@@ -412,10 +431,10 @@ def test_piv_gpu_mask_frame(piv_gpu):
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_frame_mask(piv_gpu, np_array):
+def test_piv_gpu_get_frame_mask(piv_gpu, boolean_np_array):
     shape = (16, 16)
 
-    piv_gpu.mask = np_array(shape, center=0.5, half_width=0.5, d_type=DTYPE_i)
+    piv_gpu.mask = boolean_np_array(shape)
     piv_gpu._frame_mask = None
     frame_mask = piv_gpu._get_frame_mask()
 
@@ -431,11 +450,11 @@ def test_piv_gpu_get_search_size(piv_gpu):
     assert search_size == piv_gpu._piv_field_k.window_size * piv_gpu.extend_ratio
 
 
-def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array):
+def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
     shape = (16, 16)
 
     dp_u = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = gpu_array(shape, d_type=DTYPE_i)
+    mask = boolean_gpu_array(shape, seed=1)
     piv_gpu._piv_field_k._mask = mask
     shift_, strain = piv_gpu._get_window_deformation(dp_u, dp_u)
 
@@ -443,12 +462,12 @@ def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array):
     assert isinstance(strain, gpuarray.GPUArray)
 
 
-def test_piv_gpu_update_values(piv_gpu, gpu_array):
+def test_piv_gpu_update_values(piv_gpu, gpu_array, boolean_gpu_array):
     # Need to test the switch cases.
     shape = (16, 16)
 
     i_peak = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = gpu_array(shape, d_type=DTYPE_i)
+    mask = boolean_gpu_array(shape, seed=1)
     piv_gpu._piv_field_k._mask = mask
     u, v = piv_gpu._update_values(i_peak, i_peak, i_peak, i_peak)
 
@@ -462,13 +481,13 @@ def test_piv_gpu_validate_fields():
 
 
 @pytest.mark.parametrize("k", [0, 1])
-def test_piv_gpu_gpu_replace_vectors(k, piv_gpu, gpu_array):
+def test_piv_gpu_gpu_replace_vectors(k, piv_gpu, gpu_array, boolean_gpu_array):
     # Need to test different dimensions.
     shape = (16, 16)
 
     u = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = gpu_array(shape, d_type=DTYPE_i)
-    val_locations = gpu_array(shape, d_type=DTYPE_i, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
+    val_locations = boolean_gpu_array(shape, seed=2)
     piv_gpu._piv_field_k._mask = mask
     u, v = piv_gpu._gpu_replace_vectors(u, u, u, u, u, u, val_locations)
 
@@ -476,12 +495,12 @@ def test_piv_gpu_gpu_replace_vectors(k, piv_gpu, gpu_array):
     assert isinstance(v, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_next_iteration_predictions(piv_gpu, gpu_array):
+def test_piv_gpu_get_next_iteration_predictions(piv_gpu, gpu_array, boolean_gpu_array):
     # Need to test different dimensions.
     shape = (22, 30)
 
     u = v = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = gpu_array(shape, d_type=DTYPE_i)
+    mask = boolean_gpu_array(shape, seed=1)
     piv_gpu._piv_field_k._mask = mask
     piv_gpu._piv_field_k = piv_gpu._get_piv_fields()[0]
     piv_gpu._k = 0
@@ -985,40 +1004,13 @@ def test_interpolate_replace(array_pair, boolean_array_pair):
     assert np.allclose(f1_gpu, f1)
 
 
-# BENCHMARKS
-@pytest.mark.parametrize("image_size", [(1024, 1024), (2048, 2048)])
-@pytest.mark.parametrize(
-    "window_size_iters,min_window_size", [((1, 2), 16), ((1, 2, 2), 8)]
-)
-def test_gpu_piv_benchmark(benchmark, image_size, window_size_iters, min_window_size):
-    """Benchmarks the PIV function."""
-    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
-    args = {
-        "mask": None,
-        "window_size_iters": window_size_iters,
-        "min_window_size": min_window_size,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "validation_method": "median_velocity",
-    }
-
-    benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
-
-
 # INTEGRATION TESTS
-# TODO check convenience function for various inputs
-def gpu_piv():
-    pass
-
-
-@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
-def test_gpu_piv_fast(image_size):
+@pytest.mark.integtest
+@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
+@pytest.mark.parametrize("frame_shape", [(512, 512), (512, 1024)])
+def test_gpu_piv_fast(frame_shape, process):
     """Quick test of the main piv function."""
-    frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
-    args = {
+    params = {
         "mask": None,
         "window_size_iters": (1, 2),
         "min_window_size": 16,
@@ -1030,22 +1022,22 @@ def test_gpu_piv_fast(image_size):
         "validation_method": "median_velocity",
     }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-    assert (
-        np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size)
-        < _accuracy_tolerance
-    )
-    assert (
-        np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size)
-        < _accuracy_tolerance
-    )
+    process(**params)
 
 
-@pytest.mark.parametrize("image_size", (_image_size_rectangle, _image_size_square))
-def test_gpu_piv_zero(image_size):
+# TODO
+@pytest.mark.integtest
+def test_correlation_gpu():
+    """"""
+    # This tests at a basic level that the gpu-correlation returns a believable result.
+    pass
+
+
+@pytest.mark.integtest
+def test_gpu_piv_zero():
     """Tests that zero-displacement is returned when the images are empty."""
-    frame_a = frame_b = np.zeros(image_size, dtype=np.int32)
+    shape = (512, 512)
+    frame_a = frame_b = np.zeros(shape, dtype=np.int32)
     args = {
         "mask": None,
         "window_size_iters": (1, 2),
@@ -1064,10 +1056,11 @@ def test_gpu_piv_zero(image_size):
     assert np.allclose(v, 0, _identity_tolerance)
 
 
-def test_extended_search_area():
-    """Inputs every s2n method to ensure they don't error out."""
-    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    args = {
+@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
+@pytest.mark.integtest
+def test_extended_search_area(process):
+    """"""
+    params = {
         "mask": None,
         "window_size_iters": (2, 2),
         "min_window_size": 8,
@@ -1079,83 +1072,190 @@ def test_extended_search_area():
         "extend_ratio": 2,
     }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    process(**params)
 
-    assert (
-        np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift) / sqrt(u.size)
-        < _accuracy_tolerance
+
+# @pytest.fixture
+# def correlation(request):
+#     frame_shape = request.param
+#     u_shift = 8
+#     v_shift = -4
+#     frame_a, frame_b = create_pair_shift(frame_shape, u_shift, v_shift)
+#
+#     def correlation(**params):
+#         trim_slice = slice(2, -2, 1)
+#
+#         _, _, u, v, _, _ = gpu_process.gpu_correlation(frame_a, frame_b, **params)
+#
+#         assert np.linalg.norm(u[trim_slice, trim_slice] - u_shift) / sqrt(u.size) < 0.1
+#         assert np.linalg.norm(-v[trim_slice, trim_slice] - v_shift) / sqrt(u.size) < 0.1
+#
+#     return correlation
+#
+#
+# # TODO correlation tests
+# @pytest.mark.integtest
+# class TestCorrelationParams:
+#     subpixel_method = (SUBPIXEL_METHOD,)
+#     center_field = (True,)
+#     s2n_method = (S2N_METHOD,)
+#     s2n_width = (S2N_WIDTH,)
+#     n_fft = (N_FFT,)
+#     subpixel_method = (SUBPIXEL_METHOD,)
+#     s2n_method = (S2N_METHOD,)
+#     s2n_width = (S2N_WIDTH,)
+#     n_fft = (N_FFT,)
+#     piv_field, search_size=None, shift=None, strain=None
+#
+#     @pytest.mark.parametrize("s2n_method", ("peak2peak", "peak2mean", "peak2energy"))
+#     def test_sig2noise(self, s2n_method):
+#         """Checks every s2n method for invalid outputs."""
+#         frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+#         args = {
+#             "mask": None,
+#             "window_size_iters": (1, 2, 2),
+#             "min_window_size": 8,
+#             "overlap_ratio": 0.5,
+#             "dt": 1,
+#             "deform": True,
+#             "smooth": True,
+#             "num_validation_iters": 2,
+#             "validation_method": "median_velocity",
+#             "return_s2n": True,
+#             "s2n_method": s2n_method,
+#         }
+#
+#         _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
+#
+#     @pytest.mark.parametrize("subpixel_method", ("gaussian", "centroid", "parabolic"))
+#     def test_subpixel_peak(self, subpixel_method):
+#         """Checks every subpixel method for invalid outputs"""
+#         frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
+#         args = {
+#             "mask": None,
+#             "window_size_iters": (1, 2, 2),
+#             "min_window_size": 8,
+#             "overlap_ratio": 0.5,
+#             "dt": 1,
+#             "deform": True,
+#             "smooth": True,
+#             "num_validation_iters": 2,
+#             "validation_method": "median_velocity",
+#             "subpixel_method": subpixel_method,
+#         }
+#
+#         _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+
+@pytest.mark.integtest
+class TestProcessParams:
+    frame_shape = (1024, 1024)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
     )
-    assert (
-        np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift) / sqrt(u.size)
-        < _accuracy_tolerance
+    @pytest.mark.parametrize(
+        "window_size_iters, min_window_size", [((1, 2), 16), ((1, 2, 2), 8)]
     )
+    def test_window_size(self, window_size_iters, min_window_size, process):
+        process(window_size_iters=window_size_iters, min_window_size=min_window_size)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("overlap_ratio", [0.3, 0.5, 0.7])
+    def test_overlap_ratio(self, overlap_ratio, process):
+        process(overlap_ratio=overlap_ratio)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("dt", [0.99, 1])
+    def test_dt(self, dt, process):
+        process(dt=dt)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("mask", [frame_shape, False])
+    def mask(self, mask, process, boolean_gpu_array):
+        mask = boolean_gpu_array(mask) if mask else None
+        process(mask=mask)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("deform", [True, False])
+    def deform(self, deform, process):
+        process(deform=deform)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("smooth", [True, False])
+    def smooth(self, smooth, process):
+        process(smooth=smooth)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
+    def test_num_validation_iters(self, num_validation_iters, process):
+        process(num_validation_iters=num_validation_iters)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("center_field", [True, False])
+    def test_center_field(self, center_field, process):
+        process(center_field=center_field)
+
+    @pytest.mark.parametrize(
+        "process",
+        [
+            frame_shape,
+        ],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("extend_ratio", [1.5, 2, None])
+    def test_num_extend_ratio(self, extend_ratio, process):
+        process(window_size_iters=(2, 2), min_window_size=8, extend_ratio=extend_ratio)
 
 
-@pytest.mark.parametrize("s2n_method", ("peak2peak", "peak2mean", "peak2energy"))
-def test_sig2noise(s2n_method):
-    """Inputs every s2n method to ensure they don't error out."""
-    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    args = {
-        "mask": None,
-        "window_size_iters": (1, 2, 2),
-        "min_window_size": 8,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "validation_method": "median_velocity",
-        "return_s2n": True,
-        "s2n_method": s2n_method,
-    }
-
-    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-
-@pytest.mark.parametrize("subpixel_method", ("gaussian", "centroid", "parabolic"))
-def test_subpixel_peak(subpixel_method):
-    """Inputs every s2n method to ensure they don't error out."""
-    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    args = {
-        "mask": None,
-        "window_size_iters": (1, 2, 2),
-        "min_window_size": 8,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "validation_method": "median_velocity",
-        "subpixel_method": subpixel_method,
-    }
-
-    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-
-# s2n must not cause invalid numbers to be passed to smoothn.
-@pytest.mark.parametrize(
-    "validation_method", ("s2n", "mean_velocity", "median_velocity", "rms_velocity")
-)
-def test_validation(validation_method):
-    """Inputs every s2n method to ensure they don't error out."""
-    frame_a, frame_b = create_pair_shift(_image_size_rectangle, _u_shift, _v_shift)
-    args = {
-        "mask": None,
-        "window_size_iters": (1, 2, 2),
-        "min_window_size": 8,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "validation_method": validation_method,
-    }
-
-    _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-
-# TODO regression
-# sweep the input variables to ensure everything is same
+# REGRESSION TESTS
+@pytest.mark.regression
 @pytest.mark.parametrize(
     "window_size_iters",
     [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)],
@@ -1165,90 +1265,7 @@ def test_validation(validation_method):
 def test_gpu_piv_py(
     window_size_iters, min_window_size, num_validation_iters, ndarrays_regression
 ):
-    """This test checks that the output remains the same."""
-    frame_a = imread("../../data/test1/exp1_001_a.bmp")
-    frame_b = imread("../../data/test1/exp1_001_b.bmp")
-    args = {
-        "mask": None,
-        "window_size_iters": window_size_iters,
-        "min_window_size": min_window_size,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": num_validation_iters,
-        "validation_method": "median_velocity",
-        "smoothing_par": 0.5,
-        "center_field": False,
-    }
-
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-    ndarrays_regression.check({"u": u, "v": v})
-
-
-# @pytest.mark.parametrize('image_size', (_image_size_rectangle, _image_size_square))
-# def test_gpu_piv_fast0(image_size):
-#     """Quick test of the main piv function."""
-#     frame_a, frame_b = create_pair_shift(image_size, _u_shift, _v_shift)
-#     args = {'mask': None,
-#             'window_size_iters': (1, 2),
-#             'min_window_size': 16,
-#             'overlap_ratio': 0.5,
-#             'dt': 1,
-#             'deform': True,
-#             'smooth': True,
-#             'num_validation_iters': 1,
-#             'validation_method': 'median_velocity',
-#             }
-#
-#     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_a, **args)
-#
-#     assert np.linalg.norm(u[_trim_slice, _trim_slice] - _u_shift)\
-#            / sqrt(u.size) < _accuracy_tolerance
-#     assert np.linalg.norm(-v[_trim_slice, _trim_slice] - _v_shift)\
-#            / sqrt(u.size) < _accuracy_tolerance
-
-
-@pytest.mark.integtest
-def test_gpu_piv_fast():
-    """Quick test of the main piv function."""
-    frame_size = (512, 512)
-    u_shift = 8
-    v_shift = -4
-    trim_slice = slice(2, -2, 1)
-    args = {
-        "mask": None,
-        "window_size_iters": (1, 2),
-        "min_window_size": 16,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 1,
-        "validation_method": "median_velocity",
-    }
-
-    frame_a, frame_b = create_pair_shift(frame_size, u_shift, v_shift)
-
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-    assert np.linalg.norm(u[trim_slice, trim_slice] - u_shift) / sqrt(u.size) < 0.1
-    assert np.linalg.norm(-v[trim_slice, trim_slice] - v_shift) / sqrt(u.size) < 0.1
-
-
-# TODO regression
-@pytest.mark.integtest
-@pytest.mark.parametrize(
-    "window_size_iters",
-    [1, (1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2), (1, 2, 1)],
-)
-@pytest.mark.parametrize("min_window_size", [8, 16])
-@pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
-def test_gpu_piv_py(
-    window_size_iters, min_window_size, num_validation_iters, ndarrays_regression
-):
-    """This test checks that the output remains the same."""
+    """"""
     frame_a = imread(data_dir + "test1/exp1_001_a.bmp")
     frame_b = imread(data_dir + "test1/exp1_001_b.bmp")
     args = {
@@ -1268,42 +1285,6 @@ def test_gpu_piv_py(
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
     ndarrays_regression.check({"u": u, "v": v})
-
-
-# TODO
-@pytest.mark.integtest
-def test_correlation_gpu():
-    """"""
-    # This tests at a basic level that the gpu-correlation returns a believable result.
-    pass
-
-
-# TODO
-@pytest.mark.integtest
-def test_extended_search_area():
-    """"""
-    frame_size = (512, 512)
-    u_shift = 8
-    v_shift = -4
-    trim_slice = slice(2, -2, 1)
-    args = {
-        "mask": None,
-        "window_size_iters": (2, 2),
-        "min_window_size": 8,
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "extend_ratio": 2,
-    }
-
-    frame_a, frame_b = create_pair_shift(frame_size, u_shift, v_shift)
-
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-    assert np.linalg.norm(u[trim_slice, trim_slice] - u_shift) / sqrt(u.size) < 0.1
-    assert np.linalg.norm(-v[trim_slice, trim_slice] - v_shift) / sqrt(u.size) < 0.1
 
 
 # BENCHMARKS

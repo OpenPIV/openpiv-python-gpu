@@ -494,7 +494,7 @@ class TestValidationParams:
         validation(rms_tol=rms_tol)
 
 
-# REGRESSION
+# REGRESSION TESTS
 @pytest.mark.regression
 @pytest.mark.parametrize("validation_method", gpu_validation.ALLOWED_VALIDATION_METHODS)
 def test_validation_gpu_regression(
