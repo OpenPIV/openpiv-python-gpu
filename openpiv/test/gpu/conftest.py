@@ -190,9 +190,9 @@ def mask(peaks, boolean_gpu_array):
 
 
 @pytest.fixture
-def sig2noise(correlation_gpu, piv_field):
+def s2n_ratio(correlation_gpu, piv_field):
     _, _ = correlation_gpu(piv_field)
-    sig2noise = correlation_gpu.sig2noise
+    sig2noise = correlation_gpu.s2n_ratio
 
     return sig2noise
 

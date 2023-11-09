@@ -126,11 +126,11 @@ def test_validation_gpu_median_mean(num_fields, type_, validation_gpu, peaks):
     assert isinstance(validation_gpu.mean, type_)
 
 
-def test_validation_gpu_s2n_validation(validation_gpu, sig2noise):
+def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
     tol = log10(gpu_validation.S2N_TOL)
 
-    val_locations = gpu_validation._local_validation(sig2noise / tol, 1).get()
-    validation_gpu._s2n_validation(sig2noise)
+    val_locations = gpu_validation._local_validation(s2n_ratio / tol, 1).get()
+    validation_gpu._s2n_validation(s2n_ratio)
     val_locations_gpu = validation_gpu._val_locations.get()
 
     assert np.array_equal(val_locations_gpu, val_locations)
@@ -439,11 +439,11 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     [("s2n", 316), ("median_velocity", 63), ("mean_velocity", 5), ("rms_velocity", 4)],
 )
 def test_validation_gpu_(
-    validation_method, expected_sum, validation_gpu, peaks, mask, sig2noise
+    validation_method, expected_sum, validation_gpu, peaks, mask, s2n_ratio
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method
-    val_locations = validation_gpu(*peaks, sig2noise=sig2noise).get()
+    val_locations = validation_gpu(*peaks, s2n=s2n_ratio).get()
 
     assert np.sum(val_locations) == expected_sum
 
@@ -473,9 +473,9 @@ class TestValidationParams:
         "validation_method", list(gpu_validation.ALLOWED_VALIDATION_METHODS)
     )
     def test_validation_gpu_validation_method(
-        self, validation_method, sig2noise, validation
+        self, validation_method, s2n_ratio, validation
     ):
-        validation(sig2noise=sig2noise, validation_method=validation_method)
+        validation(s2n=s2n_ratio, validation_method=validation_method)
 
     @pytest.mark.parametrize("s2n_tol", [1.5, gpu_validation.S2N_TOL])
     def test_validation_gpu_s2n_tol(self, s2n_tol, validation):
@@ -498,10 +498,10 @@ class TestValidationParams:
 @pytest.mark.regression
 @pytest.mark.parametrize("validation_method", gpu_validation.ALLOWED_VALIDATION_METHODS)
 def test_validation_gpu_regression(
-    validation_method, validation_gpu, peaks, mask, ndarrays_regression, sig2noise
+    validation_method, validation_gpu, peaks, mask, ndarrays_regression, s2n_ratio
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method
-    val_locations = validation_gpu(*peaks, sig2noise=sig2noise).get()
+    val_locations = validation_gpu(*peaks, s2n=s2n_ratio).get()
 
     ndarrays_regression.check({"val_locations": val_locations})

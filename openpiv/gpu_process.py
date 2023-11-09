@@ -48,7 +48,7 @@ DTYPE_f = np.float32
 DTYPE_c = np.complex64
 
 ALLOWED_SUBPIXEL_METHODS = {"gaussian", "parabolic", "centroid"}
-ALLOWED_S2N_METHODS = {"peak2peak", "peak2mean", "peak2energy"}
+ALLOWED_S2N_METHODS = {"peak2peak", "peak2energy", "peak2rms"}
 SMOOTHING_PAR = None
 N_FFT = 2
 SUBPIXEL_METHOD = "gaussian"
@@ -104,7 +104,7 @@ class CorrelationGPU:
         Method for evaluating the signal-to-noise ratio value from the correlation map.
     s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding
-        the second peak. Only used if 'sig2noise_method == peak2peak'.
+        the second peak. Only used if 's2n_method == peak2peak'.
 
     """
 
@@ -162,7 +162,7 @@ class CorrelationGPU:
         self._search_size = (
             search_size if search_size is not None else piv_field.window_size
         )
-        self._sig2noise = None
+        self._s2n_ratio = None
 
         self._init_fft_shape()
 
@@ -202,7 +202,7 @@ class CorrelationGPU:
         self.frame_b = None
 
     @property
-    def sig2noise(self):
+    def s2n_ratio(self):
         """Returns signal-to-noise ratio of the cross-correlation.
 
         Returns
@@ -363,18 +363,18 @@ class CorrelationGPU:
             "window height or width. Recommended value is 2."
         )
 
-        if self._sig2noise is None:
+        if self._s2n_ratio is None:
             # Compute signal-to-noise ratio by the elected method.
-            if self.s2n_method == "peak2mean":
-                sig2noise = _peak2mean(self.correlation, self.corr_peak1)
-            elif self.s2n_method == "peak2energy":
-                sig2noise = _peak2energy(self.correlation, self.corr_peak1)
+            if self.s2n_method == "peak2energy":
+                s2n_ratio = _peak2energy(self.correlation, self.corr_peak1)
+            elif self.s2n_method == "peak2rms":
+                s2n_ratio = _peak2rms(self.correlation, self.corr_peak1)
             else:
                 corr_peak2 = self._get_second_peak(self.correlation, self.s2n_width)
-                sig2noise = _peak2peak(self.corr_peak1, corr_peak2)
-            self._sig2noise = sig2noise.reshape(self.piv_field.shape)
+                s2n_ratio = _peak2peak(self.corr_peak1, corr_peak2)
+            self._s2n_ratio = s2n_ratio.reshape(self.piv_field.shape)
 
-        return self._sig2noise
+        return self._s2n_ratio
 
     def _get_second_peak(self, correlation_positive, mask_width):
         """Find the value of the second-largest peak.
@@ -557,7 +557,7 @@ def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
     x, y = piv_gpu.coords
     u, v = piv_gpu(frame_a, frame_b)
     mask = piv_gpu.field_mask
-    s2n = piv_gpu.sig2noise if return_s2n else None
+    s2n = piv_gpu.s2n_ratio if return_s2n else None
 
     return x, y, u, v, mask, s2n
 
@@ -616,6 +616,8 @@ class _MinWindowSize(_Integer):
         return value
 
 
+# TODO refactor window-size argument
+# TODO refactor extended-search argument
 class PIVGPU:
     """Iterative GPU-accelerated algorithm that uses translation and deformation of
     interrogation windows.
@@ -693,7 +695,7 @@ class PIVGPU:
         Method of signal-to-noise-ratio measurement.
     s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding
-        the second peak. Default is 2. Only used if sig2noise_method == 'peak2peak'.
+        the second peak. Default is 2. Only used if s2n_method == 'peak2peak'.
     n_fft : int or tuple, optional
         Size-factor of the 2D FFT in x and y-directions. The default of 2 is\
         recommended.
@@ -867,7 +869,7 @@ class PIVGPU:
         return piv_fields[-1].mask
 
     @property
-    def sig2noise(self):
+    def s2n_ratio(self):
         """Returns signal-to-noise ratio of the final velocity field.
 
         Returns
@@ -876,7 +878,7 @@ class PIVGPU:
             2D float (m, n)
 
         """
-        return self._corr.sig2noise
+        return self._corr.s2n_ratio
 
     def free_data(self):
         """Frees data from GPU."""
@@ -972,9 +974,9 @@ class PIVGPU:
         val_locations = None
         mask = self._piv_field_k.get_mask()
         # Retrieve signal-to-noise ratio only if required for validation.
-        sig2noise = None
+        s2n_ratio = None
         if "s2n" in self.validation_method and self.num_validation_iters > 0:
-            sig2noise = self._corr.sig2noise
+            s2n_ratio = self._corr._s2n_ratio
 
         # Do the validation.
         # TODO skip this for no validation--make val_locations into property.
@@ -988,7 +990,7 @@ class PIVGPU:
             rms_tol=self.rms_tol,
         )
         for i in range(self.num_validation_iters):
-            val_locations = validation_gpu(u, v, sig2noise=sig2noise)
+            val_locations = validation_gpu(u, v, s2n=s2n_ratio)
             u_mean, v_mean = validation_gpu.median
 
             # Replace invalid vectors.
@@ -1950,7 +1952,6 @@ def _find_peak(correlation):
 
     """
     n_windows, wd, ht = correlation.shape
-    # assert n_windows > 1, "cumisc.argmax() will not work with n_windows < 2."
 
     # cumisc.argmax() has different behaviour when n_windows < 2.
     if n_windows > 1:
@@ -2087,7 +2088,8 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
     Parameters
     ----------
     correlation : GPUArray
-       3D float (n_windows, fft_wd, fft_ht data from the window correlations.
+       3D float (n_windows, fft_wd, fft_ht), cross-correlation data from each window
+       pair.
     row_peak, col_peak : GPUArray
         1D int (n_windows,), location of the correlation peak.
     method : str {'gaussian', 'parabolic', 'centroid'}
@@ -2166,16 +2168,8 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
     return row_sp, col_sp
 
 
-def _peak2mean(correlation, corr_peak):
-    """Returns the mean-energy measure of the signal-to-noise-ratio."""
-    correlation_rms = _gpu_mask_rms(correlation, corr_peak)
-    sig2noise = _peak2energy(correlation_rms, corr_peak)
-
-    return sig2noise
-
-
 def _peak2energy(correlation, corr_peak):
-    """Returns the RMS-measure of the signal-to-noise-ratio."""
+    """Returns the mean-energy measure of the signal-to-noise-ratio."""
     _check_arrays(correlation, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     _check_arrays(
         corr_peak,
@@ -2191,11 +2185,19 @@ def _peak2energy(correlation, corr_peak):
     gpu_misc.gpu_remove_negative(correlation)
 
     corr_reshape = correlation.reshape(n_windows, size)
-    corr_mean = cumisc.mean(corr_reshape, axis=1)
-    sig2noise = DTYPE_f(2) * cumath.log10(corr_peak / corr_mean)
-    gpu_misc.gpu_remove_nan(sig2noise)
+    corr_energy = cumisc.mean(corr_reshape ** 2, axis=1)
+    s2n_ratio = cumath.log10(corr_peak ** 2 / corr_energy)
+    gpu_misc.gpu_remove_nan(s2n_ratio)
 
-    return sig2noise
+    return s2n_ratio
+
+
+def _peak2rms(correlation, corr_peak):
+    """Returns the RMS-measure of the signal-to-noise-ratio."""
+    correlation_rms = _gpu_mask_rms(correlation, corr_peak)
+    s2n_ratio = _peak2energy(correlation_rms, corr_peak)
+
+    return s2n_ratio
 
 
 def _peak2peak(corr_peak1, corr_peak2):
@@ -2212,10 +2214,10 @@ def _peak2peak(corr_peak1, corr_peak2):
     gpu_misc.gpu_remove_negative(corr_peak1)
     gpu_misc.gpu_remove_negative(corr_peak2)
 
-    sig2noise = cumath.log10(corr_peak1 / corr_peak2)
-    gpu_misc.gpu_remove_nan(sig2noise)
+    s2n_ratio = cumath.log10(corr_peak1 / corr_peak2)
+    gpu_misc.gpu_remove_nan(s2n_ratio)
 
-    return sig2noise
+    return s2n_ratio
 
 
 mod_mask_peak = SourceModule(

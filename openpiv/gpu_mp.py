@@ -65,7 +65,6 @@ class MPGPU(Process):
         for i in range(self.num_items):
             # run the function
             if self.items is not None:
-
                 if self.index is not None:
                     self.func(*items[i], index=index, **self.parameters)
                 else:
@@ -150,7 +149,7 @@ def parallelize(
             # create a list of partitions for each of the input items
             sublist = [[]] * num_args
             for j in range(num_args):
-                sublist[j] = items[j][start_index:start_index + partition_size]
+                sublist[j] = items[j][start_index : start_index + partition_size]
         else:
             sublist = None
 
@@ -194,7 +193,7 @@ def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
     """
     # set the CUDA device
     cpu_name = current_process().name
-    k = (int(cpu_name[cpu_name.find("-") + 1:]) - 1) % num_gpus
+    k = (int(cpu_name[cpu_name.find("-") + 1 :]) - 1) % num_gpus
     os.environ["CUDA_DEVICE"] = str(k)
     time1 = time.time()
 

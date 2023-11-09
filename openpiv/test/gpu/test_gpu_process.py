@@ -22,15 +22,6 @@ DTYPE_f = np.float32
 # dirs
 data_dir = "../data/"
 
-# TODO delete these
-_image_size_rectangle = (1024, 1024)
-_image_size_square = (1024, 512)
-_u_shift = 8
-_v_shift = -4
-_accuracy_tolerance = 0.1
-_identity_tolerance = 1e-6
-_trim_slice = slice(2, -2, 1)
-
 
 # UTILS
 def create_pair_shift(image_size, u_shift, v_shift):
@@ -259,7 +250,7 @@ def test_correlation_gpu_free_frame_data(correlation_gpu):
 
 
 def test_correlation_gpu_signal_to_noise(correlation_gpu, piv_field_gpu):
-    assert isinstance(correlation_gpu.sig2noise, gpuarray.GPUArray)
+    assert isinstance(correlation_gpu.s2n_ratio, gpuarray.GPUArray)
 
 
 def test_correlation_gpu_init_fft_shape(correlation_gpu, piv_field_gpu):
@@ -316,7 +307,7 @@ def test_correlation_gpu_get_displacement(correlation_gpu):
     assert np.array_equal(j_peak, row_sp - fft_shape // 2)
 
 
-@pytest.mark.parametrize("s2n_method", ["peak2mean", "peak2energy", "peak2peak"])
+@pytest.mark.parametrize("s2n_method", list(gpu_process.ALLOWED_S2N_METHODS))
 def test_correlation_gpu_get_s2n(correlation_gpu, s2n_method):
     correlation_gpu.s2n_method = s2n_method
     s2n = correlation_gpu._get_s2n()
@@ -402,9 +393,9 @@ def test_piv_gpu_field_mask(piv_gpu):
 
 
 def test_piv_gpu_s2n(piv_gpu):
-    sig2noise = piv_gpu.sig2noise
+    s2n = piv_gpu.s2n_ratio
 
-    assert isinstance(sig2noise, gpuarray.GPUArray)
+    assert isinstance(s2n, gpuarray.GPUArray)
 
 
 def test_piv_gpu_free_data(piv_gpu):
@@ -416,9 +407,9 @@ def test_piv_gpu_free_data(piv_gpu):
 
 
 def test_piv_gpu_get_piv_fields(piv_gpu):
-    sig2noise = piv_gpu._get_piv_fields()
+    s2n = piv_gpu._get_piv_fields()
 
-    assert isinstance(sig2noise, list)
+    assert isinstance(s2n, list)
 
 
 def test_piv_gpu_mask_frame(piv_gpu):
@@ -866,7 +857,7 @@ def test_gpu_subpixel_approximation(method, tol, np_array):
     assert np.all(np.abs(col_sp_gpu - col_sp) <= tol)
 
 
-def test_peak2mean(array_pair):
+def test_peak2rms(array_pair):
     shape = (16, 16, 16)
     n_windows, ht, wd = shape
     size = ht * wd
@@ -877,12 +868,12 @@ def test_peak2mean(array_pair):
     correlation_masked = correlation * (
         correlation < corr_peak.reshape(n_windows, 1, 1) / 2
     )
-    sig2noise_np = 2 * np.log10(
-        corr_peak / np.mean(correlation_masked.reshape(n_windows, size), axis=1)
+    s2n_np = np.log10(
+        corr_peak ** 2 / np.mean(correlation_masked.reshape(n_windows, size) ** 2, axis=1)
     )
-    sig2noise_gpu = gpu_process._peak2mean(correlation_d, corr_peak_d).get()
+    s2n_gpu = gpu_process._peak2rms(correlation_d, corr_peak_d).get()
 
-    assert np.allclose(sig2noise_gpu, sig2noise_np)
+    assert np.allclose(s2n_gpu, s2n_np)
 
 
 def test_peak2energy(array_pair):
@@ -893,12 +884,12 @@ def test_peak2energy(array_pair):
     correlation, correlation_d = array_pair(shape)
     corr_peak, corr_peak_d = array_pair((n_windows,), seed=1)
 
-    sig2noise_np = 2 * np.log10(
-        corr_peak / np.mean(correlation.reshape(n_windows, size), axis=1)
+    s2n_np = np.log10(
+        corr_peak ** 2 / np.mean(correlation.reshape(n_windows, size) ** 2, axis=1)
     )
-    sig2noise_gpu = gpu_process._peak2energy(correlation_d, corr_peak_d).get()
+    s2n_gpu = gpu_process._peak2energy(correlation_d, corr_peak_d).get()
 
-    assert np.allclose(sig2noise_gpu, sig2noise_np)
+    assert np.allclose(s2n_gpu, s2n_np)
 
 
 def test_peak2peak(array_pair):
@@ -908,10 +899,10 @@ def test_peak2peak(array_pair):
     corr_peak1, corr_peak1_d = array_pair((n_windows,))
     corr_peak2, corr_peak2_d = array_pair((n_windows,), seed=1)
 
-    sig2noise_np = np.log10(corr_peak1 / corr_peak2)
-    sig2noise_gpu = gpu_process._peak2peak(corr_peak1_d, corr_peak2_d).get()
+    s2n_np = np.log10(corr_peak1 / corr_peak2)
+    s2n_gpu = gpu_process._peak2peak(corr_peak1_d, corr_peak2_d).get()
 
-    assert np.allclose(sig2noise_gpu, sig2noise_np)
+    assert np.allclose(s2n_gpu, s2n_np)
 
 
 @pytest.mark.parametrize("width", [1, 2])
@@ -1052,8 +1043,8 @@ def test_gpu_piv_zero():
 
     x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
 
-    assert np.allclose(u, 0, _identity_tolerance)
-    assert np.allclose(v, 0, _identity_tolerance)
+    assert np.allclose(u, 0, 1e-6)
+    assert np.allclose(v, 0, 1e-6)
 
 
 @pytest.mark.parametrize("process", [(512, 512)], indirect=True)

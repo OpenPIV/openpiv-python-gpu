@@ -25,10 +25,9 @@ RMS_TOL = 2
 _BLOCK_SIZE = 64
 
 
-# TODO rename sig2noise
 def gpu_validation(
     *f,
-    sig2noise=None,
+    s2n=None,
     mask=None,
     validation_method="median_velocity",
     s2n_tol=S2N_TOL,
@@ -43,7 +42,7 @@ def gpu_validation(
     ----------
     f : GPUArray
         2D float (m, n), velocity fields to be validated.
-    sig2noise : GPUArray or None, optional
+    s2n : GPUArray or None, optional
         2D float (m, n), signal-to-noise ratio of each velocity.
     mask : GPUArray or None
         2D int (m, n), mask for the velocity field.
@@ -70,7 +69,7 @@ def gpu_validation(
         f[0], mask, validation_method, s2n_tol, median_tol, mean_tol, rms_tol
     )
 
-    return validation_gpu(*f, sig2noise=sig2noise)
+    return validation_gpu(*f, s2n=s2n)
 
 
 class ValidationGPU:
@@ -139,14 +138,14 @@ class ValidationGPU:
         # Compute the median velocities to be returned.
         self._neighbours_present = _gpu_find_neighbours(self.f_shape, mask)
 
-    def __call__(self, *f, sig2noise=None):
+    def __call__(self, *f, s2n=None):
         """Returns an array indicating which indices need to be validated.
 
         Parameters
         ----------
         f : GPUArray
             2D float (m, n), velocity fields to be validated.
-        sig2noise : GPUArray or None, optional
+        s2n : GPUArray or None, optional
             2D float (m, n), signal-to-noise ratio of each velocity.
 
         Returns
@@ -165,7 +164,7 @@ class ValidationGPU:
 
         # Do the validations.
         if "s2n" in self.validation_method:
-            self._s2n_validation(sig2noise)
+            self._s2n_validation(s2n)
         if "median_velocity" in self.validation_method:
             self._median_validation()
         if "mean_velocity" in self.validation_method:
