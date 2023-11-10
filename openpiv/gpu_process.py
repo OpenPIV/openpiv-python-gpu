@@ -155,7 +155,6 @@ class CorrelationGPU:
         assert (
             piv_field.window_size >= 8 and piv_field.window_size % 8 == 0
         ), "Window size must be a multiple of 8."
-        # TODO why is this not grouped with window size?
         self._search_size = (
             search_size if search_size is not None else piv_field.window_size
         )
@@ -174,18 +173,12 @@ class CorrelationGPU:
         # Get first peak of correlation.
         self.peak_idx = _find_peak(self.correlation)
         self.corr_peak1 = _get_peak(self.correlation, self.peak_idx)
-
-        # Get row and column of peak.
-        # TODO Does storing these save time?
-        self.row_peak, self.col_peak = gpu_misc.gpu_scalar_mod(
-            self.peak_idx, self.fft_wd
-        )
         self._check_zero_correlation()
 
         # TODO fold the code below together
         # Get the subpixel location.
         row_sp, col_sp = _gpu_subpixel_approximation(
-            self.correlation, self.row_peak, self.col_peak, self.subpixel_method
+            self.correlation, self.peak_idx, self.subpixel_method
         )
 
         # Center the peak displacement.
@@ -286,6 +279,7 @@ class CorrelationGPU:
         """
         buffer_a = 0
         buffer_b = -(self._search_size - self.piv_field.window_size) // 2
+
         if self.center_field:
             center_buffer = self.piv_field.center_buffer
             buffer_a = center_buffer
@@ -330,12 +324,13 @@ class CorrelationGPU:
 
     def _check_zero_correlation(self):
         """Sets the row and column to the center if the correlation peak is near
-        zero."""
-        center = gpuarray.ones_like(self.row_peak, dtype=DTYPE_i) * DTYPE_i(
-            self.fft_wd // 2
+        zero.
+
+        """
+        center = gpuarray.ones_like(self.peak_idx, dtype=DTYPE_i) * DTYPE_i(
+            (self.fft_ht // 2) * self.fft_wd + self.fft_wd // 2
         )
-        self.row_peak = gpuarray.if_positive(self.corr_peak1, self.row_peak, center)
-        self.col_peak = gpuarray.if_positive(self.corr_peak1, self.col_peak, center)
+        self.peak_idx = gpuarray.if_positive(self.corr_peak1, self.peak_idx, center)
 
     def _get_displacement(self, row_sp, col_sp):
         """Returns the relative position of the peaks with respect to the center of the
@@ -405,11 +400,11 @@ class CorrelationGPU:
             for each interrogation window.
 
         """
-        assert self.row_peak is not None and self.col_peak is not None
+        assert self.peak_idx is not None
 
         # Set points around the first peak to zero.
         correlation_masked = _gpu_mask_peak(
-            correlation_positive, self.row_peak, self.col_peak, mask_width
+            correlation_positive, self.peak_idx, mask_width
         )
 
         # Get the height of the second peak of correlation.
@@ -612,8 +607,6 @@ class _MinWindowSize(_Integer):
         return value
 
 
-# TODO refactor window-size argument
-# TODO refactor extended-search argument
 class PIVGPU:
     """Iterative GPU-accelerated algorithm that uses translation and deformation of
     interrogation windows.
@@ -1180,7 +1173,7 @@ __global__ void strain_gpu(float *strain, float *u, float *v, int *mask, float h
     int row = t_idx % size / n;
     int col = t_idx % size % n;
     int idx = row * n + col;
-    
+
     // Use first order differencing on edges.
     int interior = ((row > 0) * (row < m - 1) || !gradient_axis)
                  * ((col > 0) * (col < n - 1) || gradient_axis);
@@ -1600,7 +1593,7 @@ __global__ void window_slice_deform(float *output, float *input, float *shift,
 
     // Find limits of domain.
     int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
-    
+
     if (inside_domain) {
     // Apply the mapping.
     output[w_range] = ((x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
@@ -1987,8 +1980,8 @@ def _get_peak(correlation, peak_idx):
 
 mod_subpixel_approximation = SourceModule(
     """
-__global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p,
-                    float *corr, int n_windows, int ht, int wd, int ws)
+__global__ void gaussian(float *row_sp, float *col_sp, int *p_idx, float *corr,
+                    int n_windows, int ht, int wd, int ws)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1996,8 +1989,8 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p,
     const float small = 1e-20f;
 
     // Compute the index mapping.
-    int row = row_p[w_idx];
-    int col = col_p[w_idx];
+    int row = p_idx[w_idx] / wd;
+    int col = p_idx[w_idx] % wd;
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
@@ -2022,8 +2015,8 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *row_p, int *col_p,
     } else {col_sp[w_idx] = col;}
 }
 
-__global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p,
-                    float *corr, int n_windows, int ht, int wd, int ws)
+__global__ void parabolic(float *row_sp, float *col_sp, int *p_idx, float *corr,
+                    int n_windows, int ht, int wd, int ws)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2031,8 +2024,8 @@ __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p,
     const float small = 1e-20f;
 
     // Compute the index mapping.
-    int row = row_p[w_idx];
-    int col = col_p[w_idx];
+    int row = p_idx[w_idx] / wd;
+    int col = p_idx[w_idx] % wd;
     float c = corr[ws * w_idx + wd * row + col];
 
     if (row > 0 && row < ht - 1) {
@@ -2048,8 +2041,8 @@ __global__ void parabolic(float *row_sp, float *col_sp, int *row_p, int *col_p,
     } else {col_sp[w_idx] = col;}
 }
 
-__global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p,
-                    float *corr, int n_windows, int ht, int wd, int ws)
+__global__ void centroid(float *row_sp, float *col_sp, int *p_idx, float *corr,
+                    int n_windows, int ht, int wd, int ws)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2057,8 +2050,8 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p,
     const float small = 1e-20f;
 
     // Compute the index mapping.
-    int row = row_p[w_idx];
-    int col = col_p[w_idx];
+    int row = p_idx[w_idx] / wd;
+    int col = p_idx[w_idx] % wd;
     float c = corr[ws * w_idx + wd * row + col];
     int non_zero = c > 0;
 
@@ -2082,7 +2075,7 @@ __global__ void centroid(float *row_sp, float *col_sp, int *row_p, int *col_p,
 )
 
 
-def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
+def _gpu_subpixel_approximation(correlation, peak_idx, method):
     """Returns the subpixel position of the peaks using gaussian approximation.
 
     Parameters
@@ -2090,8 +2083,8 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
     correlation : GPUArray
        3D float (n_windows, fft_wd, fft_ht), cross-correlation data from each window
        pair.
-    row_peak, col_peak : GPUArray
-        1D int (n_windows,), location of the correlation peak.
+    peak_idx : GPUArray
+        1D int (n_windows,), index position of the correlation peaks.
     method : str {'gaussian', 'parabolic', 'centroid'}
         Method of the subpixel approximation.
 
@@ -2103,8 +2096,7 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
     """
     _check_arrays(correlation, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
     _check_arrays(
-        row_peak,
-        col_peak,
+        peak_idx,
         array_type=gpuarray.GPUArray,
         dtype=DTYPE_i,
         shape=(correlation.shape[0],),
@@ -2114,8 +2106,8 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
     n_windows, ht, wd = correlation.shape
     window_size = ht * wd
 
-    row_sp = gpuarray.empty_like(row_peak, dtype=DTYPE_f)
-    col_sp = gpuarray.empty_like(col_peak, dtype=DTYPE_f)
+    row_sp = gpuarray.empty_like(peak_idx, dtype=DTYPE_f)
+    col_sp = gpuarray.empty_like(peak_idx, dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(n_windows / block_size)
@@ -2124,8 +2116,7 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
         gaussian_approximation(
             row_sp,
             col_sp,
-            row_peak,
-            col_peak,
+            peak_idx,
             correlation,
             DTYPE_i(n_windows),
             DTYPE_i(ht),
@@ -2139,8 +2130,7 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
         parabolic_approximation(
             row_sp,
             col_sp,
-            row_peak,
-            col_peak,
+            peak_idx,
             correlation,
             DTYPE_i(n_windows),
             DTYPE_i(ht),
@@ -2154,8 +2144,7 @@ def _gpu_subpixel_approximation(correlation, row_peak, col_peak, method):
         centroid_approximation(
             row_sp,
             col_sp,
-            row_peak,
-            col_peak,
+            peak_idx,
             correlation,
             DTYPE_i(n_windows),
             DTYPE_i(ht),
@@ -2222,7 +2211,7 @@ def _peak2peak(corr_peak1, corr_peak2):
 
 mod_mask_peak = SourceModule(
     """
-__global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int ht,
+__global__ void mask_peak(float *corr, int *p_idx, int mask_w, int ht,
                     int wd, int mask_dim, int size)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
@@ -2232,8 +2221,8 @@ __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int h
     if (idx_x >= mask_dim || idx_y >= mask_dim) {return;}
 
     // Get the mapping.
-    int row = row_p[idx_i] - mask_w + idx_y;
-    int col = col_p[idx_i] - mask_w + idx_x;
+    int row = p_idx[idx_i] / wd - mask_w + idx_y;
+    int col = p_idx[idx_i] % wd - mask_w + idx_x;
 
     // Mask only if inside window domain.
     if (row >= 0 && row < ht && col >= 0 && col < wd) {
@@ -2245,7 +2234,7 @@ __global__ void mask_peak(float *corr, int *row_p, int *col_p, int mask_w, int h
 )
 
 
-def _gpu_mask_peak(correlation_positive, row_peak, col_peak, mask_width):
+def _gpu_mask_peak(correlation_positive, peak_idx, mask_width):
     """Returns correlation windows with points around peak masked.
 
     Parameters
@@ -2253,8 +2242,8 @@ def _gpu_mask_peak(correlation_positive, row_peak, col_peak, mask_width):
     correlation_positive : GPUArray.
         3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
         removed.
-    row_peak, col_peak : GPUArray
-        1D int (n_windows,), position of the peaks.
+    peak_idx : GPUArray
+        1D int (n_windows,), index position of the peaks.
     mask_width : int
         Half size of the region around the first correlation peak to ignore for finding
         the second peak.
@@ -2270,8 +2259,7 @@ def _gpu_mask_peak(correlation_positive, row_peak, col_peak, mask_width):
     )
     n_windows, ht, wd = correlation_positive.shape
     _check_arrays(
-        row_peak,
-        col_peak,
+        peak_idx,
         array_type=gpuarray.GPUArray,
         dtype=DTYPE_i,
         shape=(n_windows,),
@@ -2287,11 +2275,10 @@ def _gpu_mask_peak(correlation_positive, row_peak, col_peak, mask_width):
 
     block_size = 8
     grid_size = ceil(mask_dim / block_size)
-    fft_shift = mod_mask_peak.get_function("mask_peak")
-    fft_shift(
+    mask_peak = mod_mask_peak.get_function("mask_peak")
+    mask_peak(
         correlation_masked,
-        row_peak,
-        col_peak,
+        peak_idx,
         DTYPE_i(mask_width),
         DTYPE_i(ht),
         DTYPE_i(wd),

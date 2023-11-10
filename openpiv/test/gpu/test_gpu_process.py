@@ -284,14 +284,16 @@ def test_correlation_gpu_correlate_windows(correlation_gpu, piv_field_gpu):
 
 def test_correlation_gpu_check_zero_correlation(correlation_gpu, piv_field_gpu):
     correlation_gpu(piv_field_gpu)
+    fft_ht, fft_wd = correlation_gpu.fft_shape
 
     corr_peak = correlation_gpu.corr_peak1.get()
     corr_peak[:] = 0
     correlation_gpu.corr_peak1 = gpuarray.to_gpu(corr_peak)
     correlation_gpu._check_zero_correlation()
 
-    assert np.all(correlation_gpu.row_peak.get() == 32)
-    assert np.all(correlation_gpu.col_peak.get() == 32)
+    assert np.all(
+        correlation_gpu.peak_idx.get() == (fft_ht // 2) * fft_wd + fft_wd // 2
+    )
 
 
 def test_correlation_gpu_get_displacement(correlation_gpu):
@@ -321,20 +323,21 @@ def test_correlation_gpu_get_second_peak(correlation_gpu):
     a = 1
     c = 4
 
-    correlation_gpu.row_peak = gpuarray.to_gpu(
+    row_peak = (
         np.array(fft_shape // 2)
         .astype(DTYPE_i)
         .reshape(
             1,
         )
     )
-    correlation_gpu.col_peak = gpuarray.to_gpu(
+    col_peak = (
         np.array(fft_shape // 2)
         .astype(DTYPE_i)
         .reshape(
             1,
         )
     )
+    correlation_gpu.peak_idx = gpuarray.to_gpu(row_peak * fft_shape + col_peak)
 
     x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
     r = (x - (shape[1] - 1) / 2) ** 2 + (y - (shape[0] - 1) / 2) ** 2
@@ -838,9 +841,9 @@ def test_gpu_subpixel_approximation(method, tol, np_array):
 
     row_sp = np_array(n_windows, center=ht / 2, half_width=ht / 2 - 1)
     col_sp = np_array(n_windows, center=wd / 2, half_width=wd / 2 - 1, seed=1)
-    row_peak_d, col_peak_d = gpu_arrays(
-        np.round(row_sp).astype(DTYPE_i), np.round(col_sp).astype(DTYPE_i)
-    )
+    row_idx = np.round(row_sp).astype(DTYPE_i)
+    col_idx = np.round(col_sp).astype(DTYPE_i)
+    peak_idx = gpuarray.to_gpu(row_idx * wd + col_idx)
 
     # Create the distribution.
     if method == "parabolic":
@@ -849,7 +852,7 @@ def test_gpu_subpixel_approximation(method, tol, np_array):
         correlation_d = gaussian_peak(shape, row_sp, col_sp)
 
     row_sp_d, col_sp_d = gpu_process._gpu_subpixel_approximation(
-        correlation_d, row_peak_d, col_peak_d, method
+        correlation_d, peak_idx, method
     )
     row_sp_gpu, col_sp_gpu = np_arrays(row_sp_d, col_sp_d)
 
@@ -869,7 +872,8 @@ def test_peak2rms(array_pair):
         correlation < corr_peak.reshape(n_windows, 1, 1) / 2
     )
     s2n_np = np.log10(
-        corr_peak ** 2 / np.mean(correlation_masked.reshape(n_windows, size) ** 2, axis=1)
+        corr_peak**2
+        / np.mean(correlation_masked.reshape(n_windows, size) ** 2, axis=1)
     )
     s2n_gpu = gpu_process._peak2rms(correlation_d, corr_peak_d).get()
 
@@ -885,7 +889,7 @@ def test_peak2energy(array_pair):
     corr_peak, corr_peak_d = array_pair((n_windows,), seed=1)
 
     s2n_np = np.log10(
-        corr_peak ** 2 / np.mean(correlation.reshape(n_windows, size) ** 2, axis=1)
+        corr_peak**2 / np.mean(correlation.reshape(n_windows, size) ** 2, axis=1)
     )
     s2n_gpu = gpu_process._peak2energy(correlation_d, corr_peak_d).get()
 
@@ -906,21 +910,22 @@ def test_peak2peak(array_pair):
 
 
 @pytest.mark.parametrize("width", [1, 2])
-def test_gpu_mask_peak(width, array_pair):
+def test_gpu_mask_peak(width, array_pair, np_array):
     shape = (16, 16, 16)
     n_windows, ht, wd = shape
 
     correlation, correlation_d = array_pair(shape)
-    row_peak, row_peak_d = array_pair(
+    row_peak = np_array(
         (n_windows,), center=ht / 2, half_width=ht / 2, d_type=DTYPE_i, seed=1
     )
-    col_peak, col_peak_d = array_pair(
+    col_peak = np_array(
         (n_windows,), center=wd / 2, half_width=wd / 2, d_type=DTYPE_i, seed=2
     )
+    peak_idx = gpuarray.to_gpu(row_peak * wd + col_peak)
 
     correlation_masked_np = mask_peak_np(correlation, row_peak, col_peak, width)
     correlation_masked_gpu = gpu_process._gpu_mask_peak(
-        correlation_d, row_peak_d, col_peak_d, width
+        correlation_d, peak_idx, width
     ).get()
 
     assert np.array_equal(correlation_masked_gpu, correlation_masked_np)
