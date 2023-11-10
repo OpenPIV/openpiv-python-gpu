@@ -78,7 +78,7 @@ class ValidationGPU:
 
     Parameters
     ----------
-    f_shape : GPUArray or tuple
+    f_shape : GPUArray or tuple of ints
         (ht, wd) of the fields to be validated.
     mask : GPUArray or None
         2D float, mask for the velocity field.
@@ -429,8 +429,8 @@ def _gpu_find_neighbours(shape, mask=None):
 
     Parameters
     ----------
-    shape : tuple
-        Int (m, n), shape of the array to find neighbours for.
+    shape : tuple of ints
+        (m, n), shape of the array to find neighbours for.
     mask : GPUArray or None
         2D int (m, n), value of one where masked.
 

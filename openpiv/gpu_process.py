@@ -92,10 +92,10 @@ class CorrelationGPU:
         2D int (ht, wd), image pair.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
         Method to approximate the subpixel location of the peaks.
-    n_fft : int or tuple
+    n_fft : int or tuple of ints, optional
         (n_fft_x, n_fft_y), Window size multiplier for fft. Pass a tuple of length 2 for
         asymmetric multipliers -- this is not yet implemented.
-    center_field : bool
+    center_field : bool, optional
         Whether to center the vector field on the frame.
     s2n_method : str {'peak2peak', 'peak2energy', 'peak2rms'}, optional
         Method for evaluating the signal-to-noise ratio value from the correlation map.
@@ -250,16 +250,7 @@ class CorrelationGPU:
             dtype=DTYPE_f,
             ndim=2,
         )
-        # TODO needs own method
-        # buffer_b shifts the centers of the extended windows to match the normal
-        # windows.
-        # buffer_a, buffer_b = _get_centering_buffer()
-        buffer_a = -(self._search_size - self.piv_field.window_size) // 2
-        buffer_b = 0
-        if self.center_field:
-            center_buffer = self.piv_field.center_buffer
-            buffer_a = center_buffer
-            buffer_b = (center_buffer[0] + buffer_b, center_buffer[1] + buffer_b)
+        buffer_a, buffer_b = self._get_center_buffer()
 
         win_a = _gpu_window_slice(
             frame_a,
@@ -283,6 +274,24 @@ class CorrelationGPU:
         )
 
         return win_a, win_b
+
+    def _get_center_buffer(self):
+        """Returns center for each window with extended search.
+
+        Returns
+        -------
+        tuple of ints
+            (buffer_a, buffer_b)
+
+        """
+        buffer_a = 0
+        buffer_b = -(self._search_size - self.piv_field.window_size) // 2
+        if self.center_field:
+            center_buffer = self.piv_field.center_buffer
+            buffer_a = center_buffer
+            buffer_b = (center_buffer[0] + buffer_b, center_buffer[1] + buffer_b)
+
+        return buffer_a, buffer_b
 
     def _correlate_windows(self, win_a, win_b):
         """Computes the cross-correlation of the window stacks with zero-padding.
@@ -415,8 +424,8 @@ class PIVFieldGPU:
 
     Parameters
     ----------
-    frame_shape : tuple
-        Int (ht, wd), shape of the piv frame.
+    frame_shape : tuple of ints
+        (ht, wd), shape of the piv frame.
     frame_mask : ndarray
         Int, (ht, wd), mask on the frame coordinates.
     window_size : int
@@ -427,12 +436,7 @@ class PIVFieldGPU:
     """
 
     def __init__(
-        self,
-        frame_shape,
-        window_size,
-        spacing,
-        frame_mask=None,
-        center_field=True
+        self, frame_shape, window_size, spacing, frame_mask=None, center_field=True
     ):
         self.frame_shape = frame_shape
         self.window_size = window_size
@@ -449,7 +453,6 @@ class PIVFieldGPU:
         self.mask = _field_mask(self._x, self._y, frame_mask)
         self._mask_d = gpuarray.to_gpu(self.mask)
 
-    # TODO refactor to be less confusing.
     def get_gpu_mask(self, return_array=False):
         """Returns GPUArray containing field mask if frame is masked, None otherwise.
 
@@ -476,8 +479,8 @@ class PIVFieldGPU:
 
         Returns
         -------
-        tuple
-            2D ndarray float (x, y)
+        x, y : ndarray
+            2D float
 
         """
         return self._x, self._y
@@ -488,8 +491,8 @@ class PIVFieldGPU:
 
         Returns
         -------
-        tuple
-            1D ndarray float (x, y)
+        x, y : ndarray
+            1D float
 
         """
         return self._x_grid, self._y_grid
@@ -501,9 +504,8 @@ class PIVFieldGPU:
 
         Returns
         -------
-        tuple
-            1D int (buffer_x, buffer_y), offsets in pixel units to the window positions
-            to center them on the frame.
+        tuple of ints
+            (buffer_x, buffer_y)
 
         """
         return _center_buffer(self.frame_shape, self.window_size, self.spacing)
@@ -648,13 +650,13 @@ class PIVGPU:
 
     Parameters
     ----------
-    frame_shape : ndarray or tuple
-        Int (ht, wd), size of the images in pixels.
-    window_size_iters : tuple or int, optional
+    frame_shape : ndarray or tuple of ints
+        (ht, wd), size of the images in pixels.
+    window_size_iters : int or tuple of ints, optional
         Number of iterations performed at each window size. The length of
         window_size_iters gives the number of different windows sizes to use, while the
         value of each entry gives the number of times a window size is use.
-    min_window_size : tuple or int, optional
+    min_window_size : int or tuple of ints, optional
         Length of the sides of the square interrogation window. Only supports multiples
         of 8.
     overlap_ratio : float, optional
@@ -685,14 +687,14 @@ class PIVGPU:
         Whether to center the vector field on the image.
     subpixel_method : str {'gaussian', 'centroid', 'parabolic'}, optional
         Method to estimate subpixel location of the peak.
-    s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
+    s2n_method : str {'peak2peak', 'peak2energy', 'peakrms'}, optional
         Method of signal-to-noise-ratio measurement.
     s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding
         the second peak. Default is 2. Only used if s2n_method == 'peak2peak'.
-    n_fft : int or tuple, optional
-        Size-factor of the 2D FFT in x and y-directions. The default of 2 is\
-        recommended.
+    n_fft : int or tuple of ints, optional
+        (n_fft_x, n_fft_y), factor of size of the 2D FFT in x and y-directions. The
+        default of 2 is recommended.
 
     """
 
@@ -844,8 +846,8 @@ class PIVGPU:
 
         Returns
         -------
-        tuple
-            2D ndarray (x, y)
+        x, y : ndarray
+            2D float (m, n)
 
         """
         piv_fields = self._get_piv_fields()
@@ -1096,8 +1098,8 @@ def field_shape(frame_shape, window_size, spacing):
 
     Parameters
     ----------
-    frame_shape : tuple
-        Int (ht, wd), size of the frame in pixels.
+    frame_shape : tuple of ints
+        (ht, wd), size of the frame in pixels.
     window_size : int
         Size of the interrogation windows.
     spacing : int
@@ -1105,8 +1107,8 @@ def field_shape(frame_shape, window_size, spacing):
 
     Returns
     -------
-    tuple
-        Int (m, n), shape of the resulting flow field.
+    tuple of ints
+        (m, n)
 
     """
     assert len(frame_shape) == 2, "frame_shape must have length 2."
@@ -1124,8 +1126,8 @@ def field_coords(frame_shape, window_size, spacing, center_field=True):
 
     Parameters
     ----------
-    frame_shape : tuple
-        Int (ht, wd), size of the frame in pixels.
+    frame_shape : tuple of ints
+        (ht, wd), size of the frame in pixels.
     window_size : int
         Size of the interrogation windows.
     spacing : int
@@ -1136,7 +1138,7 @@ def field_coords(frame_shape, window_size, spacing, center_field=True):
     Returns
     -------
     x, y : ndarray
-        2D float (m, n), pixel coordinates of the resulting flow field.
+        2D float (m, n)
 
     """
     assert len(frame_shape) == 2, "frame_shape must have length 2."
@@ -1620,15 +1622,15 @@ def _gpu_window_slice(
     -----------
     frame : GPUArray
         2D int (ht, wd), frame form which to create windows.
-    field_shape_ : tuple
-        Int (m, n), shape of the vector field.
+    field_shape_ : tuple of ints
+        (m, n), shape of the vector field.
     window_size : int
         Side dimension of the square interrogation windows.
     spacing : int
         Spacing between vectors of the velocity field.
-    buffer : int or tuple
-        (buffer_x, buffer_y), adjustment to location of windows from left/top vectors to
-        edge of frame.
+    buffer : int or tuple of ints
+        (buffer_x, buffer_y), adjustment to the location of the windows relative to the
+        edge of frame, for the purpose of centering the vector field on the frame.
     dt : float, optional
         Number between -1 and 1 indicating the level of shifting/deform. E.g. 1
         indicates shift by full amount, 0 is stationary. This is applied to the
@@ -1794,9 +1796,9 @@ def _gpu_zero_pad(win, fft_shape, extended_search_offset=0):
     ----------
     win : GPUArray
         3D float (n_windows, ht, wd), interrogation windows.
-    fft_shape : tuple
-        Int (ht, wd), shape to zero pad the date to.
-    extended_search_offset: int or tuple, optional
+    fft_shape : tuple of ints
+        (ht, wd), shape to zero pad the date to.
+    extended_search_offset: int or tuple or ints, optional
         (offset_x, offset_y), offsets to the destination index in the padded array. Used
         for the extended-search-area PIV method.
 
@@ -2183,8 +2185,8 @@ def _peak2energy(correlation, corr_peak):
     gpu_misc.gpu_remove_negative(correlation)
 
     corr_reshape = correlation.reshape(n_windows, size)
-    corr_energy = cumisc.mean(corr_reshape ** 2, axis=1)
-    s2n_ratio = cumath.log10(corr_peak ** 2 / corr_energy)
+    corr_energy = cumisc.mean(corr_reshape**2, axis=1)
+    s2n_ratio = cumath.log10(corr_peak**2 / corr_energy)
     gpu_misc.gpu_remove_nan(s2n_ratio)
 
     return s2n_ratio
