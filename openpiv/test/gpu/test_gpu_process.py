@@ -347,7 +347,7 @@ def test_correlation_gpu_get_second_peak(correlation_gpu):
 
 
 def test_piv_field_gpu_get_mask(piv_field_gpu):
-    mask = piv_field_gpu.get_mask(return_array=True)
+    mask = piv_field_gpu.get_gpu_mask(return_array=True)
 
     assert isinstance(mask, gpuarray.GPUArray)
 
@@ -355,7 +355,7 @@ def test_piv_field_gpu_get_mask(piv_field_gpu):
 def test_piv_field_gpu_free_data(piv_field_gpu):
     piv_field_gpu.free_data()
 
-    assert piv_field_gpu._mask is None
+    assert piv_field_gpu._mask_d is None
 
 
 def test_piv_field_gpu_coords(piv_field_gpu):
@@ -446,7 +446,7 @@ def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
 
     dp_u = gpu_array(shape, center=0.0, half_width=1.0)
     mask = boolean_gpu_array(shape, seed=1)
-    piv_gpu._piv_field_k._mask = mask
+    piv_gpu._piv_field_k._mask_d = mask
     shift_, strain = piv_gpu._get_window_deformation(dp_u, dp_u)
 
     assert isinstance(shift_, gpuarray.GPUArray)
@@ -459,7 +459,7 @@ def test_piv_gpu_update_values(piv_gpu, gpu_array, boolean_gpu_array):
 
     i_peak = gpu_array(shape, center=0.0, half_width=1.0)
     mask = boolean_gpu_array(shape, seed=1)
-    piv_gpu._piv_field_k._mask = mask
+    piv_gpu._piv_field_k._mask_d = mask
     u, v = piv_gpu._update_values(i_peak, i_peak, i_peak, i_peak)
 
     assert isinstance(u, gpuarray.GPUArray)
@@ -480,7 +480,7 @@ def test_piv_gpu_gpu_replace_vectors(k, piv_gpu, gpu_array, boolean_gpu_array):
     mask = boolean_gpu_array(shape, seed=1)
     val_locations = boolean_gpu_array(shape, seed=2)
     piv_gpu._piv_field_k._mask = mask
-    u, v = piv_gpu._gpu_replace_vectors(u, u, u, u, u, u, val_locations)
+    u, v = piv_gpu._replace_vectors(u, u, u, u, u, u, val_locations)
 
     assert isinstance(u, gpuarray.GPUArray)
     assert isinstance(v, gpuarray.GPUArray)

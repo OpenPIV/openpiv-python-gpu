@@ -1,11 +1,10 @@
 """This module is dedicated to advanced algorithms for PIV image analysis with NVIDIA
 GPU Support.
 
-All identifiers ending with '_d' exist on the GPU and not the CPU. Note that all data
-must 32-bit at most to be stored on GPUs. Numpy types should be always 32-bit for
-compatibility with GPU. Scalars should be python types in general to work as function
-arguments. The block-size argument to GPU kernels should be multiples of 32 to avoid
-wasting GPU resources--e.g. (32, 1, 1), (8, 8, 1), etc.
+Note that all data must 32-bit at most to be stored on GPUs. Numpy types must always be
+32-bit for compatibility with CUDA. Scalars should be python types in general to work as
+function arguments. The block-size argument to GPU kernels should be multiples of 32 to
+avoid wasting GPU resources--e.g. (32, 1, 1), (8, 8, 1), etc.
 
 """
 import logging
@@ -80,8 +79,6 @@ class _NFFT(_Integer):
 
 
 # TODO refactor so that the public can use this for fast PIV--pass mask, validate frames
-# TODO implement real properties rather than getters.
-# TODO refactor signal2noise variable name
 class CorrelationGPU:
     """Performs the cross-correlation of interrogation windows.
 
@@ -100,7 +97,7 @@ class CorrelationGPU:
         asymmetric multipliers -- this is not yet implemented.
     center_field : bool
         Whether to center the vector field on the frame.
-    s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
+    s2n_method : str {'peak2peak', 'peak2energy', 'peak2rms'}, optional
         Method for evaluating the signal-to-noise ratio value from the correlation map.
     s2n_width : int, optional
         Half size of the region around the first correlation peak to ignore for finding
@@ -256,6 +253,7 @@ class CorrelationGPU:
         # TODO needs own method
         # buffer_b shifts the centers of the extended windows to match the normal
         # windows.
+        # buffer_a, buffer_b = _get_centering_buffer()
         buffer_a = -(self._search_size - self.piv_field.window_size) // 2
         buffer_b = 0
         if self.center_field:
@@ -428,23 +426,19 @@ class PIVFieldGPU:
 
     """
 
-    center_field = _Bool()
-
     def __init__(
         self,
         frame_shape,
         window_size,
         spacing,
         frame_mask=None,
-        center_field=True,
-        **kwargs
+        center_field=True
     ):
         self.frame_shape = frame_shape
         self.window_size = window_size
         self.spacing = spacing
         self.shape = field_shape(frame_shape, window_size, spacing)
         self.size = prod(self.shape)
-        assert kwargs == {}
 
         self._x, self._y = field_coords(
             frame_shape, window_size, spacing, center_field=center_field
@@ -453,11 +447,11 @@ class PIVFieldGPU:
         self._y_grid = gpuarray.to_gpu(self._y[:, 0].astype(DTYPE_f))
         self.is_masked = frame_mask is not None
         self.mask = _field_mask(self._x, self._y, frame_mask)
-        self._mask = gpuarray.to_gpu(self.mask)
+        self._mask_d = gpuarray.to_gpu(self.mask)
 
     # TODO refactor to be less confusing.
-    def get_mask(self, return_array=False):
-        """Returns GPUArray containing field mack if frame is masked, None otherwise.
+    def get_gpu_mask(self, return_array=False):
+        """Returns GPUArray containing field mask if frame is masked, None otherwise.
 
         Parameters
         ----------
@@ -470,11 +464,11 @@ class PIVFieldGPU:
         GPUArray or None
 
         """
-        return self._mask if (self.is_masked or return_array) else None
+        return self._mask_d if (self.is_masked or return_array) else None
 
     def free_data(self):
         """Frees data from GPU."""
-        self._mask = None
+        self._mask_d = None
 
     @property
     def coords(self):
@@ -681,14 +675,14 @@ class PIVGPU:
         Method(s) to use for validation.
     s2n_tol, median_tol, mean_tol, rms_tol : float, optional
         Tolerance of the validation methods.
-    center_field : bool, optional
-        Whether to center the vector field on the image.
-    extend_ratio : float or None, optional
-        Ratio the extended search area to use on the first iteration. If not specified,
-        extended search will not be used.
     smoothing_par : float or None, optional
         Smoothing parameter to pass to smoothn to apply to the intermediate velocity
         fields.
+    extend_ratio : float or None, optional
+        Ratio the extended search area to use on the first iteration. If not specified,
+        extended search will not be used.
+    center_field : bool, optional
+        Whether to center the vector field on the image.
     subpixel_method : str {'gaussian', 'centroid', 'parabolic'}, optional
         Method to estimate subpixel location of the peak.
     s2n_method : str {'peak2peak', 'peak2mean', 'peak2energy'}, optional
@@ -713,8 +707,9 @@ class PIVGPU:
     deform = _Bool()
     smooth = _Bool()
     num_validation_iters = _Integer(min_value=0)  # TODO move into validation object.
-    extend_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
     smoothing_par = _Number(min_value=0, min_closure=False, allow_none=True)
+    extend_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
+    center_field = _Bool()
 
     def __init__(
         self,
@@ -732,9 +727,9 @@ class PIVGPU:
         median_tol=MEDIAN_TOL,
         mean_tol=MEAN_TOL,
         rms_tol=RMS_TOL,
-        center_field=True,
-        extend_ratio=None,
         smoothing_par=SMOOTHING_PAR,
+        extend_ratio=None,
+        center_field=True,
         subpixel_method=SUBPIXEL_METHOD,
         s2n_method=S2N_METHOD,
         s2n_width=S2N_WIDTH,
@@ -826,7 +821,8 @@ class PIVGPU:
             _log_residual(residual)
 
             # VALIDATION
-            u, v = self._validate_fields(u, v, u_previous, v_previous)
+            u, v, val_locations = self._validate_fields(u, v, u_previous, v_previous)
+            u, v = self._smooth_fields(u, v, val_locations)
 
             # NEXT ITERATION
             # Compute the predictors dp_x and dp_y from the current displacements.
@@ -944,7 +940,7 @@ class PIVGPU:
 
     def _get_window_deformation(self, dp_u, dp_v):
         """Returns the shift and strain arguments to the correlation class."""
-        mask = self._piv_field_k.get_mask(return_array=True)
+        mask = self._piv_field_k.get_gpu_mask(return_array=True)
         shift = None
         strain = None
 
@@ -957,7 +953,7 @@ class PIVGPU:
 
     def _update_values(self, dp_u, dp_v, i_peak, j_peak):
         """Updates the velocity values after each iteration."""
-        mask = self._piv_field_k.get_mask(return_array=True)
+        mask = self._piv_field_k.get_gpu_mask(return_array=True)
 
         if dp_u is None:
             u = gpu_misc.gpu_mask(j_peak, mask)
@@ -972,11 +968,11 @@ class PIVGPU:
         """Return velocity fields with outliers removed."""
         size = u.size
         val_locations = None
-        mask = self._piv_field_k.get_mask()
+        mask = self._piv_field_k.get_gpu_mask()
         # Retrieve signal-to-noise ratio only if required for validation.
         s2n_ratio = None
         if "s2n" in self.validation_method and self.num_validation_iters > 0:
-            s2n_ratio = self._corr._s2n_ratio
+            s2n_ratio = self._corr.s2n_ratio
 
         # Do the validation.
         # TODO skip this for no validation--make val_locations into property.
@@ -997,22 +993,16 @@ class PIVGPU:
             n_val = int(gpuarray.sum(val_locations).get())
             _log_validation(n_val, size)
             if n_val > 0:
-                u, v = self._gpu_replace_vectors(
+                u, v = self._replace_vectors(
                     u, v, u_previous, v_previous, u_mean, v_mean, val_locations
                 )
             else:
                 break
             validation_gpu.free_data()
 
-        # TODO decouple this.
-        # Smooth the validated field.
-        if self.smooth:
-            w = (1 - val_locations) if val_locations is not None else None
-            u, v = gpu_smoothn(u, v, s=self.smoothing_par, mask=mask, w=w)
+        return u, v, val_locations
 
-        return u, v
-
-    def _gpu_replace_vectors(
+    def _replace_vectors(
         self, u, v, u_previous, v_previous, u_mean, v_mean, val_locations
     ):
         """Replace spurious vectors by the mean or median of the surrounding points."""
@@ -1036,7 +1026,7 @@ class PIVGPU:
         elif self._k > 0 and self._piv_field_k.shape != piv_fields[self._k - 1].shape:
             x0, y0 = piv_fields[self._k - 1].grid_coords
             x1, y1 = self._piv_field_k.grid_coords
-            mask = piv_fields[self._k - 1].get_mask()
+            mask = piv_fields[self._k - 1].get_gpu_mask()
 
             u = _interpolate_replace(
                 x0, y0, x1, y1, u_previous, u, val_locations, mask=mask
@@ -1052,6 +1042,14 @@ class PIVGPU:
 
         return u, v
 
+    def _smooth_fields(self, u, v, val_locations):
+        mask = self._piv_field_k.get_gpu_mask()
+        if self.smooth:
+            w = (1 - val_locations) if val_locations is not None else None
+            u, v = gpu_smoothn(u, v, s=self.smoothing_par, mask=mask, w=w)
+
+        return u, v
+
     def _get_next_iteration_predictions(self, u, v):
         """Returns the velocity field to begin the next iteration."""
         _check_arrays(
@@ -1060,7 +1058,7 @@ class PIVGPU:
         piv_fields = self._get_piv_fields()
         x0, y0 = self._piv_field_k.grid_coords
         x1, y1 = piv_fields[self._k + 1].grid_coords
-        mask = self._piv_field_k.get_mask()
+        mask = self._piv_field_k.get_gpu_mask()
 
         # Interpolate if dimensions do not agree.
         if piv_fields[self._k + 1].window_size != self._piv_field_k.window_size:
@@ -1401,14 +1399,14 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
     x1, y1 : GPUArray
         1D float, grid coordinates of the field to be interpolated.
     f0 : GPUArray
-        2D float (y0_d.size, x0_d.size), field to be interpolated.
-    mask : (y0_d.size, x0_d.size), GPUArray or None, optional
+        2D float (y0.size, x0.size), field to be interpolated.
+    mask : (y0.size, x0.size), GPUArray or None, optional
         2D float, value of one where masked values are.
 
     Returns
     -------
     GPUArray
-        2D float (x1_d.size, y1_d.size), interpolated field.
+        2D float (x1.size, y1.size), interpolated field.
 
     """
     _check_arrays(x0, y0, x1, y1, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=1)

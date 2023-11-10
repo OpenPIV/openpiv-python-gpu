@@ -201,11 +201,11 @@ def s2n_ratio(correlation_gpu, piv_field):
 def validation_gpu(peaks, boolean_gpu_array):
     i_peaks, _ = peaks
 
-    mask_d = boolean_gpu_array(i_peaks.shape, seed=1)
+    mask = boolean_gpu_array(i_peaks.shape, seed=1)
 
     validation_gpu = gpu_validation.ValidationGPU(
         i_peaks,
-        mask=mask_d,
+        mask=mask,
         validation_method="median_velocity",
         s2n_tol=2,
         median_tol=2,

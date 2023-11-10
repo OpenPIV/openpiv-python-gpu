@@ -328,9 +328,9 @@ def test_gpu_get_neighbours(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_np = get_neighbours_np(
         f, neighbours_present=neighbours_present_d.get()
     )
@@ -345,9 +345,9 @@ def test_gpu_median_velocity(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_median_np = median_np(f_neighbours_d.get(), neighbours_present_d.get())
     f_median_gpu = gpu_validation._gpu_median_velocity(
@@ -361,9 +361,9 @@ def test_gpu_median_fluc(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_median_d = gpu_validation._gpu_median_velocity(
         f_neighbours_d, neighbours_present_d
@@ -382,9 +382,9 @@ def test_gpu_mean_velocity(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_mean_np = mean_np(f_neighbours_d.get(), neighbours_present_d.get())
     f_mean_gpu = gpu_validation._gpu_mean_velocity(
@@ -398,9 +398,9 @@ def test_gpu_mean_fluc(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_mean_d = gpu_validation._gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
     f_mean_fluc_np = mean_fluc_np(
@@ -417,9 +417,9 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
-    mask_d = boolean_gpu_array(shape, seed=1)
+    mask = boolean_gpu_array(shape, seed=1)
 
-    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask_d)
+    neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_mean_d = gpu_validation._gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
     f_rms_fluc_np = mean_fluc_np(
