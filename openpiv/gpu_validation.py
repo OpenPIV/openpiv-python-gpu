@@ -155,7 +155,7 @@ class ValidationGPU:
             locations of invalid vectors.
 
         """
-        self.free_data()
+        self.free_gpu_data()
         _check_arrays(
             *f, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape
         )
@@ -177,7 +177,8 @@ class ValidationGPU:
 
         return self._val_locations
 
-    def free_data(self):
+    def free_gpu_data(self):
+        """Frees data from GPU."""
         self._val_locations = None
         self._f = None
         self._f_neighbours = None
@@ -186,6 +187,7 @@ class ValidationGPU:
 
     @property
     def median(self):
+        """Local median surrounding 8 velocity vectors."""
         f_median = self._get_median()
         if len(f_median) == 1:
             f_median = f_median[0]
@@ -194,6 +196,7 @@ class ValidationGPU:
 
     @property
     def mean(self):
+        """Local mean of surrounding 8 velocity vectors."""
         f_mean = self._get_mean()
         if len(f_mean) == 1:
             f_mean = f_mean[0]

@@ -103,7 +103,7 @@ def test_validation_gpu_free_data(validation_gpu, peaks):
     i_peaks_d, j_peaks_d = peaks
 
     validation_gpu(i_peaks_d)
-    validation_gpu.free_data()
+    validation_gpu.free_gpu_data()
 
     assert all(
         data is None

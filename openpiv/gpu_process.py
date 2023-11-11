@@ -78,7 +78,6 @@ class _NFFT(_Integer):
         return int(value), int(value)
 
 
-# TODO refactor so that the public can use this for fast PIV--pass mask, validate frames
 class CorrelationGPU:
     """Performs the cross-correlation of interrogation windows.
 
@@ -129,6 +128,10 @@ class CorrelationGPU:
         self.s2n_width = s2n_width
         self.n_fft = n_fft
 
+        self.correlation = None
+        self.corr_peak1 = None
+        self.corr_idx = None
+
     def __call__(self, piv_field, search_size=None, shift=None, strain=None):
         """Returns the pixel peaks using the specified correlation method.
 
@@ -163,28 +166,24 @@ class CorrelationGPU:
         self._init_fft_shape()
 
         # TODO fold with correlate_windows into another method
-        # TODO stack iw can be a method in piv field
+        # TODO stack_iw can be a method in piv field
         # Get stack of all interrogation windows.
         win_a, win_b = self._stack_iw(self.frame_a, self.frame_b, shift, strain)
 
         # Correlate the windows.
-        self.correlation = self._correlate_windows(win_a, win_b)
+        self._correlate_windows(win_a, win_b)
 
-        # Get first peak of correlation.
-        self.peak_idx = _find_peak(self.correlation)
-        self.corr_peak1 = _get_peak(self.correlation, self.peak_idx)
-        self._check_zero_correlation()
-
-        # TODO fold the code below together
-        # Get the subpixel location.
-        row_sp, col_sp = _gpu_subpixel_approximation(
-            self.correlation, self.peak_idx, self.subpixel_method
-        )
-
-        # Center the peak displacement.
-        i_peak, j_peak = self._get_displacement(row_sp, col_sp)
+        # Compute the displacement.
+        i_peak, j_peak = self._return_displacement()
 
         return i_peak, j_peak
+
+    def free_gpu_data(self):
+        """Frees data from GPU."""
+        self.free_frame_data()
+        self.correlation = None
+        self.corr_peak1 = None
+        self.corr_idx = None
 
     def free_frame_data(self):
         """Clears names associated with frames."""
@@ -193,7 +192,7 @@ class CorrelationGPU:
 
     @property
     def s2n_ratio(self):
-        """Returns signal-to-noise ratio of the cross-correlation.
+        """Signal-to-noise ratio of the cross-correlation.
 
         Returns
         -------
@@ -302,6 +301,8 @@ class CorrelationGPU:
 
         """
         _check_arrays(win_a, win_b, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+        self.peak1_idx = None
+        self.corr_peak1 = None
 
         # Normalize array by computing the norm of each IW.
         win_a_norm = _gpu_normalize_intensity(win_a)
@@ -314,27 +315,70 @@ class CorrelationGPU:
         )
         win_b_zp = _gpu_zero_pad(win_b_norm, self.fft_shape)
 
-        # The second argument in the cross correlation remains stationary.
+        # Get the cross-correlation.
         corr = _gpu_cross_correlate(win_a_zp, win_b_zp)
 
-        # Correlation is shifted so that the peak is not near the boundary.
-        corr = gpu_fft_shift(corr)
+        # Correlation is shifted to be relative to center of array.
+        self.correlation = gpu_fft_shift(corr)
 
-        return corr
+        # Non-positive correlations are defaulted to center.
+        self._check_non_positive_correlation()
 
-    def _check_zero_correlation(self):
+    def _get_peak_idx(self):
+        """Returns the row and column of the highest peak in the cross--correlation."""
+        if self.peak1_idx is None:
+            self.peak1_idx = _peak_idx(self.correlation)
+
+        return self.peak1_idx
+
+    def _get_peak_value(self):
+        """Returns the value of the highest peak in the cross-correlation."""
+        if self.corr_peak1 is None:
+            self.corr_peak1 = _peak_value(self.correlation, self.peak1_idx)
+
+        return self.corr_peak1
+
+    def _check_non_positive_correlation(self):
         """Sets the row and column to the center if the correlation peak is near
-        zero.
-
-        """
-        center = gpuarray.ones_like(self.peak_idx, dtype=DTYPE_i) * DTYPE_i(
+        zero."""
+        peak1_idx = self._get_peak_idx()
+        corr_peak1 = self._get_peak_value()
+        center = gpuarray.ones_like(peak1_idx, dtype=DTYPE_i) * DTYPE_i(
             (self.fft_ht // 2) * self.fft_wd + self.fft_wd // 2
         )
-        self.peak_idx = gpuarray.if_positive(self.corr_peak1, self.peak_idx, center)
+        self.peak1_idx = gpuarray.if_positive(corr_peak1, peak1_idx, center)
 
-    def _get_displacement(self, row_sp, col_sp):
+    def _return_displacement(self):
+        """Returns the sux[ixel peak location in the interrogation window.
+
+        Returns
+        -------
+        i_peak, j_peak : GPUArray
+            1D int (n_windows,)
+
+        """
+        # Get the subpixel location.
+        row_sp, col_sp = _gpu_subpixel_approximation(
+            self.correlation, self.peak1_idx, self.subpixel_method
+        )
+
+        # Center the peak displacement.
+        i_peak, j_peak = self._center_displacement(row_sp, col_sp)
+
+        return i_peak, j_peak
+
+    def _center_displacement(self, row_sp, col_sp):
         """Returns the relative position of the peaks with respect to the center of the
-        interrogation window."""
+        interrogation window.
+
+        Returns
+        -------
+        i_peak, j_peak : GPUArray
+            1D int (n_windows,)
+
+        """
+
+        # Center the peak displacement.
         i_peak = (row_sp - DTYPE_f(self.fft_ht // 2)).reshape(self.piv_field.shape)
         j_peak = (col_sp - DTYPE_f(self.fft_wd // 2)).reshape(self.piv_field.shape)
 
@@ -357,61 +401,38 @@ class CorrelationGPU:
 
         """
         assert self.correlation is not None, (
-            "Can only compute signal-to-noise ratio after correlation peaks"
-            "have been computed."
+            "Can only compute signal-to-noise ratio after correlation peaks have been"
+            "computed."
         )
-        assert 0 <= self.s2n_width < int(min(self.fft_shape) / 2), (
-            "Mask width must be integer from 0 and to less than half the correlation "
-            "window height or width. Recommended value is 2."
-        )
+        corr_peak1 = self._get_peak_value()
 
         if self._s2n_ratio is None:
             # Compute signal-to-noise ratio by the elected method.
             if self.s2n_method == "peak2energy":
-                s2n_ratio = _peak2energy(self.correlation, self.corr_peak1)
+                s2n_ratio = _peak2energy(self.correlation, corr_peak1)
             elif self.s2n_method == "peak2rms":
-                s2n_ratio = _peak2rms(self.correlation, self.corr_peak1)
+                s2n_ratio = _peak2rms(self.correlation, corr_peak1)
             else:
-                corr_peak2 = self._get_second_peak(self.correlation, self.s2n_width)
-                s2n_ratio = _peak2peak(self.corr_peak1, corr_peak2)
+                assert 0 <= self.s2n_width < int(min(self.fft_shape) / 2), (
+                    "Mask width must be integer from 0 and to less than half the"
+                    "correlation window height or width. Recommended value is 2."
+                )
+                s2n_ratio = self._return_peak2peak()
+
             self._s2n_ratio = s2n_ratio.reshape(self.piv_field.shape)
 
         return self._s2n_ratio
 
-    def _get_second_peak(self, correlation_positive, mask_width):
-        """Find the value of the second-largest peak.
+    def _return_peak2peak(self):
+        """Returns the signal-to-noise ratio computed using the peak-to-peak method."""
+        assert self.correlation is not None
+        peak1_idx = self._get_peak_idx()
+        corr_peak1 = self._get_peak_value()
 
-        The second-largest peak is the height of the peak in the region outside a
-        width * width sub-matrix around the first correlation peak.
+        corr_peak2 = _get_second_peak(self.correlation, peak1_idx, self.s2n_width)
+        s2n_ratio = _peak2peak(corr_peak1, corr_peak2)
 
-        Parameters
-        ----------
-        correlation_positive : GPUArray
-            3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
-            removed.
-        mask_width : int
-            Half size of the region around the first correlation peak to ignore for
-            finding the second peak.
-
-        Returns
-        -------
-        GPUArray
-            3D float (n_windows, fft_wd, fft_ht), value of the second correlation peak
-            for each interrogation window.
-
-        """
-        assert self.peak_idx is not None
-
-        # Set points around the first peak to zero.
-        correlation_masked = _gpu_mask_peak(
-            correlation_positive, self.peak_idx, mask_width
-        )
-
-        # Get the height of the second peak of correlation.
-        peak2_idx = _find_peak(correlation_masked)
-        corr_max2 = _get_peak(correlation_masked, peak2_idx)
-
-        return corr_max2
+        return s2n_ratio
 
 
 class PIVFieldGPU:
@@ -464,13 +485,13 @@ class PIVFieldGPU:
         """
         return self._mask_d if (self.is_masked or return_array) else None
 
-    def free_data(self):
+    def free_gpu_data(self):
         """Frees data from GPU."""
         self._mask_d = None
 
     @property
     def coords(self):
-        """Returns full coordinates of the PIV field.
+        """Full coordinates of the PIV field.
 
         Returns
         -------
@@ -482,7 +503,7 @@ class PIVFieldGPU:
 
     @property
     def grid_coords(self):
-        """Returns vectors containing the grid coordinates of the PIV field.
+        """Vectors containing the grid coordinates of the PIV field.
 
         Returns
         -------
@@ -494,7 +515,7 @@ class PIVFieldGPU:
 
     @property
     def center_buffer(self):
-        """Returns offsets in pixel units to the window positions to center the velocity
+        """Offsets in pixel units to the window positions to center the velocity
         field on the frame.
 
         Returns
@@ -701,7 +722,7 @@ class PIVGPU:
     mask = _Array(allow_none=True)
     deform = _Bool()
     smooth = _Bool()
-    num_validation_iters = _Integer(min_value=0)  # TODO move into validation object.
+    num_validation_iters = _Integer(min_value=0)
     smoothing_par = _Number(min_value=0, min_closure=False, allow_none=True)
     extend_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
     center_field = _Bool()
@@ -778,12 +799,12 @@ class PIVGPU:
         max_iter = sum(self.window_size_iters)
 
         # Send masked frames to device.
-        frame_a_masked, frame_b_masked = self._mask_frame(frame_a, frame_b)
+        frame_a_d, frame_b_d = self._frames_to_gpu(frame_a, frame_b)
 
         # Create the correlation object.
         self._corr = CorrelationGPU(
-            frame_a_masked,
-            frame_b_masked,
+            frame_a_d,
+            frame_b_d,
             subpixel_method=self.subpixel_method,
             center_field=self.center_field,
             s2n_method=self.s2n_method,
@@ -848,7 +869,7 @@ class PIVGPU:
 
     @property
     def field_mask(self):
-        """Returns mask corresponding to the resulting vector field.
+        """Mask corresponding to the resulting vector field.
 
         Returns
         -------
@@ -861,7 +882,7 @@ class PIVGPU:
 
     @property
     def s2n_ratio(self):
-        """Returns signal-to-noise ratio of the final velocity field.
+        """Signal-to-noise ratio of the final velocity field.
 
         Returns
         -------
@@ -871,7 +892,7 @@ class PIVGPU:
         """
         return self._corr.s2n_ratio
 
-    def free_data(self):
+    def free_gpu_data(self):
         """Frees data from GPU."""
         self._corr = None
         self._piv_fields = None
@@ -898,25 +919,21 @@ class PIVGPU:
 
         return self._piv_fields
 
-    def _mask_frame(self, frame_a, frame_b):
-        """Mask the frames before sending to device."""
+    def _frames_to_gpu(self, frame_a, frame_b):
+        """Sends frames to device with masking."""
         _check_arrays(
             frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2
         )
         frame_mask = self._get_frame_mask()
 
-        if frame_mask is not None:
-            frame_a_masked = gpu_misc.gpu_mask(
-                gpuarray.to_gpu(frame_a.astype(DTYPE_f)), frame_mask
-            )
-            frame_b_masked = gpu_misc.gpu_mask(
-                gpuarray.to_gpu(frame_b.astype(DTYPE_f)), frame_mask
-            )
-        else:
-            frame_a_masked = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
-            frame_b_masked = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
+        frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
+        frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
-        return frame_a_masked, frame_b_masked
+        if frame_mask is not None:
+            frame_a_d = gpu_misc.gpu_mask(frame_a, frame_mask)
+            frame_b_d = gpu_misc.gpu_mask(frame_b, frame_mask)
+
+        return frame_a_d, frame_b_d
 
     def _get_frame_mask(self):
         """Returns the mask for the frame as a GPUArray."""
@@ -970,7 +987,6 @@ class PIVGPU:
             s2n_ratio = self._corr.s2n_ratio
 
         # Do the validation.
-        # TODO skip this for no validation--make val_locations into property.
         validation_gpu = ValidationGPU(
             u.shape,
             mask=mask,
@@ -993,7 +1009,7 @@ class PIVGPU:
                 )
             else:
                 break
-            validation_gpu.free_data()
+            validation_gpu.free_gpu_data()
 
         return u, v, val_locations
 
@@ -1861,7 +1877,7 @@ def _gpu_cross_correlate(win_a, win_b):
     win_a_fft = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
     win_b_fft = gpuarray.empty((n_windows, fft_ht, fft_wd // 2 + 1), DTYPE_c)
 
-    # Forward FFTs.
+    # Get the forward transform.
     plan_forward = cufft.Plan((fft_ht, fft_wd), DTYPE_f, DTYPE_c, batch=n_windows)
     cufft.fft(win_a, win_a_fft, plan_forward)
     cufft.fft(win_b, win_b_fft, plan_forward)
@@ -1869,7 +1885,7 @@ def _gpu_cross_correlate(win_a, win_b):
     # Multiply the FFTs.
     win_fft_product = win_b_fft * win_a_fft.conj()
 
-    # Inverse transform.
+    # Get the inverse transform.
     plan_inverse = cufft.Plan((fft_ht, fft_wd), DTYPE_c, DTYPE_f, batch=n_windows)
     cufft.ifft(win_fft_product, win_cross_correlate, plan_inverse, True)
 
@@ -1930,7 +1946,7 @@ def _gpu_window_index_f(correlation, indices):
     return peak
 
 
-def _find_peak(correlation):
+def _peak_idx(correlation):
     """Returns the row and column of the highest peak in correlation function.
 
     Parameters
@@ -1957,7 +1973,7 @@ def _find_peak(correlation):
     return peak_idx
 
 
-def _get_peak(correlation, peak_idx):
+def _peak_value(correlation, peak_idx):
     """Returns the value of the highest peak in correlation function.
 
     Parameters
@@ -2187,6 +2203,40 @@ def _peak2rms(correlation, corr_peak):
     s2n_ratio = _peak2energy(correlation_rms, corr_peak)
 
     return s2n_ratio
+
+
+def _get_second_peak(correlation_positive, peak1_idx, mask_width):
+    """Find the value of the second-largest peak.
+
+    The second-largest peak is the height of the peak in the region outside a
+    width * width sub-matrix around the first correlation peak.
+
+    Parameters
+    ----------
+    correlation_positive : GPUArray
+        3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
+        removed.
+    peak1_idx : GPUArray
+        1D int (n_windows,) inddex locations of the first correlation peaks.
+    mask_width : int
+        Half size of the region around the first correlation peak to ignore for
+        finding the second peak.
+
+    Returns
+    -------
+    GPUArray
+        3D float (n_windows, fft_wd, fft_ht), value of the second correlation peak
+        for each interrogation window.
+
+    """
+    # Set points around the first peak to zero.
+    correlation_masked = _gpu_mask_peak(correlation_positive, peak1_idx, mask_width)
+
+    # Get the height of the second peak of correlation.
+    peak2_idx = _peak_idx(correlation_masked)
+    corr_max2 = _peak_value(correlation_masked, peak2_idx)
+
+    return corr_max2
 
 
 def _peak2peak(corr_peak1, corr_peak2):

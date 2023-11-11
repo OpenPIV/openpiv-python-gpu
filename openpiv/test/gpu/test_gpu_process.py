@@ -242,6 +242,13 @@ def process(request):
 
 
 # UNIT TESTS
+def test_correlation_gpu_free_gpu_data(correlation_gpu):
+    correlation_gpu.free_frame_data()
+
+    assert correlation_gpu.frame_a is None
+    assert correlation_gpu.frame_b is None
+
+
 def test_correlation_gpu_free_frame_data(correlation_gpu):
     correlation_gpu.free_frame_data()
 
@@ -276,34 +283,48 @@ def test_correlation_gpu_correlate_windows(correlation_gpu, piv_field_gpu):
     r = (x - (shape[1] - 1) / 2) ** 2 + (y - (shape[0] - 1) / 2) ** 2
     win = a * np.exp(-r / (2 * c**2))
     win_d = gpuarray.to_gpu(win.reshape(1, *shape).astype(DTYPE_f))
-    corr = correlation_gpu._correlate_windows(win_d, win_d).get()
-    peak_idx = np.argmax(corr)
+    correlation_gpu._correlate_windows(win_d, win_d)
+    peak_idx = np.argmax(correlation_gpu.correlation.get())
 
     assert peak_idx == (fft_shape / 2) * (fft_shape + 1)
 
 
-def test_correlation_gpu_check_zero_correlation(correlation_gpu, piv_field_gpu):
+def test_get_peak_idx(correlation_gpu):
+    assert isinstance(correlation_gpu._get_peak_idx(), gpuarray.GPUArray)
+
+
+def test_get_peak_value(correlation_gpu):
+    assert isinstance(correlation_gpu._get_peak_value(), gpuarray.GPUArray)
+
+
+def test_correlation_gpu_check_non_positive_correlation(correlation_gpu, piv_field_gpu):
     correlation_gpu(piv_field_gpu)
     fft_ht, fft_wd = correlation_gpu.fft_shape
 
     corr_peak = correlation_gpu.corr_peak1.get()
     corr_peak[:] = 0
     correlation_gpu.corr_peak1 = gpuarray.to_gpu(corr_peak)
-    correlation_gpu._check_zero_correlation()
+    correlation_gpu._check_non_positive_correlation()
 
     assert np.all(
-        correlation_gpu.peak_idx.get() == (fft_ht // 2) * fft_wd + fft_wd // 2
+        correlation_gpu.peak1_idx.get() == (fft_ht // 2) * fft_wd + fft_wd // 2
     )
 
 
-def test_correlation_gpu_get_displacement(correlation_gpu):
+def test_correlation_gpu_return_displacement(correlation_gpu):
+    i_peak, j_peak = correlation_gpu._return_displacement()
+    assert isinstance(j_peak, gpuarray.GPUArray)
+    assert isinstance(i_peak, gpuarray.GPUArray)
+
+
+def test_correlation_gpu_center_displacement(correlation_gpu):
     fft_shape = correlation_gpu.fft_shape[0]
     field_shape = correlation_gpu.piv_field.shape
     field_size = correlation_gpu.piv_field.size
 
     row_sp = np.arange(field_size).reshape(field_shape)
     col_sp = np.arange(field_size).reshape(field_shape)
-    i_peak, j_peak = correlation_gpu._get_displacement(row_sp, col_sp)
+    i_peak, j_peak = correlation_gpu._center_displacement(row_sp, col_sp)
 
     assert np.array_equal(i_peak, col_sp - fft_shape // 2)
     assert np.array_equal(j_peak, row_sp - fft_shape // 2)
@@ -317,36 +338,8 @@ def test_correlation_gpu_get_s2n(correlation_gpu, s2n_method):
     assert isinstance(s2n, gpuarray.GPUArray)
 
 
-def test_correlation_gpu_get_second_peak(correlation_gpu):
-    shape = (32, 32)
-    fft_shape = correlation_gpu.fft_shape[0]
-    a = 1
-    c = 4
-
-    row_peak = (
-        np.array(fft_shape // 2)
-        .astype(DTYPE_i)
-        .reshape(
-            1,
-        )
-    )
-    col_peak = (
-        np.array(fft_shape // 2)
-        .astype(DTYPE_i)
-        .reshape(
-            1,
-        )
-    )
-    correlation_gpu.peak_idx = gpuarray.to_gpu(row_peak * fft_shape + col_peak)
-
-    x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
-    r = (x - (shape[1] - 1) / 2) ** 2 + (y - (shape[0] - 1) / 2) ** 2
-    win = a * np.exp(-r / (2 * c**2))
-    win_d = gpuarray.to_gpu(np.expand_dims(win, 0).astype(DTYPE_f))
-    corr_d = correlation_gpu._correlate_windows(win_d, win_d)
-    corr_max2 = correlation_gpu._get_second_peak(corr_d, 1).get()
-
-    assert corr_max2 < np.amax(corr_d.get())
+def test_correlation_gpu_return_peak2peak(correlation_gpu):
+    assert isinstance(correlation_gpu._return_peak2peak(), gpuarray.GPUArray)
 
 
 def test_piv_field_gpu_get_mask(piv_field_gpu):
@@ -355,8 +348,8 @@ def test_piv_field_gpu_get_mask(piv_field_gpu):
     assert isinstance(mask, gpuarray.GPUArray)
 
 
-def test_piv_field_gpu_free_data(piv_field_gpu):
-    piv_field_gpu.free_data()
+def test_piv_field_gpu_free_gpu_data(piv_field_gpu):
+    piv_field_gpu.free_gpu_data()
 
     assert piv_field_gpu._mask_d is None
 
@@ -401,8 +394,8 @@ def test_piv_gpu_s2n(piv_gpu):
     assert isinstance(s2n, gpuarray.GPUArray)
 
 
-def test_piv_gpu_free_data(piv_gpu):
-    piv_gpu.free_data()
+def test_piv_gpu_free_gpu_data(piv_gpu):
+    piv_gpu.free_gpu_data()
 
     assert piv_gpu._corr is None
     assert piv_gpu._piv_fields is None
@@ -419,7 +412,7 @@ def test_piv_gpu_mask_frame(piv_gpu):
     # Need to test the switch cases.
     frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
     frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
-    frame_a_masked, frame_b_masked = piv_gpu._mask_frame(frame_a, frame_b)
+    frame_a_masked, frame_b_masked = piv_gpu._frames_to_gpu(frame_a, frame_b)
 
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
@@ -810,7 +803,7 @@ def test_find_peak(array_pair):
     peak_idx_np = np.argmax(correlation.reshape(n_windows, ht * wd), axis=1).astype(
         dtype=DTYPE_i
     )
-    peak_idx_gpu = gpu_process._find_peak(correlation_d).get()
+    peak_idx_gpu = gpu_process._peak_idx(correlation_d).get()
 
     assert np.array_equal(peak_idx_gpu, peak_idx_np)
 
@@ -827,7 +820,7 @@ def test_get_peak(array_pair):
     corr_peak_np = correlation.reshape(n_windows, ht * wd)[
         np.arange(n_windows), peak_idx
     ]
-    corr_peak_gpu = gpu_process._get_peak(correlation_d, peak_idx_d).get()
+    corr_peak_gpu = gpu_process._peak_value(correlation_d, peak_idx_d).get()
 
     assert np.array_equal(corr_peak_gpu, corr_peak_np)
 
@@ -894,6 +887,40 @@ def test_peak2energy(array_pair):
     s2n_gpu = gpu_process._peak2energy(correlation_d, corr_peak_d).get()
 
     assert np.allclose(s2n_gpu, s2n_np)
+
+
+def test_correlation_gpu_get_second_peak(correlation_gpu):
+    shape = (32, 32)
+    fft_shape = correlation_gpu.fft_shape[0]
+    a = 1
+    c = 4
+
+    row_peak = (
+        np.array(fft_shape // 2)
+        .astype(DTYPE_i)
+        .reshape(
+            1,
+        )
+    )
+    col_peak = (
+        np.array(fft_shape // 2)
+        .astype(DTYPE_i)
+        .reshape(
+            1,
+        )
+    )
+    correlation_gpu.peak1_idx = gpuarray.to_gpu(row_peak * fft_shape + col_peak)
+
+    x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+    r = (x - (shape[1] - 1) / 2) ** 2 + (y - (shape[0] - 1) / 2) ** 2
+    win = a * np.exp(-r / (2 * c**2))
+    win_d = gpuarray.to_gpu(np.expand_dims(win, 0).astype(DTYPE_f))
+    correlation_gpu._correlate_windows(win_d, win_d)
+    corr = correlation_gpu.correlation
+    peak1_idx = correlation_gpu.peak1_idx
+    corr_max2 = gpu_process._get_second_peak(corr, peak1_idx, 1).get()
+
+    assert corr_max2 < np.amax(corr.get())
 
 
 def test_peak2peak(array_pair):
