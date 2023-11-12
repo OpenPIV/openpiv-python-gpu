@@ -87,8 +87,6 @@ class CorrelationGPU:
 
     Parameters
     ----------
-    frame_a, frame_b : GPUArray
-        2D int (ht, wd), image pair.
     subpixel_method : {'gaussian', 'centroid', 'parabolic'}, optional
         Method to approximate the subpixel location of the peaks.
     n_fft : int or tuple of ints, optional
@@ -111,17 +109,12 @@ class CorrelationGPU:
 
     def __init__(
         self,
-        frame_a,
-        frame_b,
         subpixel_method=SUBPIXEL_METHOD,
         center_field=True,
         s2n_method=S2N_METHOD,
         s2n_width=S2N_WIDTH,
         n_fft=N_FFT,
     ):
-        self.frame_a = frame_a
-        self.frame_b = frame_b
-        self.frame_shape = frame_a.shape
         self.subpixel_method = subpixel_method
         self.center_field = center_field
         self.s2n_method = s2n_method
@@ -132,21 +125,21 @@ class CorrelationGPU:
         self.corr_peak1 = None
         self.corr_idx = None
 
-    def __call__(self, piv_field, search_size=None, shift=None, strain=None):
+    def __call__(self, win_a, win_b, search_size=None, shift=None, strain=None):
         """Returns the pixel peaks using the specified correlation method.
 
         Parameters
         ----------
-        piv_field : PIVFieldGPU
-            Geometric information for the correlation windows.
+        win_a, win_b : GPUArray
+            3D float ()
         search_size : int or None, optional
             Search window size to search in the second frame.
         shift : GPUArray or None, optional
-            2D float ([du, dv]), du and dv are 1D arrays of the x-y shift at each
+            2D float [du, dv], du and dv are 1D arrays of the x-y shift at each
             interrogation window of the second frame. This is using the x-y convention
             of this code where x is the row and y is the column.
         strain : GPUArray or None, optional
-            2D float ([u_x, u_y, v_x, v_y]), strain tensor.
+            2D float [u_x, u_y, v_x, v_y], strain tensor.
 
         Returns
         -------
@@ -154,41 +147,32 @@ class CorrelationGPU:
             3D float, locations of the subpixel peaks.
 
         """
-        self.piv_field = piv_field
-        assert (
-            piv_field.window_size >= 8 and piv_field.window_size % 8 == 0
-        ), "Window size must be a multiple of 8."
-        self._search_size = (
-            search_size if search_size is not None else piv_field.window_size
-        )
         self._s2n_ratio = None
 
-        self._init_fft_shape()
-
-        # TODO fold with correlate_windows into another method
-        # TODO stack_iw can be a method in piv field
-        # Get stack of all interrogation windows.
-        win_a, win_b = self._stack_iw(self.frame_a, self.frame_b, shift, strain)
+        self._init_fft_shape(win_a)
 
         # Correlate the windows.
         self._correlate_windows(win_a, win_b)
 
-        # Compute the displacement.
-        i_peak, j_peak = self._return_displacement()
-
-        return i_peak, j_peak
-
     def free_gpu_data(self):
         """Frees data from GPU."""
-        self.free_frame_data()
         self.correlation = None
         self.corr_peak1 = None
         self.corr_idx = None
 
-    def free_frame_data(self):
-        """Clears names associated with frames."""
-        self.frame_a = None
-        self.frame_b = None
+    @property
+    def displacement_peaks(self):
+        """Subpixel locations of the displacement peaks.
+
+        Returns
+        -------
+        i_peak, j_peak : GPUArray
+            1D float (m x n)
+
+        """
+        i_peak, j_peak = self._return_displacement()
+
+        return i_peak, j_peak
 
     @property
     def s2n_ratio(self):
@@ -202,89 +186,15 @@ class CorrelationGPU:
         """
         return self._get_s2n()
 
-    def _init_fft_shape(self):
+    def _init_fft_shape(self, win):
         """Creates the shape of the fft windows padded up to power of 2 to boost
         speed."""
-        self.fft_wd = 2 ** ceil(log2(self._search_size * self.n_fft[0]))
-        self.fft_ht = 2 ** ceil(log2(self._search_size * self.n_fft[1]))
+        _, ht, wd = win.shape
+
+        self.fft_wd = 2 ** ceil(log2(wd * self.n_fft[0]))
+        self.fft_ht = 2 ** ceil(log2(ht * self.n_fft[1]))
         self.fft_shape = (self.fft_ht, self.fft_wd)
         self.fft_size = self.fft_wd * self.fft_ht
-
-    def _stack_iw(self, frame_a, frame_b, shift, strain=None):
-        """Returns 3D arrays of stacked interrogation windows.
-
-        This is necessary to do the FFTs all at once on the GPU. This populates
-        interrogation windows from the origin of the image. The implementation requires
-        that the window sizes are multiples of 8.
-
-        Parameters
-        -----------
-        frame_a, frame_b : GPUArray
-            2D int (ht, wd), image pair.
-        shift : GPUArray
-            3D float (2, m, n), ([du, dv]), shift of the second window.
-        strain : GPUArray or None
-            3D float (4, m, n) ([u_x, u_y, v_x, v_y]), strain rate tensor. First
-            dimension is (u_x, u_y, v_x, v_y).
-
-        Returns
-        -------
-        win_a, win_b : GPUArray
-            3D float (n_windows, ht, wd), interrogation windows stacked in the first
-            dimension.
-
-        """
-        _check_arrays(
-            frame_a,
-            frame_b,
-            array_type=gpuarray.GPUArray,
-            shape=frame_a.shape,
-            dtype=DTYPE_f,
-            ndim=2,
-        )
-        buffer_a, buffer_b = self._get_center_buffer()
-
-        win_a = _gpu_window_slice(
-            frame_a,
-            self.piv_field.shape,
-            self.piv_field.window_size,
-            self.piv_field.spacing,
-            buffer_a,
-            dt=-0.5,
-            shift=shift,
-            strain=strain,
-        )
-        win_b = _gpu_window_slice(
-            frame_b,
-            self.piv_field.shape,
-            self._search_size,
-            self.piv_field.spacing,
-            buffer_b,
-            dt=0.5,
-            shift=shift,
-            strain=strain,
-        )
-
-        return win_a, win_b
-
-    def _get_center_buffer(self):
-        """Returns center for each window with extended search.
-
-        Returns
-        -------
-        tuple of ints
-            (buffer_a, buffer_b)
-
-        """
-        buffer_a = 0
-        buffer_b = -(self._search_size - self.piv_field.window_size) // 2
-
-        if self.center_field:
-            center_buffer = self.piv_field.center_buffer
-            buffer_a = center_buffer
-            buffer_b = (center_buffer[0] + buffer_b, center_buffer[1] + buffer_b)
-
-        return buffer_a, buffer_b
 
     def _correlate_windows(self, win_a, win_b):
         """Computes the cross-correlation of the window stacks with zero-padding.
@@ -308,11 +218,9 @@ class CorrelationGPU:
         win_a_norm = _gpu_normalize_intensity(win_a)
         win_b_norm = _gpu_normalize_intensity(win_b)
 
-        # Zero pad arrays according to extended size requirements.
-        extended_search_offset = (self._search_size - self.piv_field.window_size) // 2
-        win_a_zp = _gpu_zero_pad(
-            win_a_norm, self.fft_shape, extended_search_offset=extended_search_offset
-        )
+        # Zero pad windows to fft shape.
+        offset = _search_offset(win_a, win_b)
+        win_a_zp = _gpu_zero_pad(win_a_norm, self.fft_shape, offset=offset)
         win_b_zp = _gpu_zero_pad(win_b_norm, self.fft_shape)
 
         # Get the cross-correlation.
@@ -349,7 +257,7 @@ class CorrelationGPU:
         self.peak1_idx = gpuarray.if_positive(corr_peak1, peak1_idx, center)
 
     def _return_displacement(self):
-        """Returns the sux[ixel peak location in the interrogation window.
+        """Returns the subpixel locations of the displacement peaks.
 
         Returns
         -------
@@ -357,6 +265,10 @@ class CorrelationGPU:
             1D int (n_windows,)
 
         """
+        assert (
+            self.correlation is not None
+        ), "Can only return displacement after correlation peaks have been computed."
+
         # Get the subpixel location.
         row_sp, col_sp = _gpu_subpixel_approximation(
             self.correlation, self.peak1_idx, self.subpixel_method
@@ -377,10 +289,8 @@ class CorrelationGPU:
             1D int (n_windows,)
 
         """
-
-        # Center the peak displacement.
-        i_peak = (row_sp - DTYPE_f(self.fft_ht // 2)).reshape(self.piv_field.shape)
-        j_peak = (col_sp - DTYPE_f(self.fft_wd // 2)).reshape(self.piv_field.shape)
+        i_peak = row_sp - DTYPE_f(self.fft_ht // 2)
+        j_peak = col_sp - DTYPE_f(self.fft_wd // 2)
 
         return i_peak, j_peak
 
@@ -401,7 +311,7 @@ class CorrelationGPU:
 
         """
         assert self.correlation is not None, (
-            "Can only compute signal-to-noise ratio after correlation peaks have been"
+            "Can only return signal-to-noise ratio after correlation peaks have been"
             "computed."
         )
         corr_peak1 = self._get_peak_value()
@@ -419,7 +329,7 @@ class CorrelationGPU:
                 )
                 s2n_ratio = self._return_peak2peak()
 
-            self._s2n_ratio = s2n_ratio.reshape(self.piv_field.shape)
+            self._s2n_ratio = s2n_ratio
 
         return self._s2n_ratio
 
@@ -448,15 +358,28 @@ class PIVFieldGPU:
         Size of the interrogation window.
     spacing : int
         Number of pixels between interrogation windows.
-
+    search_ratio : int or None, optional
+        Ratio the extended search area to use on the first iteration. If not specified,
+        extended search will not be used.
     """
 
     def __init__(
-        self, frame_shape, window_size, spacing, frame_mask=None, center_field=True
+        self,
+        frame_shape,
+        window_size,
+        spacing,
+        frame_mask=None,
+        center_field=True,
+        search_ratio=None,
     ):
+        assert (
+            window_size >= 8 and window_size % 8 == 0
+        ), "Window size must be a multiple of 8."
         self.frame_shape = frame_shape
         self.window_size = window_size
         self.spacing = spacing
+        self.center_field = center_field
+        self.search_ratio = search_ratio
         self.shape = field_shape(frame_shape, window_size, spacing)
         self.size = prod(self.shape)
 
@@ -484,6 +407,68 @@ class PIVFieldGPU:
 
         """
         return self._mask_d if (self.is_masked or return_array) else None
+
+    def stack_iw(self, frame_a, frame_b, shift=None, strain=None, search_size=None):
+        """Returns 3D arrays of stacked interrogation windows.
+
+        This is necessary to do the FFTs all at once on the GPU. This populates
+        interrogation windows from the origin of the image. The implementation requires
+        that the window sizes are multiples of 8.
+
+        Parameters
+        -----------
+        frame_a, frame_b : GPUArray
+            2D int (ht, wd), image pair.
+        shift : GPUArray or None, optional
+            3D float (2, m, n), ([du, dv]), shift of the second window.
+        strain : GPUArray or None, optional
+            3D float (4, m, n), [u_x, u_y, v_x, v_y], strain rate tensor.
+        search_size : int or None, optional
+            Size of the second interrogation window for use in extended search method.
+
+        Returns
+        -------
+        win_a, win_b : GPUArray
+            3D float (n_windows, ht, wd), interrogation windows stacked in the first
+            dimension.
+
+        """
+        _check_arrays(
+            frame_a,
+            frame_b,
+            array_type=gpuarray.GPUArray,
+            shape=frame_a.shape,
+            dtype=DTYPE_f,
+            ndim=2,
+        )
+        if search_size is not None:
+            if not 0 < search_size == int(search_size):
+                raise ValueError("search_size must be a positive integer or None.")
+        search_size = search_size if search_size is not None else self.window_size
+        offset_a, offset_b = self._return_search_offset(search_size)
+
+        win_a = _gpu_window_slice(
+            frame_a,
+            self.shape,
+            self.window_size,
+            self.spacing,
+            offset_a,
+            dt=-0.5,
+            shift=shift,
+            strain=strain,
+        )
+        win_b = _gpu_window_slice(
+            frame_b,
+            self.shape,
+            search_size,
+            self.spacing,
+            offset_b,
+            dt=0.5,
+            shift=shift,
+            strain=strain,
+        )
+
+        return win_a, win_b
 
     def free_gpu_data(self):
         """Frees data from GPU."""
@@ -514,17 +499,41 @@ class PIVFieldGPU:
         return self._x_grid, self._y_grid
 
     @property
-    def center_buffer(self):
+    def center_offset(self):
         """Offsets in pixel units to the window positions to center the velocity
         field on the frame.
 
         Returns
         -------
         tuple of ints
-            (buffer_x, buffer_y)
+            [offset_x, offset_y]
 
         """
-        return _center_buffer(self.frame_shape, self.window_size, self.spacing)
+        return _center_offset(self.frame_shape, self.window_size, self.spacing)
+
+    def _return_search_offset(self, search_size):
+        """Returns offset to center each window with extended search.
+
+        Parameters
+        ----------
+        search_size : int
+            Size of the second interrogation window for use in extended search method.
+
+        Returns
+        -------
+        tuple of ints
+            [offset_a, offset_b]
+
+        """
+        offset_a = 0
+        offset_b = -(search_size - self.window_size) // 2
+
+        if self.center_field:
+            center_offset = self.center_offset
+            offset_a = center_offset
+            offset_b = (center_offset[0] + offset_b, center_offset[1] + offset_b)
+
+        return offset_a, offset_b
 
 
 def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
@@ -633,7 +642,7 @@ class PIVGPU:
     interrogation windows.
 
     At every iteration, the estimate of the displacement and gradient are used to shift
-    and deform the interrogation windows used in the next iteration. One or more
+    and deform the interrogation windows used during the next iteration. One or more
     iterations can be performed before the estimated velocity is interpolated onto a
     finer mesh. This is done until the final mesh and number of iterations is met.
 
@@ -694,7 +703,7 @@ class PIVGPU:
     smoothing_par : float or None, optional
         Smoothing parameter to pass to smoothn to apply to the intermediate velocity
         fields.
-    extend_ratio : float or None, optional
+    search_ratio : float or None, optional
         Ratio the extended search area to use on the first iteration. If not specified,
         extended search will not be used.
     center_field : bool, optional
@@ -724,7 +733,7 @@ class PIVGPU:
     smooth = _Bool()
     num_validation_iters = _Integer(min_value=0)
     smoothing_par = _Number(min_value=0, min_closure=False, allow_none=True)
-    extend_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
+    search_ratio = _Number(min_value=1, min_closure=False, allow_none=True)
     center_field = _Bool()
 
     def __init__(
@@ -744,7 +753,7 @@ class PIVGPU:
         mean_tol=MEAN_TOL,
         rms_tol=RMS_TOL,
         smoothing_par=SMOOTHING_PAR,
-        extend_ratio=None,
+        search_ratio=None,
         center_field=True,
         subpixel_method=SUBPIXEL_METHOD,
         s2n_method=S2N_METHOD,
@@ -766,7 +775,7 @@ class PIVGPU:
         self.mean_tol = mean_tol
         self.rms_tol = rms_tol
         self.center_field = center_field
-        self.extend_ratio = extend_ratio
+        self.search_ratio = search_ratio
         self.smoothing_par = smoothing_par
         self.subpixel_method = subpixel_method
         self.s2n_method = s2n_method
@@ -799,12 +808,10 @@ class PIVGPU:
         max_iter = sum(self.window_size_iters)
 
         # Send masked frames to device.
-        frame_a_d, frame_b_d = self._frames_to_gpu(frame_a, frame_b)
+        frame_a, frame_b = self._frames_to_gpu(frame_a, frame_b)
 
         # Create the correlation object.
         self._corr = CorrelationGPU(
-            frame_a_d,
-            frame_b_d,
             subpixel_method=self.subpixel_method,
             center_field=self.center_field,
             s2n_method=self.s2n_method,
@@ -823,13 +830,20 @@ class PIVGPU:
             search_size = self._get_search_size()
             shift, strain = self._get_window_deformation(dp_u, dp_v)
 
+            # Get stack of all interrogation windows.
+            win_a, win_b = self._piv_field_k.stack_iw(
+                frame_a, frame_b, shift, strain, search_size=search_size
+            )
+
             # Get window displacement to subpixel accuracy.
-            i_peak, j_peak = self._corr(
-                self._piv_fields[k],
+            self._corr(
+                win_a,
+                win_b,
                 search_size=search_size,
                 shift=shift,
                 strain=strain,
             )
+            i_peak, j_peak = self._corr.displacement_peaks
 
             # Update the field with new values.
             u, v = self._update_values(dp_u, dp_v, i_peak, j_peak)
@@ -849,8 +863,6 @@ class PIVGPU:
 
         u = (u / DTYPE_f(self.dt)).get()
         v = (v / DTYPE_f(-self.dt)).get()
-
-        self._corr.free_frame_data()
 
         return u, v
 
@@ -890,7 +902,9 @@ class PIVGPU:
             2D float (m, n)
 
         """
-        return self._corr.s2n_ratio
+        shape = self._get_piv_fields()[-1].shape
+
+        return self._corr.s2n_ratio.reshape(shape)
 
     def free_gpu_data(self):
         """Frees data from GPU."""
@@ -945,8 +959,8 @@ class PIVGPU:
     def _get_search_size(self):
         """Returns the extended size used during the first iteration."""
         search_size = None
-        if self._k == 0 and self.extend_ratio is not None:
-            search_size = int(self._piv_field_k.window_size * self.extend_ratio)
+        if self._k == 0 and self.search_ratio is not None:
+            search_size = int(self._piv_field_k.window_size * self.search_ratio)
 
         return search_size
 
@@ -965,11 +979,12 @@ class PIVGPU:
 
     def _update_values(self, dp_u, dp_v, i_peak, j_peak):
         """Updates the velocity values after each iteration."""
+        shape = self._piv_field_k.shape
         mask = self._piv_field_k.get_gpu_mask(return_array=True)
 
         if dp_u is None:
-            u = gpu_misc.gpu_mask(j_peak, mask)
-            v = gpu_misc.gpu_mask(i_peak, mask)
+            u = gpu_misc.gpu_mask(j_peak, mask).reshape(shape)
+            v = gpu_misc.gpu_mask(i_peak, mask).reshape(shape)
         else:
             u = _gpu_update_field(dp_u, j_peak, mask)
             v = _gpu_update_field(dp_v, i_peak, mask)
@@ -1136,7 +1151,7 @@ def field_coords(frame_shape, window_size, spacing, center_field=True):
     Parameters
     ----------
     frame_shape : tuple of ints
-        (ht, wd), size of the frame in pixels.
+        [ht, wd], size of the frame in pixels.
     window_size : int
         Size of the interrogation windows.
     spacing : int
@@ -1155,19 +1170,19 @@ def field_coords(frame_shape, window_size, spacing, center_field=True):
 
     m, n = field_shape(frame_shape, window_size, spacing)
     half_width = window_size // 2
-    buffer_x = 0
-    buffer_y = 0
+    offset_x = 0
+    offset_y = 0
     if center_field:
-        buffer_x, buffer_y = _center_buffer(frame_shape, window_size, spacing)
+        offset_x, offset_y = _center_offset(frame_shape, window_size, spacing)
     x = np.tile(
         np.linspace(
-            half_width + buffer_x, half_width + buffer_x + spacing * (n - 1), n
+            half_width + offset_x, half_width + offset_x + spacing * (n - 1), n
         ),
         (m, 1),
     )
     y = np.tile(
         np.linspace(
-            half_width + buffer_y + spacing * (m - 1), half_width + buffer_y, m
+            half_width + offset_y + spacing * (m - 1), half_width + offset_y, m
         ),
         (n, 1),
     ).T
@@ -1433,10 +1448,10 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
     f1 = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     # Calculate the relationship between the two grid coordinates.
-    buffer_x_f = DTYPE_f(x0[0].get())
-    buffer_y_f = DTYPE_f(y0[0].get())
-    spacing_x_f = DTYPE_f((x0[1].get() - buffer_x_f))
-    spacing_y_f = DTYPE_f((y0[1].get() - buffer_y_f))
+    offset_x_f = DTYPE_f(x0[0].get())
+    offset_y_f = DTYPE_f(y0[0].get())
+    spacing_x_f = DTYPE_f((x0[1].get() - offset_x_f))
+    spacing_y_f = DTYPE_f((y0[1].get() - offset_y_f))
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
@@ -1449,8 +1464,8 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
             x1,
             y1,
             mask,
-            buffer_x_f,
-            buffer_y_f,
+            offset_x_f,
+            offset_y_f,
             spacing_x_f,
             spacing_y_f,
             DTYPE_i(ht),
@@ -1467,8 +1482,8 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
             f0,
             x1,
             y1,
-            buffer_x_f,
-            buffer_y_f,
+            offset_x_f,
+            offset_y_f,
             spacing_x_f,
             spacing_y_f,
             DTYPE_i(ht),
@@ -1508,21 +1523,21 @@ def _field_mask(x, y, frame_mask=None):
     return mask
 
 
-def _center_buffer(frame_shape, window_size, spacing):
+def _center_offset(frame_shape, window_size, spacing):
     """Returns the left pad to indexes to center the vector-field coordinates on the
     frame.
 
-    This accounts for non-even windows sizes and field dimensions to make the buffers on
+    This accounts for non-even windows sizes and field dimensions to make the offsets on
     either side of the field differ by one pixel at most.
 
     """
     ht, wd = frame_shape
     m, n = field_shape(frame_shape, window_size, spacing)
 
-    buffer_x = (wd - (spacing * (n - 1) + window_size)) // 2 + window_size % 2
-    buffer_y = (ht - (spacing * (m - 1) + window_size)) // 2 + window_size % 2
+    offset_x = (wd - (spacing * (n - 1) + window_size)) // 2 + window_size % 2
+    offset_y = (ht - (spacing * (m - 1) + window_size)) // 2 + window_size % 2
 
-    return buffer_x, buffer_y
+    return offset_x, offset_y
 
 
 mod_window_slice = SourceModule(
@@ -1623,7 +1638,7 @@ __global__ void window_slice_deform(float *output, float *input, float *shift,
 
 
 def _gpu_window_slice(
-    frame, field_shape_, window_size, spacing, buffer, dt=0, shift=None, strain=None
+    frame, field_shape_, window_size, spacing, offset, dt=0, shift=None, strain=None
 ):
     """Creates a 3D array stack of all the interrogation windows using shift and strain.
 
@@ -1637,17 +1652,17 @@ def _gpu_window_slice(
         Side dimension of the square interrogation windows.
     spacing : int
         Spacing between vectors of the velocity field.
-    buffer : int or tuple of ints
-        (buffer_x, buffer_y), adjustment to the location of the windows relative to the
+    offset : int or tuple of ints
+        [offset_x, offset_y], adjustment to the location of the windows relative to the
         edge of frame, for the purpose of centering the vector field on the frame.
     dt : float, optional
         Number between -1 and 1 indicating the level of shifting/deform. E.g. 1
         indicates shift by full amount, 0 is stationary. This is applied to the
         deformation in an analogous way.
     shift : GPUArray, optional
-        3D float (2, m, n) ([du, dv]), shift of the second window.
+        3D float (2, m, n), [du, dv], shift of the second window.
     strain : GPUArray, optional
-        3D float (4, m, n) ([u_x, u_y, v_x, v_y]), strain rate tensor.
+        3D float (4, m, n), [u_x, u_y, v_x, v_y], strain rate tensor.
 
     Returns
     -------
@@ -1659,11 +1674,11 @@ def _gpu_window_slice(
     _check_arrays(frame, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=2)
     assert len(field_shape_) == 2
     assert -1 <= dt <= 1
-    assert np.all(buffer == DTYPE_i(buffer))
-    if isinstance(buffer, Number):
-        buffer_x_i = buffer_y_i = DTYPE_i(buffer)
+    assert np.all(offset == DTYPE_i(offset))
+    if isinstance(offset, Number):
+        offset_x_i = offset_y_i = DTYPE_i(offset)
     else:
-        buffer_x_i, buffer_y_i = DTYPE_i(buffer)
+        offset_x_i, offset_y_i = DTYPE_i(offset)
     ht, wd = frame.shape
     m, n = field_shape_
     n_windows = m * n
@@ -1691,8 +1706,8 @@ def _gpu_window_slice(
             do_deform,
             DTYPE_i(window_size),
             DTYPE_i(spacing),
-            buffer_x_i,
-            buffer_y_i,
+            offset_x_i,
+            offset_y_i,
             DTYPE_i(n_windows),
             DTYPE_i(n),
             DTYPE_i(wd),
@@ -1707,8 +1722,8 @@ def _gpu_window_slice(
             frame,
             DTYPE_i(window_size),
             DTYPE_i(spacing),
-            buffer_x_i,
-            buffer_y_i,
+            offset_x_i,
+            offset_y_i,
             DTYPE_i(n),
             DTYPE_i(wd),
             DTYPE_i(ht),
@@ -1717,6 +1732,32 @@ def _gpu_window_slice(
         )
 
     return win
+
+
+def _search_offset(win_a, win_b):
+    """Returns offset required to align the data in both windows.
+
+    Parameters
+    ----------
+    win_a, win_b : GPUArray
+        3D float (n_windows, ht, wd), interrogation windows.
+
+    Returns
+    -------
+    tuple of ints
+        [offset_x, offset_y]
+
+    """
+    n_windows_a, ht_a, wd_a = win_a.shape
+    n_windows_b, ht_b, wd_b = win_b.shape
+    assert n_windows_a == n_windows_b
+    assert (
+        ht_b >= ht_b and wd_b >= wd_a
+    ), "Dimensions of the second window must be equal or larger than the first."
+
+    offset = ((wd_b - wd_a) // 2, (wd_b - wd_a) // 2)
+
+    return offset
 
 
 mod_norm = SourceModule(
@@ -1797,9 +1838,8 @@ __global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, 
 )
 
 
-def _gpu_zero_pad(win, fft_shape, extended_search_offset=0):
-    """Function that zero-pads an 3D stack of arrays for use with the scikit-cuda FFT
-    function.
+def _gpu_zero_pad(win, fft_shape, offset=0):
+    """Zero-pads a 3D stack of interrogation windows for FFT.
 
     Parameters
     ----------
@@ -1807,9 +1847,9 @@ def _gpu_zero_pad(win, fft_shape, extended_search_offset=0):
         3D float (n_windows, ht, wd), interrogation windows.
     fft_shape : tuple of ints
         (ht, wd), shape to zero pad the date to.
-    extended_search_offset: int or tuple or ints, optional
-        (offset_x, offset_y), offsets to the destination index in the padded array. Used
-        for the extended-search-area PIV method.
+    offset: int or tuple of ints, optional
+        [offset_x, offset_y], offsets to the destination index in the padded array. Used
+        by the extended-search-area PIV method.
 
     Returns
     -------
@@ -1818,11 +1858,11 @@ def _gpu_zero_pad(win, fft_shape, extended_search_offset=0):
 
     """
     _check_arrays(win, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    assert 0 <= extended_search_offset == int(extended_search_offset)
-    if isinstance(extended_search_offset, Number):
-        offset_x_i = offset_y_i = DTYPE_i(extended_search_offset)
+    if isinstance(offset, (Number, int, float)):
+        assert 0 <= offset == int(offset), "offset(s) must be positive integers(s)."
+        offset_x_i = offset_y_i = DTYPE_i(offset)
     else:
-        offset_x_i, offset_y_i = DTYPE_i(extended_search_offset)
+        offset_x_i, offset_y_i = DTYPE_i(offset)
     n_windows, wd, ht = win.shape
     fft_ht_i, fft_wd_i = DTYPE_i(fft_shape)
 

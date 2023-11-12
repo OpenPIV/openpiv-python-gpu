@@ -144,7 +144,7 @@ def array_pair():
 
 @pytest.fixture
 def piv_field_gpu():
-    frame_shape = (512, 512)
+    frame_shape = frame_a.shape
     window_size = 32
     spacing = 16
 
@@ -158,53 +158,65 @@ def correlation_gpu(piv_field_gpu):
     frame_a_d = gpuarray.to_gpu(frame_a)
     frame_b_d = gpuarray.to_gpu(frame_b)
 
-    correlation_gpu = gpu_process.CorrelationGPU(frame_a_d, frame_b_d)
-    correlation_gpu(piv_field_gpu)
+    win_a, win_b = piv_field_gpu.stack_iw(frame_a_d, frame_b_d)
+
+    correlation_gpu = gpu_process.CorrelationGPU()
+    correlation_gpu(win_a, win_b)
 
     return correlation_gpu
 
 
 @pytest.fixture
-def piv_field(correlation_gpu):
-    window_size = 32
-    spacing = 16
-    frame_shape = correlation_gpu.frame_shape
+def peaks(correlation_gpu):
+    i_peak, j_peak = correlation_gpu.displacement_peaks
 
-    return gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
+    return i_peak, j_peak
 
 
 @pytest.fixture
-def peaks(correlation_gpu, piv_field):
-    i_peaks, j_peaks = correlation_gpu(piv_field)
+def peaks_reshape(piv_field_gpu, peaks):
+    shape = piv_field_gpu.shape
+    i_peak, j_peak = peaks
+    i_peak_reshape = i_peak.reshape(shape)
+    j_peak_reshape = j_peak.reshape(shape)
 
-    return i_peaks, j_peaks
+    return i_peak_reshape, j_peak_reshape
 
 
 @pytest.fixture
-def mask(peaks, boolean_gpu_array):
-    i_peaks, _ = peaks
+def mask(piv_field_gpu, boolean_gpu_array):
+    shape = piv_field_gpu.shape
 
-    mask = boolean_gpu_array(i_peaks.shape, seed=0)
+    mask = boolean_gpu_array(shape, seed=0)
 
     return mask
 
 
 @pytest.fixture
-def s2n_ratio(correlation_gpu, piv_field):
-    _, _ = correlation_gpu(piv_field)
-    sig2noise = correlation_gpu.s2n_ratio
+def s2n_ratio(correlation_gpu):
+    s2n_ratio = correlation_gpu.s2n_ratio
 
-    return sig2noise
+    return s2n_ratio
 
 
 @pytest.fixture
-def validation_gpu(peaks, boolean_gpu_array):
-    i_peaks, _ = peaks
+def s2n_ratio_reshape(piv_field_gpu, correlation_gpu):
+    shape = piv_field_gpu.shape
+    s2n_ratio = correlation_gpu.s2n_ratio
 
-    mask = boolean_gpu_array(i_peaks.shape, seed=1)
+    s2n_ratio_reshape = s2n_ratio.reshape(shape)
+
+    return s2n_ratio_reshape
+
+
+@pytest.fixture
+def validation_gpu(piv_field_gpu, boolean_gpu_array):
+    shape = piv_field_gpu.shape
+
+    mask = boolean_gpu_array(shape, seed=1)
 
     validation_gpu = gpu_validation.ValidationGPU(
-        i_peaks,
+        shape,
         mask=mask,
         validation_method="median_velocity",
         s2n_tol=2,

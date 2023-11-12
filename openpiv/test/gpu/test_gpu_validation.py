@@ -99,10 +99,10 @@ def get_neighbours_np(f, neighbours_present):
 
 
 # UNIT TESTS
-def test_validation_gpu_free_data(validation_gpu, peaks):
-    i_peaks_d, j_peaks_d = peaks
+def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
+    i_peaks, j_peaks = peaks_reshape
 
-    validation_gpu(i_peaks_d)
+    validation_gpu(i_peaks)
     validation_gpu.free_gpu_data()
 
     assert all(
@@ -118,8 +118,8 @@ def test_validation_gpu_free_data(validation_gpu, peaks):
 
 
 @pytest.mark.parametrize("num_fields, type_", [(1, gpuarray.GPUArray), (2, list)])
-def test_validation_gpu_median_mean(num_fields, type_, validation_gpu, peaks):
-    validation_gpu._f = peaks[:num_fields]
+def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation_gpu):
+    validation_gpu._f = peaks_reshape[:num_fields]
     validation_gpu._num_fields = num_fields
 
     assert isinstance(validation_gpu.median, type_)
@@ -136,14 +136,14 @@ def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
     assert np.array_equal(val_locations_gpu, val_locations)
 
 
-def test_validation_gpu_median_validation(validation_gpu, peaks, mask):
+def test_validation_gpu_median_validation(peaks_reshape, mask, validation_gpu):
     tol = gpu_validation.MEDIAN_TOL
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = len(peaks)
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
     val_locations_d = None
 
-    for f_d in peaks:
+    for f_d in peaks_reshape:
         f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
         f_median_d = gpu_validation._gpu_median_velocity(
             f_neighbours_d, neighbours_present_d
@@ -161,14 +161,14 @@ def test_validation_gpu_median_validation(validation_gpu, peaks, mask):
     assert np.array_equal(val_locations, val_locations_gpu)
 
 
-def test_validation_gpu_mean_validation(validation_gpu, peaks, mask):
+def test_validation_gpu_mean_validation(peaks_reshape, mask, validation_gpu):
     tol = gpu_validation.MEAN_TOL
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = len(peaks)
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
     val_locations_d = None
 
-    for f_d in peaks:
+    for f_d in peaks_reshape:
         f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
         f_mean_d = gpu_validation._gpu_mean_velocity(
             f_neighbours_d, neighbours_present_d
@@ -186,14 +186,14 @@ def test_validation_gpu_mean_validation(validation_gpu, peaks, mask):
     assert np.array_equal(val_locations, val_locations_gpu)
 
 
-def test_validation_gpu_rms_validation(validation_gpu, peaks, mask):
+def test_validation_gpu_rms_validation(peaks_reshape, mask, validation_gpu):
     tol = gpu_validation.RMS_TOL
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = len(peaks)
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
     val_locations_d = None
 
-    for f_d in peaks:
+    for f_d in peaks_reshape:
         f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
         f_mean_d = gpu_validation._gpu_mean_velocity(
             f_neighbours_d, neighbours_present_d
@@ -225,17 +225,17 @@ def test_validation_gpu_mask_val_locations(validation_gpu, mask, boolean_array_p
     assert np.array_equal(val_locations_gpu, val_locations_np)
 
 
-def test_validation_gpu_get_neighbours(validation_gpu, peaks):
+def test_validation_gpu_get_neighbours(peaks_reshape, validation_gpu):
     # This simply tests that get_neighbours calls _gpu_get_neighbours() when the
     # _f_neighbours attribute is None.
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = n = len(peaks)
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
 
     validation_gpu._f_neighbours = None
     f_neighbours_l = [
         gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d).get()
-        for f_d in peaks
+        for f_d in peaks_reshape
     ]
     f_neighbours_gpu_l = [
         f_neighbours_d.get() for f_neighbours_d in validation_gpu._get_neighbours()
@@ -245,9 +245,9 @@ def test_validation_gpu_get_neighbours(validation_gpu, peaks):
     )
 
 
-def test_validation_gpu_get_median(validation_gpu, peaks):
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = n = len(peaks)
+def test_validation_gpu_get_median(peaks_reshape, validation_gpu):
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
     f_neighbours_dl = validation_gpu._get_neighbours()
 
@@ -262,9 +262,9 @@ def test_validation_gpu_get_median(validation_gpu, peaks):
     assert all([np.array_equal(f_median_gpu_l[i], f_median_l[i]) for i in range(n)])
 
 
-def test_validation_gpu_get_mean(validation_gpu, peaks):
-    validation_gpu._f = peaks
-    validation_gpu._num_fields = n = len(peaks)
+def test_validation_gpu_get_mean(peaks_reshape, validation_gpu):
+    validation_gpu._f = peaks_reshape
+    validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
     f_neighbours_dl = validation_gpu._get_neighbours()
 
@@ -439,24 +439,24 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     [("s2n", 316), ("median_velocity", 63), ("mean_velocity", 5), ("rms_velocity", 4)],
 )
 def test_validation_gpu_(
-    validation_method, expected_sum, validation_gpu, peaks, mask, s2n_ratio
+    validation_method, expected_sum, validation_gpu, peaks_reshape, mask, s2n_ratio_reshape
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method
-    val_locations = validation_gpu(*peaks, s2n=s2n_ratio).get()
+    val_locations = validation_gpu(*peaks_reshape, s2n=s2n_ratio_reshape).get()
 
     assert np.sum(val_locations) == expected_sum
 
 
 @pytest.fixture
-def validation(peaks):
+def validation(peaks_reshape):
     def validation(f, **params):
         val_locations = gpu_validation.gpu_validation(*f, **params).get()
 
         assert np.sum(val_locations) > 0
         assert not np.any(np.isnan(val_locations))
 
-    return partial(validation, peaks)
+    return partial(validation, peaks_reshape)
 
 
 @pytest.mark.integtest
@@ -498,10 +498,10 @@ class TestValidationParams:
 @pytest.mark.regression
 @pytest.mark.parametrize("validation_method", gpu_validation.ALLOWED_VALIDATION_METHODS)
 def test_validation_gpu_regression(
-    validation_method, validation_gpu, peaks, mask, ndarrays_regression, s2n_ratio
+    validation_method, validation_gpu, peaks_reshape, mask, ndarrays_regression, s2n_ratio_reshape
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method
-    val_locations = validation_gpu(*peaks, s2n=s2n_ratio).get()
+    val_locations = validation_gpu(*peaks_reshape, s2n=s2n_ratio_reshape).get()
 
     ndarrays_regression.check({"val_locations": val_locations})

@@ -6,6 +6,7 @@ from numbers import Number
 import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
+
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
@@ -466,31 +467,43 @@ def _check_arrays(
 def _check_array_type(array, array_type):
     """Checks that arrays are the correct type."""
     if not isinstance(array, array_type):
-        raise TypeError("Array(s) must be {}.".format(array_type))
+        raise TypeError(
+            "Array(s) are wrong type. Expected {}. Got {}.".format(
+                array_type, type(array)
+            )
+        )
 
 
 def _check_array_dtype(array, dtype):
     """Checks that arrays have the correct dtype."""
     if not array.dtype == dtype:
-        raise ValueError("Array(s) must have dtype {}.".format(dtype))
+        raise ValueError(
+            "Array(s) have wrong dtype. Expected {}. Got {}.".format(dtype, array.dtype)
+        )
 
 
 def _check_array_shape(array, shape):
     """Checks that arrays have the correct shape."""
     if not array.shape == shape:
-        raise ValueError("Array(s) must have shape {}.".format(shape))
+        raise ValueError(
+            "Array(s) have wrong shape. Expected {}. Got {}.".format(shape, array.shape)
+        )
 
 
 def _check_array_ndim(array, ndim):
     """Checks that arrays have the correct ndim."""
     if not array.ndim == ndim:
-        raise ValueError("Array(s) must have ndim {}.".format(ndim))
+        raise ValueError(
+            "Array(s) have wrong ndim. Expected {}. Got {}.".format(ndim, array.ndim)
+        )
 
 
 def _check_array_size(array, size):
     """Checks that arrays have the correct size."""
     if not array.size == size:
-        raise ValueError("Array(s) must have size {}.".format(size))
+        raise ValueError(
+            "Array(s) have wrong size. Expected {}. Got {}.".format(size, array.size)
+        )
 
 
 def _check_array_c_contiguous(array):
