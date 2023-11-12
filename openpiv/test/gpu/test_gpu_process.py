@@ -290,8 +290,8 @@ def test_correlation_gpu_check_non_positive_correlation(correlation_gpu, piv_fie
     )
 
 
-def test_correlation_gpu_return_displacement(correlation_gpu):
-    i_peak, j_peak = correlation_gpu._return_displacement()
+def test_correlation_gpu_get_displacement(correlation_gpu):
+    i_peak, j_peak = correlation_gpu._get_displacement()
     assert isinstance(j_peak, gpuarray.GPUArray)
     assert isinstance(i_peak, gpuarray.GPUArray)
 
@@ -317,8 +317,8 @@ def test_correlation_gpu_get_s2n(correlation_gpu, s2n_method):
     assert isinstance(s2n, gpuarray.GPUArray)
 
 
-def test_correlation_gpu_return_peak2peak(correlation_gpu):
-    assert isinstance(correlation_gpu._return_peak2peak(), gpuarray.GPUArray)
+def test_correlation_gpu_get_peak2peak(correlation_gpu):
+    assert isinstance(correlation_gpu._get_peak2peak(), gpuarray.GPUArray)
 
 
 def test_piv_field_gpu_get_mask(piv_field_gpu):
@@ -361,11 +361,8 @@ def test_piv_field_gpu_center_offset(piv_field_gpu):
 
 
 # TODO
-def test_piv_field_gpu_return_search_offset(piv_field_gpu):
-    offset_x, offset_y = piv_field_gpu.center_offset
-
-    assert isinstance(offset_x, int)
-    assert isinstance(offset_y, int)
+def test_piv_field_gpu_get_search_offset(piv_field_gpu):
+    pass
 
 
 def test_piv_gpu_coords(piv_gpu):
@@ -390,7 +387,6 @@ def test_piv_gpu_s2n(piv_gpu):
 def test_piv_gpu_free_gpu_data(piv_gpu):
     piv_gpu.free_gpu_data()
 
-    assert piv_gpu._corr is None
     assert piv_gpu._piv_fields is None
     assert piv_gpu._frame_mask is None
 
@@ -421,6 +417,31 @@ def test_piv_gpu_get_frame_mask(piv_gpu, boolean_np_array):
     assert isinstance(frame_mask, gpuarray.GPUArray)
 
 
+def test_piv_gpu_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
+    # Need to test different dimensions.
+    shape = (22, 30)
+
+    u = v = gpu_array(shape, center=0.0, half_width=1.0)
+    mask = boolean_gpu_array(shape, seed=1)
+    piv_gpu._piv_field_k._mask = mask
+    piv_gpu._piv_field_k = piv_gpu._get_piv_fields()[0]
+    piv_gpu._k = 1
+    dp_u, dp_v = piv_gpu._get_predictions(u, v)
+
+    assert isinstance(dp_u, gpuarray.GPUArray)
+    assert isinstance(dp_v, gpuarray.GPUArray)
+
+
+# TODO
+def test_piv_gpu_get_new_velocity():
+    pass
+
+
+# TODO
+def test_piv_gpu_get_displacement_peaks():
+    pass
+
+
 def test_piv_gpu_get_search_size(piv_gpu):
     piv_gpu._k = 0
     piv_gpu._piv_field_k.window_size = 8
@@ -442,14 +463,14 @@ def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
     assert isinstance(strain, gpuarray.GPUArray)
 
 
-def test_piv_gpu_update_values(piv_gpu, gpu_array, boolean_gpu_array):
+def test_piv_gpu_update_velocity(piv_gpu, gpu_array, boolean_gpu_array):
     # Need to test the switch cases.
     shape = (16, 16)
 
     i_peak = gpu_array(shape, center=0.0, half_width=1.0)
     mask = boolean_gpu_array(shape, seed=1)
     piv_gpu._piv_field_k._mask_d = mask
-    u, v = piv_gpu._update_values(i_peak, i_peak, i_peak, i_peak)
+    u, v = piv_gpu._update_velocity(i_peak, i_peak, i_peak, i_peak)
 
     assert isinstance(u, gpuarray.GPUArray)
     assert isinstance(v, gpuarray.GPUArray)
@@ -473,21 +494,6 @@ def test_piv_gpu_gpu_replace_vectors(k, piv_gpu, gpu_array, boolean_gpu_array):
 
     assert isinstance(u, gpuarray.GPUArray)
     assert isinstance(v, gpuarray.GPUArray)
-
-
-def test_piv_gpu_get_next_iteration_predictions(piv_gpu, gpu_array, boolean_gpu_array):
-    # Need to test different dimensions.
-    shape = (22, 30)
-
-    u = v = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = boolean_gpu_array(shape, seed=1)
-    piv_gpu._piv_field_k._mask = mask
-    piv_gpu._piv_field_k = piv_gpu._get_piv_fields()[0]
-    piv_gpu._k = 0
-    dp_u, dp_v = piv_gpu._get_next_iteration_predictions(u, v)
-
-    assert isinstance(dp_u, gpuarray.GPUArray)
-    assert isinstance(dp_v, gpuarray.GPUArray)
 
 
 def test_piv_gpu_get_residual(piv_gpu, array_pair):

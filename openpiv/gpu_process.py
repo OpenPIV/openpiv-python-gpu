@@ -170,7 +170,7 @@ class CorrelationGPU:
             1D float (m x n)
 
         """
-        i_peak, j_peak = self._return_displacement()
+        i_peak, j_peak = self._get_displacement()
 
         return i_peak, j_peak
 
@@ -256,13 +256,13 @@ class CorrelationGPU:
         )
         self.peak1_idx = gpuarray.if_positive(corr_peak1, peak1_idx, center)
 
-    def _return_displacement(self):
+    def _get_displacement(self):
         """Returns the subpixel locations of the displacement peaks.
 
         Returns
         -------
         i_peak, j_peak : GPUArray
-            1D int (n_windows,)
+            1D int (n_windows)
 
         """
         assert (
@@ -286,7 +286,7 @@ class CorrelationGPU:
         Returns
         -------
         i_peak, j_peak : GPUArray
-            1D int (n_windows,)
+            1D int (n_windows)
 
         """
         i_peak = row_sp - DTYPE_f(self.fft_ht // 2)
@@ -306,8 +306,7 @@ class CorrelationGPU:
         -------
         ndarray
             2D float (m, n), the base-10 logarithm of the signal-to-noise ratio from the
-            correlation map for each
-            vector.
+            correlation map for each vector.
 
         """
         assert self.correlation is not None, (
@@ -327,13 +326,13 @@ class CorrelationGPU:
                     "Mask width must be integer from 0 and to less than half the"
                     "correlation window height or width. Recommended value is 2."
                 )
-                s2n_ratio = self._return_peak2peak()
+                s2n_ratio = self._get_peak2peak()
 
             self._s2n_ratio = s2n_ratio
 
         return self._s2n_ratio
 
-    def _return_peak2peak(self):
+    def _get_peak2peak(self):
         """Returns the signal-to-noise ratio computed using the peak-to-peak method."""
         assert self.correlation is not None
         peak1_idx = self._get_peak_idx()
@@ -445,7 +444,7 @@ class PIVFieldGPU:
             if not 0 < search_size == int(search_size):
                 raise ValueError("search_size must be a positive integer or None.")
         search_size = search_size if search_size is not None else self.window_size
-        offset_a, offset_b = self._return_search_offset(search_size)
+        offset_a, offset_b = self._get_search_offset(search_size)
 
         win_a = _gpu_window_slice(
             frame_a,
@@ -511,7 +510,7 @@ class PIVFieldGPU:
         """
         return _center_offset(self.frame_shape, self.window_size, self.spacing)
 
-    def _return_search_offset(self, search_size):
+    def _get_search_offset(self, search_size):
         """Returns offset to center each window with extended search.
 
         Parameters
@@ -782,7 +781,6 @@ class PIVGPU:
         self.s2n_width = s2n_width
         self.n_fft = n_fft
 
-        self._corr = None
         self._piv_fields = None
         self._frame_mask = None
 
@@ -804,11 +802,10 @@ class PIVGPU:
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, ndim=2)
         u = v = None
         u_previous = v_previous = None
-        dp_u = dp_v = None
         max_iter = sum(self.window_size_iters)
 
         # Send masked frames to device.
-        frame_a, frame_b = self._frames_to_gpu(frame_a, frame_b)
+        frames = self._frames_to_gpu(frame_a, frame_b)
 
         # Create the correlation object.
         self._corr = CorrelationGPU(
@@ -825,42 +822,18 @@ class PIVGPU:
             self._piv_field_k = self._get_piv_fields()[k]
             _log_iteration(k)
 
-            # CROSS-CORRELATION
-            # Get arguments for the correlation class.
-            search_size = self._get_search_size()
-            shift, strain = self._get_window_deformation(dp_u, dp_v)
+            # Compute new velocity previous velocity.
+            u, v = self._get_new_velocity(frames, u_previous, v_previous)
 
-            # Get stack of all interrogation windows.
-            win_a, win_b = self._piv_field_k.stack_iw(
-                frame_a, frame_b, shift, strain, search_size=search_size
-            )
-
-            # Get window displacement to subpixel accuracy.
-            self._corr(
-                win_a,
-                win_b,
-                search_size=search_size,
-                shift=shift,
-                strain=strain,
-            )
-            i_peak, j_peak = self._corr.displacement_peaks
-
-            # Update the field with new values.
-            u, v = self._update_values(dp_u, dp_v, i_peak, j_peak)
-            residual = self._get_residual(i_peak, j_peak)
-            _log_residual(residual)
-
-            # VALIDATION
+            # Validate velocity fields.
             u, v, val_locations = self._validate_fields(u, v, u_previous, v_previous)
             u, v = self._smooth_fields(u, v, val_locations)
 
-            # NEXT ITERATION
-            # Compute the predictors dp_x and dp_y from the current displacements.
-            if k < max_iter - 1:
-                u_previous = u
-                v_previous = v
-                dp_u, dp_v = self._get_next_iteration_predictions(u, v)
+            # Save the previous velocity.
+            u_previous = u
+            v_previous = v
 
+        # Scale by given time factor.
         u = (u / DTYPE_f(self.dt)).get()
         v = (v / DTYPE_f(-self.dt)).get()
 
@@ -908,7 +881,6 @@ class PIVGPU:
 
     def free_gpu_data(self):
         """Frees data from GPU."""
-        self._corr = None
         self._piv_fields = None
         self._frame_mask = None
 
@@ -956,6 +928,69 @@ class PIVGPU:
 
         return self._frame_mask
 
+    def _get_new_velocity(self, frames, u, v):
+        """Returns velocity fields from prediction."""
+        # Compute the predictors dp_x and dp_y from the previous displacements.
+        dp_u = dp_v = None
+        if self._k > 0:
+            dp_u, dp_v = self._get_predictions(u, v)
+
+        # Get the displacement peaks.
+        i_peak, j_peak = self._get_displacement_peaks(frames, dp_u, dp_v)
+        residual = self._get_residual(i_peak, j_peak)
+        _log_residual(residual)
+
+        # Update the field with new values.
+        u, v = self._update_velocity(dp_u, dp_v, i_peak, j_peak)
+
+        return u, v
+
+    def _get_predictions(self, u, v):
+        """Returns the predicted velocity field to begin the next iteration."""
+        _check_arrays(
+            u, v, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u.shape, ndim=2
+        )
+        piv_fields = self._get_piv_fields()
+        x0, y0 = piv_fields[self._k - 1].grid_coords
+        x1, y1 = self._piv_field_k.grid_coords
+        mask = piv_fields[self._k - 1].get_gpu_mask()
+
+        # Interpolate if dimensions do not agree.
+        if piv_fields[self._k - 1].window_size != self._piv_field_k.window_size:
+            dp_u = gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
+            dp_v = gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
+        else:
+            dp_u = u
+            dp_v = v
+
+        return dp_u, dp_v
+
+    def _get_displacement_peaks(self, frames, dp_u, dp_v):
+        """Returns displacements peaks from cross-correlation of frames using deforming
+        interrogation windows."""
+        frame_a, frame_b = frames
+
+        # Get arguments for the correlation class.
+        search_size = self._get_search_size()
+        shift, strain = self._get_window_deformation(dp_u, dp_v)
+
+        # Get stack of all interrogation windows.
+        win_a, win_b = self._piv_field_k.stack_iw(
+            frame_a, frame_b, shift, strain, search_size=search_size
+        )
+
+        # Get window displacement to subpixel accuracy.
+        self._corr(
+            win_a,
+            win_b,
+            search_size=search_size,
+            shift=shift,
+            strain=strain,
+        )
+        i_peak, j_peak = self._corr.displacement_peaks
+
+        return i_peak, j_peak
+
     def _get_search_size(self):
         """Returns the extended size used during the first iteration."""
         search_size = None
@@ -977,7 +1012,7 @@ class PIVGPU:
 
         return shift, strain
 
-    def _update_values(self, dp_u, dp_v, i_peak, j_peak):
+    def _update_velocity(self, dp_u, dp_v, i_peak, j_peak):
         """Updates the velocity values after each iteration."""
         shape = self._piv_field_k.shape
         mask = self._piv_field_k.get_gpu_mask(return_array=True)
@@ -996,12 +1031,11 @@ class PIVGPU:
         size = u.size
         val_locations = None
         mask = self._piv_field_k.get_gpu_mask()
-        # Retrieve signal-to-noise ratio only if required for validation.
         s2n_ratio = None
         if "s2n" in self.validation_method and self.num_validation_iters > 0:
             s2n_ratio = self._corr.s2n_ratio
 
-        # Do the validation.
+        # Create the validation object.
         validation_gpu = ValidationGPU(
             u.shape,
             mask=mask,
@@ -1012,12 +1046,12 @@ class PIVGPU:
             rms_tol=self.rms_tol,
         )
         for i in range(self.num_validation_iters):
+            # Do the validation.
             val_locations = validation_gpu(u, v, s2n=s2n_ratio)
             u_mean, v_mean = validation_gpu.median
 
             # Replace invalid vectors.
             n_val = int(gpuarray.sum(val_locations).get())
-            _log_validation(n_val, size)
             if n_val > 0:
                 u, v = self._replace_vectors(
                     u, v, u_previous, v_previous, u_mean, v_mean, val_locations
@@ -1025,6 +1059,8 @@ class PIVGPU:
             else:
                 break
             validation_gpu.free_gpu_data()
+
+            _log_validation(n_val, size)
 
         return u, v, val_locations
 
@@ -1069,32 +1105,13 @@ class PIVGPU:
         return u, v
 
     def _smooth_fields(self, u, v, val_locations):
+        """Smoothes the velocity field using smoothn."""
         mask = self._piv_field_k.get_gpu_mask()
         if self.smooth:
             w = (1 - val_locations) if val_locations is not None else None
             u, v = gpu_smoothn(u, v, s=self.smoothing_par, mask=mask, w=w)
 
         return u, v
-
-    def _get_next_iteration_predictions(self, u, v):
-        """Returns the velocity field to begin the next iteration."""
-        _check_arrays(
-            u, v, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u.shape, ndim=2
-        )
-        piv_fields = self._get_piv_fields()
-        x0, y0 = self._piv_field_k.grid_coords
-        x1, y1 = piv_fields[self._k + 1].grid_coords
-        mask = self._piv_field_k.get_gpu_mask()
-
-        # Interpolate if dimensions do not agree.
-        if piv_fields[self._k + 1].window_size != self._piv_field_k.window_size:
-            dp_u = gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
-            dp_v = gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
-        else:
-            dp_u = u
-            dp_v = v
-
-        return dp_u, dp_v
 
     def _get_residual(self, i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
@@ -1338,7 +1355,7 @@ def gpu_fft_shift(correlation):
 mod_interpolate = SourceModule(
     """
 __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid,
-                    float *y_grid, float buffer_x, float buffer_y, float spacing_x,
+                    float *y_grid, float offset_x, float offset_y, float spacing_x,
                     float spacing_y, int ht, int wd, int n, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1347,8 +1364,8 @@ __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid,
     // Map indices to old mesh coordinates.
     int x_idx = t_idx % n;
     int y_idx = t_idx / n;
-    float x = (x_grid[x_idx] - buffer_x) / spacing_x;
-    float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+    float x = (x_grid[x_idx] - offset_x) / spacing_x;
+    float y = (y_grid[y_idx] - offset_y) / spacing_y;
 
     // Coerce interpolation point to within limits of domain.
     x = x * (x >= 0.0f && x <= wd - 1) + (wd - 1) * (x > wd - 1);
@@ -1368,7 +1385,7 @@ __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid,
 }
 
 __global__ void bilinear_interpolation_mask(float *f1, float *f0, float *x_grid,
-                    float *y_grid, int *mask, float buffer_x, float buffer_y,
+                    float *y_grid, int *mask, float offset_x, float offset_y,
                     float spacing_x, float spacing_y, int ht, int wd, int n, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1377,8 +1394,8 @@ __global__ void bilinear_interpolation_mask(float *f1, float *f0, float *x_grid,
     // Map indices to old mesh coordinates.
     int x_idx = t_idx % n;
     int y_idx = t_idx / n;
-    float x = (x_grid[x_idx] - buffer_x) / spacing_x;
-    float y = (y_grid[y_idx] - buffer_y) / spacing_y;
+    float x = (x_grid[x_idx] - offset_x) / spacing_x;
+    float y = (y_grid[y_idx] - offset_y) / spacing_y;
 
     // Coerce interpolation point to within limits of domain.
     x = x * (x >= 0.0f && x <= wd - 1) + (wd - 1) * (x > wd - 1);
@@ -1543,7 +1560,7 @@ def _center_offset(frame_shape, window_size, spacing):
 mod_window_slice = SourceModule(
     """
 __global__ void window_slice(float *output, float *input, int ws, int spacing,
-                    int buffer_x, int buffer_y, int n, int wd, int ht)
+                    int offset_x, int offset_y, int n, int wd, int ht)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int idx_i = blockIdx.x;
@@ -1552,8 +1569,8 @@ __global__ void window_slice(float *output, float *input, int ws, int spacing,
     if (idx_x >= ws || idx_y >= ws) {return;}
 
     // Do the mapping.
-    int x = (idx_i % n) * spacing + buffer_x + idx_x;
-    int y = (idx_i / n) * spacing + buffer_y + idx_y;
+    int x = (idx_i % n) * spacing + offset_x + idx_x;
+    int y = (idx_i / n) * spacing + offset_y + idx_y;
 
     // Indices of new array to map to.
     int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
@@ -1569,7 +1586,7 @@ __global__ void window_slice(float *output, float *input, int ws, int spacing,
 
 __global__ void window_slice_deform(float *output, float *input, float *shift,
                     float *strain, float dt, int deform, int ws, int spacing,
-                    int buffer_x, int buffer_y, int n_windows, int n, int wd, int ht)
+                    int offset_x, int offset_y, int n_windows, int n, int wd, int ht)
 {
     // dt : factor to apply to the shift and strain tensors
     // wd : width (number of columns in the full image)
@@ -1610,8 +1627,8 @@ __global__ void window_slice_deform(float *output, float *input, float *shift,
     }
 
     // Do the mapping
-    float x = (idx_i % n) * spacing + buffer_x + idx_x + dx;
-    float y = (idx_i / n) * spacing + buffer_y + idx_y + dy;
+    float x = (idx_i % n) * spacing + offset_x + idx_x + dx;
+    float y = (idx_i / n) * spacing + offset_y + idx_y + dy;
 
     // Do bilinear interpolation.
     int x1 = floorf(x) - (x == wd - 1);
@@ -1954,7 +1971,7 @@ def _gpu_window_index_f(correlation, indices):
     correlation : GPUArray
         2D float (n_windows, m * n), correlation values of each window.
     indices : GPUArray
-        1D int (n_windows,), indexes of the peaks.
+        1D int (n_windows), indexes of the peaks.
 
     Returns
     -------
@@ -2140,14 +2157,14 @@ def _gpu_subpixel_approximation(correlation, peak_idx, method):
        3D float (n_windows, fft_wd, fft_ht), cross-correlation data from each window
        pair.
     peak_idx : GPUArray
-        1D int (n_windows,), index position of the correlation peaks.
+        1D int (n_windows), index position of the correlation peaks.
     method : str {'gaussian', 'parabolic', 'centroid'}
         Method of the subpixel approximation.
 
     Returns
     -------
     row_sp, col_sp : GPUArray
-        1D float (n_windows,), row and column positions of the subpixel peak.
+        1D float (n_windows), row and column positions of the subpixel peak.
 
     """
     _check_arrays(correlation, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
@@ -2257,7 +2274,7 @@ def _get_second_peak(correlation_positive, peak1_idx, mask_width):
         3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
         removed.
     peak1_idx : GPUArray
-        1D int (n_windows,) inddex locations of the first correlation peaks.
+        1D int (n_windows) index locations of the first correlation peaks.
     mask_width : int
         Half size of the region around the first correlation peak to ignore for
         finding the second peak.
@@ -2333,7 +2350,7 @@ def _gpu_mask_peak(correlation_positive, peak_idx, mask_width):
         3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
         removed.
     peak_idx : GPUArray
-        1D int (n_windows,), index position of the peaks.
+        1D int (n_windows), index position of the peaks.
     mask_width : int
         Half size of the region around the first correlation peak to ignore for finding
         the second peak.
@@ -2409,7 +2426,7 @@ def _gpu_mask_rms(correlation_positive, corr_peak):
         3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
         removed.
     corr_peak : GPUArray
-        1D float (n_windows,), value of peaks.
+        1D float (n_windows), value of peaks.
 
     Returns
     -------
