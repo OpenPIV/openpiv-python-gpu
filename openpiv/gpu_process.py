@@ -125,7 +125,7 @@ class CorrelationGPU:
         self._corr_peak1 = None
         self._corr_idx = None
 
-    def __call__(self, win_a, win_b, search_size=None, shift=None, strain=None):
+    def __call__(self, win_a, win_b, shift=None, strain=None):
         """Returns the pixel peaks using the specified correlation method.
 
         Parameters
@@ -133,8 +133,6 @@ class CorrelationGPU:
         win_a, win_b : GPUArray
             3D float (n_windows, ht, wd), interrogation windows stacked in the first
             dimension.
-        search_size : int or None, optional
-            Search window size to search in the second frame.
         shift : GPUArray or None, optional
             2D float [du, dv], du and dv are 1D arrays of the x-y shift at each
             interrogation window of the second frame. This is using the x-y convention
@@ -445,7 +443,8 @@ class PIVFieldGPU:
         if search_size is not None:
             if not 0 < search_size == int(search_size):
                 raise ValueError("search_size must be a positive integer or None.")
-        search_size = search_size if search_size is not None else self.window_size
+        else:
+            search_size = self.window_size
         offset_a, offset_b = self._get_search_offset(search_size)
 
         win_a = _gpu_window_slice(
@@ -585,7 +584,7 @@ def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
 
 
 class _FrameShape(_Validator):
-    """Tuple of integers."""
+    """2-tuple of integers."""
 
     def validate(self, frame_shape):
         frame_shape = (
@@ -605,37 +604,61 @@ class _FrameShape(_Validator):
 
 
 class _WindowSizeIters(_Validator):
-    """Tuple of integers."""
+    """Sequence of 2-tuple of integers, corresponding to window size and iterations."""
 
-    def validate(self, ws_iters):
-        if not isinstance(ws_iters, (Number, list, tuple)):
-            raise TypeError("{} must be an integer or sequence of integers.")
-        ws_iters = (
-            (int(ws_iters),)
-            if isinstance(ws_iters, (Number, float, int))
-            else tuple(ws_iters)
-        )
-        if not all([1 <= ws == int(ws) for ws in ws_iters]):
-            raise ValueError(
-                "Window sizes must be integers greater than or equal to 1."
-            )
-        if not sum(ws_iters) >= 1:
-            raise ValueError(
-                "Sum of window_size_iters must be equal to or greater than 1."
+    def validate(self, window_size_iters):
+        # Check is a sequence.
+        if not isinstance(window_size_iters, (list, tuple)):
+            raise TypeError(
+                "{} must be a 2-tuple [window_size, num_iterations] or a sequence of"
+                "such 2-tuples.".format(self.public_name)
             )
 
-        return ws_iters
+        # Check nesting of sequence.
+        if all([isinstance(ws_iter, (list, tuple)) for ws_iter in window_size_iters]):
+            window_size_iters = list(window_size_iters)
+        else:
+            window_size_iters = [window_size_iters]
 
+        # Check values of sequence.
+        for i, values in enumerate(window_size_iters):
+            # Check is 2-tuple.
+            if len(values) != 2:
+                raise ValueError(
+                    "{} must contain 2-tuples [window_size, num_iterations].".format(
+                        self.public_name
+                    )
+                )
+            ws, num_iters = values
 
-class _MinWindowSize(_Integer):
-    """Integer."""
+            # Check window size.
+            if not isinstance(ws, (Number, float, int)):
+                raise TypeError(
+                    "Window sizes in {} must be a numeric type.".format(
+                        self.public_name
+                    )
+                )
+            if ws % 8 != 0:
+                raise ValueError(
+                    "Window sizes in {} must be a multiple of 8.".format(
+                        self.public_name
+                    )
+                )
 
-    def validate(self, value):
-        value = _Integer.validate(self, value)
-        if value % 8 != 0:
-            raise ValueError("{} must be a multiple of 8.".format(self.public_name))
+            # Check iterations.
+            if not isinstance(num_iters, (Number, float, int)):
+                raise TypeError(
+                    "Number of iterations in {} must be a numeric type.".format(
+                        self.public_name
+                    )
+                )
+            if not 1 <= ws == int(ws):
+                raise ValueError(
+                    "Number of iterations in {} must be integers greater than or equal"
+                    "to 1.".format(self.public_name)
+                )
 
-        return value
+        return tuple([(ws, num_iters) for ws, num_iters in window_size_iters])
 
 
 class PIVGPU:
@@ -676,13 +699,10 @@ class PIVGPU:
     ----------
     frame_shape : ndarray or tuple of ints
         (ht, wd), size of the images in pixels.
-    window_size_iters : int or tuple of ints, optional
-        Number of iterations performed at each window size. The length of
-        window_size_iters gives the number of different windows sizes to use, while the
-        value of each entry gives the number of times a window size is use.
-    min_window_size : int or tuple of ints, optional
-        Length of the sides of the square interrogation window. Only supports multiples
-        of 8.
+    window_size_iters : tuple, optional
+        2-tuples of ints [[window_size0, num_size0_iters], ...], the window sizes and
+        number of iterations to perform at each size.
+        e.g. [(32, 1), (16, 2), (8, 2)]
     overlap_ratio : float, optional
         Ratio of overlap between two windows (between 0 and 1).
     dt : float, optional
@@ -724,7 +744,6 @@ class PIVGPU:
 
     frame_shape = _FrameShape()
     window_size_iters = _WindowSizeIters()
-    min_window_size = _MinWindowSize(min_value=8)
     overlap_ratio = _Number(
         min_value=0, max_value=1, min_closure=False, max_closure=False
     )
@@ -740,8 +759,7 @@ class PIVGPU:
     def __init__(
         self,
         frame_shape,
-        window_size_iters=(1, 2),
-        min_window_size=16,
+        window_size_iters=((32, 1), (16, 2)),
         overlap_ratio=0.5,
         dt=1,
         mask=None,
@@ -763,7 +781,6 @@ class PIVGPU:
     ):
         self.frame_shape = frame_shape
         self.window_size_iters = window_size_iters
-        self.min_window_size = min_window_size
         self.overlap_ratio = overlap_ratio
         self.dt = dt
         self.mask = mask
@@ -805,7 +822,6 @@ class PIVGPU:
         _check_arrays(frame_a, frame_b, array_type=np.ndarray, ndim=2)
         u = v = None
         dp_u = dp_v = None
-        max_iter = sum(self.window_size_iters)
 
         # Send masked frames to device.
         frames = self._frames_to_gpu(frame_a, frame_b)
@@ -820,7 +836,7 @@ class PIVGPU:
         )
 
         # MAIN LOOP
-        for k in range(max_iter):
+        for k in _piv_iter(self.window_size_iters):
             self._k = k
             self._piv_field_k = self._get_piv_fields()[k]
             _log_iteration(k)
@@ -897,9 +913,7 @@ class PIVGPU:
         """Returns piv-field object for each iteration."""
         if self._piv_fields is None:
             self._piv_fields = []
-            for window_size in _window_sizes(
-                self.window_size_iters, self.min_window_size
-            ):
+            for window_size in _window_sizes(self.window_size_iters):
                 window_size = window_size
                 spacing = _spacing(window_size, self.overlap_ratio)
                 self._piv_fields.append(
@@ -987,7 +1001,6 @@ class PIVGPU:
         self._corr_gpu(
             win_a,
             win_b,
-            search_size=search_size,
             shift=shift,
             strain=strain,
         )
@@ -1043,7 +1056,7 @@ class PIVGPU:
             s2n_ratio = self._corr_gpu.s2n_ratio
 
         # Create the validation object.
-        validation_gpu = ValidationGPU(
+        self._validation_gpu = ValidationGPU(
             u.shape,
             mask=mask,
             validation_method=self.validation_method,
@@ -1058,32 +1071,36 @@ class PIVGPU:
                 s2n_ratio = None
 
             # Do the validation.
-            new_val_locations = validation_gpu(u, v, s2n=s2n_ratio)
+            new_val_locations = self._validation_gpu(u, v, s2n=s2n_ratio)
 
-            # Save the validation locations.
-            # val_locations = gpuarray.logical_or(val_locations, val_locations)
-            if val_locations is None:
-                val_locations = new_val_locations
-            else:
-                val_locations = gpu_misc.gpu_logical_or(new_val_locations, val_locations)
+            # Save the validation locations
+            val_locations = _update_validation_locations(
+                val_locations, new_val_locations
+            )
 
             # Abort if there are no invalid vectors.
-            n_val = validation_gpu.num_validation_locations
+            n_val = self._validation_gpu.num_validation_locations
             _log_validation(n_val, size)
             if n_val == 0:
                 break
 
             # Replace invalid vectors.
-            if self._k == 0:
-                # For first iteration, replace invalid vectors with local median.
-                u, v = validation_gpu.replace_vectors(*validation_gpu.median)
-            else:
-                # For subsequent iterations, replace with prediction.
-                u, v = validation_gpu.replace_vectors(dp_u, dp_v)
+            u, v = self._replace_invalid_vectors(dp_u, dp_v)
 
-        validation_gpu.free_gpu_data()
+        self._validation_gpu = None
 
         return u, v, val_locations
+
+    def _replace_invalid_vectors(self, dp_u, dp_v):
+        """Returns vector fields with invalid vectors replaced."""
+        if self._k == 0:
+            # For first iteration, replace invalid vectors with local median.
+            u, v = self._validation_gpu.replace_vectors(*self._validation_gpu.median)
+        else:
+            # For subsequent iterations, replace with prediction.
+            u, v = self._validation_gpu.replace_vectors(dp_u, dp_v)
+
+        return u, v
 
     def _smooth_fields(self, u, v, val_locations):
         """Smoothes the velocity field using smoothn."""
@@ -1332,11 +1349,11 @@ def gpu_fft_shift(correlation):
     return correlation_shift
 
 
-def _window_sizes(ws_iters, min_window_size):
+def _window_sizes(window_size_iters):
     """Returns the window size at each iteration."""
-    for i, ws in enumerate(ws_iters):
-        for _ in range(ws):
-            yield (2 ** (len(ws_iters) - i - 1)) * min_window_size
+    for ws_iter in window_size_iters:
+        for _ in range(ws_iter[1]):
+            yield ws_iter[0]
 
 
 def _spacing(window_size, overlap_ratio):
@@ -2279,6 +2296,15 @@ def _gpu_mask_rms(correlation_positive, corr_peak):
     return correlation_masked
 
 
+def _piv_iter(window_size_iters):
+    """Returns the total number of PIV iterations that will be performed."""
+    i = 0
+    for ws_iter in window_size_iters:
+        for _ in range(ws_iter[1]):
+            yield i
+            i += 1
+
+
 def _field_shift(u, v):
     """Returns the stacked pixel shifts in each direction."""
     _check_arrays(
@@ -2342,6 +2368,17 @@ def _gpu_update_field(dp, peak, mask):
     )
 
     return f
+
+
+def _update_validation_locations(val_locations, new_val_locations):
+    """Returns validation locations"""
+    if val_locations is None:
+        val_locations = new_val_locations
+    else:
+        # val_locations = gpuarray.logical_or(val_locations, val_locations)
+        val_locations = gpu_misc.gpu_logical_or(new_val_locations, val_locations)
+
+    return val_locations
 
 
 def _log_iteration(k):

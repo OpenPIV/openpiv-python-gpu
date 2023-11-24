@@ -99,7 +99,12 @@ def get_neighbours_np(f, neighbours_present):
 
 
 # UNIT TESTS
-def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
+# TODO
+def test_replace_vectors():
+    pass
+
+
+def test_validation_clear_validation_data(validation_gpu, peaks_reshape):
     i_peaks, j_peaks = peaks_reshape
 
     validation_gpu(i_peaks)
@@ -117,6 +122,25 @@ def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
     )
 
 
+def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
+    i_peaks, j_peaks = peaks_reshape
+
+    validation_gpu(i_peaks)
+    validation_gpu.free_gpu_data()
+
+    assert all(
+        data is None
+        for data in [
+            validation_gpu._val_locations,
+            validation_gpu._f,
+            validation_gpu._neighbours_present,
+            validation_gpu._f_neighbours,
+            validation_gpu._f_mean,
+            validation_gpu._f_median,
+        ]
+    )
+
+
 @pytest.mark.parametrize("num_fields, type_", [(1, gpuarray.GPUArray), (2, list)])
 def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation_gpu):
     validation_gpu._f = peaks_reshape[:num_fields]
@@ -124,6 +148,11 @@ def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation
 
     assert isinstance(validation_gpu.median, type_)
     assert isinstance(validation_gpu.mean, type_)
+
+
+# TODO
+def test_validation_gpu_median_n_val():
+    pass
 
 
 def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
@@ -432,6 +461,11 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     assert np.allclose(f_rms_fluc_gpu, f_rms_fluc_np)
 
 
+# TODO
+def test_validation_gpu_median_get_n_val():
+    pass
+
+
 # INTEGRATION TESTS
 @pytest.mark.integtest
 @pytest.mark.parametrize(
@@ -439,7 +473,12 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     [("s2n", 316), ("median_velocity", 63), ("mean_velocity", 5), ("rms_velocity", 4)],
 )
 def test_validation_gpu_(
-    validation_method, expected_sum, validation_gpu, peaks_reshape, mask, s2n_ratio_reshape
+    validation_method,
+    expected_sum,
+    validation_gpu,
+    peaks_reshape,
+    mask,
+    s2n_ratio_reshape,
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method
@@ -498,7 +537,12 @@ class TestValidationParams:
 @pytest.mark.regression
 @pytest.mark.parametrize("validation_method", gpu_validation.ALLOWED_VALIDATION_METHODS)
 def test_validation_gpu_regression(
-    validation_method, validation_gpu, peaks_reshape, mask, ndarrays_regression, s2n_ratio_reshape
+    validation_method,
+    validation_gpu,
+    peaks_reshape,
+    mask,
+    ndarrays_regression,
+    s2n_ratio_reshape,
 ):
     validation_gpu.mask = mask
     validation_gpu.validation_method = validation_method

@@ -126,6 +126,7 @@ class ValidationGPU:
             "rms": rms_tol,
         }
 
+        self._n_val = None
         self._val_locations = None
         self._f = None
         self._f_neighbours = None
@@ -155,7 +156,8 @@ class ValidationGPU:
             locations of invalid vectors.
 
         """
-        self.free_gpu_data()
+        self._clear_validation_data()
+        self._n_val = None
         _check_arrays(
             *f, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=self.f_shape
         )
@@ -177,13 +179,41 @@ class ValidationGPU:
 
         return self._val_locations
 
+    def replace_vectors(self, *f_replace):
+        """Replace spurious vectors by the mean or median of the surrounding points.
+
+        f : GPUArray
+            2D float (m, n), velocity fields from which to get replacement vectors.
+
+        Returns
+        -------
+        GPUArray
+            2D float (m, n), velocity fields with invalid vectors replaced.
+
+        """
+        assert self._val_locations is not None, (
+            "Can only replace vectors after validation is performed. See __call__()"
+            "method."
+        )
+        assert len(f_replace) == self._num_fields
+        _check_arrays(
+            *f_replace,
+            array_type=gpuarray.GPUArray,
+            shape=self._f[0].shape,
+            dtype=self._f[0].dtype,
+        )
+
+        f = [
+            gpuarray.if_positive(self._val_locations, f_replace[i], self._f[i])
+            for i in range(self._num_fields)
+        ]
+
+        return f
+
     def free_gpu_data(self):
-        """Frees data from GPU."""
-        self._val_locations = None
-        self._f = None
-        self._f_neighbours = None
-        self._f_median = None
-        self._f_mean = None
+        """Free data from GPU."""
+        self._clear_validation_data()
+        self._neighbours_present = None
 
     @property
     def median(self):
@@ -203,20 +233,53 @@ class ValidationGPU:
 
         return f_mean
 
-    def _s2n_validation(self, sig2noise):
+    @property
+    def num_validation_locations(self):
+        """Local mean of surrounding 8 velocity vectors."""
+        return self._get_n_val()
+
+    def _check_validation_methods(self):
+        """Checks that input validation methods are allowed."""
+        if not all(
+            [
+                val_method in ALLOWED_VALIDATION_METHODS
+                for val_method in self.validation_method
+            ]
+        ):
+            raise ValueError(
+                "Invalid validation method(s). Allowed validation methods are: "
+                "{}".format(ALLOWED_VALIDATION_METHODS)
+            )
+
+    def _check_validation_tolerances(self):
+        """Checks that input validation methods are allowed."""
+        if not all([val_tol > 0 for val_tol in self.validation_tols.values()]):
+            raise ValueError(
+                "Invalid validation tolerances(s). Validation tolerances must be "
+                "greater than 0."
+            )
+
+    def _clear_validation_data(self):
+        """Clears previous validation data.."""
+        self._val_locations = None
+        self._f = None
+        self._f_neighbours = None
+        self._f_median = None
+        self._f_mean = None
+
+    def _s2n_validation(self, s2n_ratio):
         """Performs signal-to-noise validation on each field."""
-        assert (
-            sig2noise is not None
-        ), "signal-to-noise validation requires sig2noise to be passed."
+        if s2n_ratio is None:
+            return
         _check_arrays(
-            sig2noise,
+            s2n_ratio,
             array_type=gpuarray.GPUArray,
             dtype=DTYPE_f,
             size=prod(self.f_shape),
         )
         s2n_tol = log10(self.validation_tols["s2n"])
 
-        sig2noise_tol = sig2noise / DTYPE_f(s2n_tol)
+        sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)
         self._val_locations = _local_validation(sig2noise_tol, 1, self._val_locations)
 
     def _median_validation(self):
@@ -297,26 +360,13 @@ class ValidationGPU:
 
         return self._f_mean
 
-    def _check_validation_methods(self):
-        """Checks that input validation methods are allowed."""
-        if not all(
-            [
-                val_method in ALLOWED_VALIDATION_METHODS
-                for val_method in self.validation_method
-            ]
-        ):
-            raise ValueError(
-                "Invalid validation method(s). Allowed validation methods are: "
-                "{}".format(ALLOWED_VALIDATION_METHODS)
-            )
+    def _get_n_val(self):
+        if self._val_locations is None:
+            return None
+        if self._n_val is None:
+            self._n_val = int(gpuarray.sum(self._val_locations).get())
 
-    def _check_validation_tolerances(self):
-        """Checks that input validation methods are allowed."""
-        if not all([val_tol > 0 for val_tol in self.validation_tols.values()]):
-            raise ValueError(
-                "Invalid validation tolerances(s). Validation tolerances must be "
-                "greater than 0."
-            )
+        return self._n_val
 
 
 mod_validation = SourceModule(

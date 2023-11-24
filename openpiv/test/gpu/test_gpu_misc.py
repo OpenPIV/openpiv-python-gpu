@@ -163,9 +163,7 @@ def test_gpu_interpolate_mask(spacing, array_pair, boolean_array_pair):
     x1_d, y1_d = gpu_arrays(x1, y1)
 
     f1 = interp_mask_np(x0, y0, x1, y1, f0, mask)
-    f1_gpu = gpu_misc.gpu_interpolate(
-        x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d
-    ).get()
+    f1_gpu = gpu_misc.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d).get()
 
     assert np.allclose(f1_gpu, f1)
 
