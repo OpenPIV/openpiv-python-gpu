@@ -2375,7 +2375,7 @@ def _gpu_update_field(dp, peak, mask):
 
 
 def _update_validation_locations(val_locations, new_val_locations):
-    """Returns validation locations"""
+    """Returns combined validations locations."""
     if val_locations is None:
         val_locations = new_val_locations
     else:

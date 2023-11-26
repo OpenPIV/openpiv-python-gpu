@@ -465,32 +465,60 @@ def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
     assert isinstance(strain, gpuarray.GPUArray)
 
 
-def test_piv_gpu_update_velocity(piv_gpu, gpu_array, boolean_gpu_array):
-    # Need to test the switch cases.
-    shape = (16, 16)
+@pytest.mark.parametrize("dp_u", [True, False])
+def test_piv_gpu_update_velocity(
+    dp_u, piv_gpu, peaks_reshape, gpu_array, boolean_gpu_array
+):
+    i_peak, j_peak = peaks_reshape
 
-    i_peak = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = boolean_gpu_array(shape, seed=1)
+    dp_u = gpu_array(i_peak.shape, center=0.0, half_width=1.0) if dp_u else None
+    mask = boolean_gpu_array(i_peak.shape, seed=2)
+    piv_gpu._k = 0
     piv_gpu._piv_field_k._mask_d = mask
-    u, v = piv_gpu._update_velocity(i_peak, i_peak, i_peak, i_peak)
+    u, v = piv_gpu._update_velocity(dp_u, dp_u, i_peak, i_peak)
 
     assert isinstance(u, gpuarray.GPUArray)
     assert isinstance(v, gpuarray.GPUArray)
 
 
-def test_piv_gpu_validate_fields():
-    # TODO Ensure that the validation is executed each loop
-    pass
+@pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
+def test_piv_gpu_validate_fields(num_validation_iters, piv_gpu, gpu_array):
+    shape = (16, 16)
+
+    u = v = gpu_array(shape, center=0.0, half_width=1.0)
+    dp_u = dp_v = gpu_array(shape, center=0.0, half_width=1.0, seed=1)
+    piv_gpu.num_validation_iters = num_validation_iters
+    u, v, val_locations = piv_gpu._validate_fields(u, v, dp_u, dp_v)
+
+    assert isinstance(u, gpuarray.GPUArray)
+    assert isinstance(v, gpuarray.GPUArray)
+    if val_locations is not None:
+        assert isinstance(val_locations, gpuarray.GPUArray)
 
 
-def test_replace_invalid_vectors():
-    # TODO
-    pass
+@pytest.mark.parametrize("k", [0, 1])
+def test_replace_invalid_vectors(k, piv_gpu, validation_gpu, peaks_reshape, gpu_array):
+    dp_u, dp_v = peaks_reshape
+
+    piv_gpu._k = k
+    piv_gpu._validation_gpu = validation_gpu
+    piv_gpu._validation_gpu(dp_u, dp_v)
+    u, v = piv_gpu._replace_invalid_vectors(dp_u, dp_v)
+
+    assert isinstance(u, gpuarray.GPUArray)
+    assert isinstance(v, gpuarray.GPUArray)
 
 
-def test_smooth_fields():
-    # TODO
-    pass
+@pytest.mark.parametrize("val_locations", [True, False])
+def test_smooth_fields(val_locations, piv_gpu, gpu_array, boolean_np_array):
+    shape = (16, 16)
+
+    u = v = gpu_array(shape, center=0.0, half_width=1.0)
+    val_locations = boolean_np_array(shape, seed=1) if val_locations else None
+    u, v = piv_gpu._smooth_fields(u, v, val_locations)
+
+    assert isinstance(u, gpuarray.GPUArray)
+    assert isinstance(v, gpuarray.GPUArray)
 
 
 def test_piv_gpu_get_residual(piv_gpu, array_pair):
@@ -989,6 +1017,20 @@ def test_gpu_update_field(array_pair, boolean_array_pair):
     assert np.array_equal(f_np, f_gpu)
 
 
+@pytest.mark.parametrize("val_locations", [True, False])
+def test_update_validation_locations(val_locations, gpu_array):
+    shape = (16, 16)
+
+    val_locations = gpu_array(shape) if val_locations else None
+    new_val_locations = gpu_array(shape, seed=1)
+
+    val_locations = gpu_process._update_validation_locations(
+        val_locations, new_val_locations
+    )
+
+    assert isinstance(val_locations, gpuarray.GPUArray)
+
+
 # INTEGRATION TESTS
 @pytest.mark.integtest
 @pytest.mark.parametrize("process", [(512, 512)], indirect=True)
@@ -1015,46 +1057,6 @@ def test_correlation_gpu():
     """"""
     # This tests at a basic level that the gpu-correlation returns a believable result.
     pass
-
-
-@pytest.mark.integtest
-def test_gpu_piv_zero():
-    """Tests that zero-displacement is returned when the images are empty."""
-    shape = (512, 512)
-    frame_a = frame_b = np.zeros(shape, dtype=np.int32)
-    args = {
-        "mask": None,
-        "window_size_iters": ((32, 1), (16, 2)),
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 1,
-        "validation_method": "median_velocity",
-    }
-
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
-
-    assert np.allclose(u, 0, 1e-6)
-    assert np.allclose(v, 0, 1e-6)
-
-
-@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
-@pytest.mark.integtest
-def test_extended_search_area(process):
-    """"""
-    params = {
-        "mask": None,
-        "window_size_iters": ((16, 2), (8, 2)),
-        "overlap_ratio": 0.5,
-        "dt": 1,
-        "deform": True,
-        "smooth": True,
-        "num_validation_iters": 2,
-        "search_ratio": 2,
-    }
-
-    process(**params)
 
 
 # @pytest.fixture
@@ -1131,6 +1133,46 @@ def test_extended_search_area(process):
 #         }
 #
 #         _ = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+
+@pytest.mark.integtest
+def test_gpu_piv_zero():
+    """Tests that zero-displacement is returned when the images are empty."""
+    shape = (512, 512)
+    frame_a = frame_b = np.zeros(shape, dtype=np.int32)
+    args = {
+        "mask": None,
+        "window_size_iters": ((32, 1), (16, 2)),
+        "overlap_ratio": 0.5,
+        "dt": 1,
+        "deform": True,
+        "smooth": True,
+        "num_validation_iters": 1,
+        "validation_method": "median_velocity",
+    }
+
+    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+
+    assert np.allclose(u, 0, 1e-6)
+    assert np.allclose(v, 0, 1e-6)
+
+
+@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
+@pytest.mark.integtest
+def test_extended_search_area(process):
+    """"""
+    params = {
+        "mask": None,
+        "window_size_iters": ((16, 2), (8, 2)),
+        "overlap_ratio": 0.5,
+        "dt": 1,
+        "deform": True,
+        "smooth": True,
+        "num_validation_iters": 2,
+        "search_ratio": 2,
+    }
+
+    process(**params)
 
 
 @pytest.mark.integtest
