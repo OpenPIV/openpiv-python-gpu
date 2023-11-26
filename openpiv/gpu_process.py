@@ -92,8 +92,6 @@ class CorrelationGPU:
     n_fft : int or tuple of ints, optional
         (n_fft_x, n_fft_y), Window size multiplier for fft. Pass a tuple of length 2 for
         asymmetric multipliers -- this is not yet implemented.
-    center_field : bool, optional
-        Whether to center the vector field on the frame.
     s2n_method : str {'peak2peak', 'peak2energy', 'peak2rms'}, optional
         Method for evaluating the signal-to-noise ratio value from the correlation map.
     s2n_width : int, optional
@@ -110,13 +108,11 @@ class CorrelationGPU:
     def __init__(
         self,
         subpixel_method=SUBPIXEL_METHOD,
-        center_field=True,
         s2n_method=S2N_METHOD,
         s2n_width=S2N_WIDTH,
         n_fft=N_FFT,
     ):
         self.subpixel_method = subpixel_method
-        self.center_field = center_field
         self.s2n_method = s2n_method
         self.s2n_width = s2n_width
         self.n_fft = n_fft
@@ -153,24 +149,34 @@ class CorrelationGPU:
         # Correlate the windows.
         self._correlate_windows(win_a, win_b)
 
+    def get_displacement_peaks(self):
+        """Returns the subpixel locations of the displacement peaks.
+
+        Returns
+        -------
+        i_peak, j_peak : GPUArray
+            1D int (n_windows)
+
+        """
+        assert (
+            self._correlation is not None
+        ), "Can only return displacement after correlation peaks have been computed."
+
+        # Get the subpixel location.
+        row_sp, col_sp = _gpu_subpixel_approximation(
+            self._correlation, self._peak1_idx_, self.subpixel_method
+        )
+
+        # Center the peak displacement.
+        i_peak, j_peak = self._center_displacement(row_sp, col_sp)
+
+        return i_peak, j_peak
+
     def free_gpu_data(self):
         """Frees data from GPU."""
         self._correlation = None
         self._corr_peak1_ = None
         self._corr_idx = None
-
-    @property
-    def displacement_peaks(self):
-        """Subpixel locations of the displacement peaks.
-
-        Returns
-        -------
-        i_peak, j_peak : GPUArray
-            1D float (m x n)
-
-        """
-
-        return self._get_displacement()
 
     @property
     def s2n_ratio(self):
@@ -239,8 +245,9 @@ class CorrelationGPU:
     def _init_fft_shape(self, win):
         """Creates the shape of the fft windows padded up to power of 2 to boost
         speed."""
-        _, ht, wd = win.shape
+        n_windows, ht, wd = win.shape
 
+        self.n_windows = n_windows
         self.fft_wd = 2 ** ceil(log2(wd * self.n_fft[0]))
         self.fft_ht = 2 ** ceil(log2(ht * self.n_fft[1]))
         self.fft_shape = (self.fft_ht, self.fft_wd)
@@ -291,29 +298,6 @@ class CorrelationGPU:
         self._peak1_idx_ = gpuarray.if_positive(
             self._corr_peak1, self._peak1_idx, center
         )
-
-    def _get_displacement(self):
-        """Returns the subpixel locations of the displacement peaks.
-
-        Returns
-        -------
-        i_peak, j_peak : GPUArray
-            1D int (n_windows)
-
-        """
-        assert (
-            self._correlation is not None
-        ), "Can only return displacement after correlation peaks have been computed."
-
-        # Get the subpixel location.
-        row_sp, col_sp = _gpu_subpixel_approximation(
-            self._correlation, self._peak1_idx_, self.subpixel_method
-        )
-
-        # Center the peak displacement.
-        i_peak, j_peak = self._center_displacement(row_sp, col_sp)
-
-        return i_peak, j_peak
 
     def _center_displacement(self, row_sp, col_sp):
         """Returns the relative position of the peaks with respect to the center of the
@@ -830,7 +814,6 @@ class PIVGPU:
         # Create the correlation object.
         self._corr_gpu = CorrelationGPU(
             subpixel_method=self.subpixel_method,
-            center_field=self.center_field,
             s2n_method=self.s2n_method,
             s2n_width=self.s2n_width,
             n_fft=self.n_fft,
@@ -1008,7 +991,7 @@ class PIVGPU:
             shift=shift,
             strain=strain,
         )
-        i_peak, j_peak = self._corr_gpu.displacement_peaks
+        i_peak, j_peak = self._corr_gpu.get_displacement_peaks()
 
         return i_peak, j_peak
 

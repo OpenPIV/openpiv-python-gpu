@@ -181,7 +181,7 @@ def correlation_gpu(piv_field_gpu, frames_gpu):
 
 @pytest.fixture
 def peaks(correlation_gpu):
-    i_peak, j_peak = correlation_gpu.displacement_peaks
+    i_peak, j_peak = correlation_gpu.get_displacement_peaks()
 
     return i_peak, j_peak
 
