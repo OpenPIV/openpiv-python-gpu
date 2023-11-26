@@ -38,30 +38,30 @@ def mean_np(f_neighbours, neighbours_present):
     return f_mean
 
 
-def median_fluc_np(f_median, f_neighbours, neighbours_present):
+def median_residual_np(f_median, f_neighbours, neighbours_present):
     f_neighbours[neighbours_present == 0] = np.nan
-    f_median_fluc = np.nanmedian(
+    f_median_residual = np.nanmedian(
         np.abs(f_neighbours - f_median.reshape(*f_median.shape, 1)), axis=2
     )
-    f_median_fluc = np.nan_to_num(f_median_fluc, copy=False)
+    f_median_residual = np.nan_to_num(f_median_residual, copy=False)
 
-    return f_median_fluc
+    return f_median_residual
 
 
-def mean_fluc_np(f_mean, f_neighbours, neighbours_present):
+def mean_residual_np(f_mean, f_neighbours, neighbours_present):
     denominator = np.sum(neighbours_present, axis=2).astype(DTYPE_f)
     numerator = np.sum(np.abs(f_neighbours - f_mean.reshape(*f_mean.shape, 1)), axis=2)
-    f_mean_fluc = numerator / (denominator + (denominator == 0.0))
+    f_mean_residual = numerator / (denominator + (denominator == 0.0))
 
-    return f_mean_fluc
+    return f_mean_residual
 
 
 def rms_np(f_mean, f_neighbours, neighbours_present):
     denominator = np.sum(neighbours_present, axis=2).astype(DTYPE_f)
     numerator = np.sum((f_neighbours - f_mean.reshape(*f_mean.shape, 1)) ** 2, axis=2)
-    f_rms_fluc = numerator / (denominator + (denominator == 0.0))
+    f_rms_residual = numerator / (denominator + (denominator == 0.0))
 
-    return f_rms_fluc
+    return f_rms_residual
 
 
 def find_neighbours_np(shape, mask):
@@ -150,9 +150,11 @@ def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation
     assert isinstance(validation_gpu.mean, type_)
 
 
-# TODO
-def test_validation_gpu_median_n_val():
-    pass
+def test_validation_gpu_median_num_validation_locations(validation_gpu, peaks_reshape):
+    validation_gpu(*peaks_reshape)
+    n_val = validation_gpu.num_validation_locations
+
+    assert isinstance(n_val, int)
 
 
 def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
@@ -177,11 +179,11 @@ def test_validation_gpu_median_validation(peaks_reshape, mask, validation_gpu):
         f_median_d = gpu_validation._gpu_median_velocity(
             f_neighbours_d, neighbours_present_d
         )
-        f_median_fluc_d = gpu_validation._gpu_median_fluc(
+        f_median_residual_d = gpu_validation._gpu_median_residual(
             f_median_d, f_neighbours_d, neighbours_present_d
         )
         val_locations_d = gpu_validation._neighbour_validation(
-            f_d, f_median_d, f_median_fluc_d, tol, val_locations=val_locations_d
+            f_d, f_median_d, f_median_residual_d, tol, val_locations=val_locations_d
         )
     val_locations = val_locations_d.get()
     validation_gpu._median_validation()
@@ -202,11 +204,11 @@ def test_validation_gpu_mean_validation(peaks_reshape, mask, validation_gpu):
         f_mean_d = gpu_validation._gpu_mean_velocity(
             f_neighbours_d, neighbours_present_d
         )
-        f_mean_fluc_d = gpu_validation._gpu_mean_fluc(
+        f_mean_residual_d = gpu_validation._gpu_mean_residual(
             f_mean_d, f_neighbours_d, neighbours_present_d
         )
         val_locations_d = gpu_validation._neighbour_validation(
-            f_d, f_mean_d, f_mean_fluc_d, tol, val_locations=val_locations_d
+            f_d, f_mean_d, f_mean_residual_d, tol, val_locations=val_locations_d
         )
     val_locations = val_locations_d.get()
     validation_gpu._mean_validation()
@@ -308,6 +310,14 @@ def test_validation_gpu_get_mean(peaks_reshape, validation_gpu):
     assert all([np.array_equal(f_mean_gpu_l[i], f_mean_l[i]) for i in range(n)])
 
 
+def test_validation_gpu_get_n_val(validation_gpu, peaks_reshape):
+    validation_gpu(*peaks_reshape)
+    val_locations = validation_gpu._val_locations.get()
+    n_val = validation_gpu._get_n_val()
+
+    assert np.sum(val_locations) == n_val
+
+
 def test_local_validation(array_pair, boolean_array_pair):
     shape = (16, 16)
     tol = 0.5
@@ -329,14 +339,14 @@ def test_neighbour_validation(array_pair, boolean_array_pair):
 
     f, f_d = array_pair(shape)
     f_mean, f_mean_d = array_pair(shape, seed=1)
-    f_mean_fluc, f_mean_fluc_d = array_pair(shape, seed=2)
+    f_mean_residual, f_mean_residual_d = array_pair(shape, seed=2)
     val_locations, val_locations_d = boolean_array_pair(shape, seed=3)
 
-    val_locations_np = (np.abs(f - f_mean) / (f_mean_fluc + 0.1) > tol).astype(
+    val_locations_np = (np.abs(f - f_mean) / (f_mean_residual + 0.1) > tol).astype(
         DTYPE_i
     ) | val_locations
     val_locations_gpu = gpu_validation._neighbour_validation(
-        f_d, f_mean_d, f_mean_fluc_d, tol, val_locations=val_locations_d
+        f_d, f_mean_d, f_mean_residual_d, tol, val_locations=val_locations_d
     ).get()
 
     assert np.array_equal(val_locations_gpu, val_locations_np)
@@ -386,7 +396,7 @@ def test_gpu_median_velocity(array_pair, boolean_gpu_array):
     assert np.array_equal(f_median_gpu, f_median_np)
 
 
-def test_gpu_median_fluc(array_pair, boolean_gpu_array):
+def test_gpu_median_residual(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
@@ -397,14 +407,14 @@ def test_gpu_median_fluc(array_pair, boolean_gpu_array):
     f_median_d = gpu_validation._gpu_median_velocity(
         f_neighbours_d, neighbours_present_d
     )
-    f_median_fluc_np = median_fluc_np(
+    f_median_residual_np = median_residual_np(
         f_median_d.get(), f_neighbours_d.get(), neighbours_present_d.get()
     )
-    f_median_fluc_gpu = gpu_validation._gpu_median_fluc(
+    f_median_residual_gpu = gpu_validation._gpu_median_residual(
         f_median_d, f_neighbours_d, neighbours_present_d
     ).get()
 
-    assert np.array_equal(f_median_fluc_gpu, f_median_fluc_np)
+    assert np.array_equal(f_median_residual_gpu, f_median_residual_np)
 
 
 def test_gpu_mean_velocity(array_pair, boolean_gpu_array):
@@ -423,7 +433,7 @@ def test_gpu_mean_velocity(array_pair, boolean_gpu_array):
     assert np.allclose(f_mean_gpu, f_mean_np)
 
 
-def test_gpu_mean_fluc(array_pair, boolean_gpu_array):
+def test_gpu_mean_residual(array_pair, boolean_gpu_array):
     shape = (16, 16)
 
     f, f_d = array_pair(shape, center=0.0, half_width=1.0)
@@ -432,14 +442,14 @@ def test_gpu_mean_fluc(array_pair, boolean_gpu_array):
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_mean_d = gpu_validation._gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
-    f_mean_fluc_np = mean_fluc_np(
+    f_mean_residual_np = mean_residual_np(
         f_mean_d.get(), f_neighbours_d.get(), neighbours_present_d.get()
     )
-    f_mean_fluc_gpu = gpu_validation._gpu_mean_fluc(
+    f_mean_residual_gpu = gpu_validation._gpu_mean_residual(
         f_mean_d, f_neighbours_d, neighbours_present_d
     ).get()
 
-    assert np.allclose(f_mean_fluc_gpu, f_mean_fluc_np)
+    assert np.allclose(f_mean_residual_gpu, f_mean_residual_np)
 
 
 def test_gpu_rms(array_pair, boolean_gpu_array):
@@ -451,19 +461,14 @@ def test_gpu_rms(array_pair, boolean_gpu_array):
     neighbours_present_d = gpu_validation._gpu_find_neighbours(shape, mask)
     f_neighbours_d = gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d)
     f_mean_d = gpu_validation._gpu_mean_velocity(f_neighbours_d, neighbours_present_d)
-    f_rms_fluc_np = mean_fluc_np(
+    f_rms_residual_np = mean_residual_np(
         f_mean_d.get(), f_neighbours_d.get(), neighbours_present_d.get()
     )
-    f_rms_fluc_gpu = gpu_validation._gpu_mean_fluc(
+    f_rms_residual_gpu = gpu_validation._gpu_mean_residual(
         f_mean_d, f_neighbours_d, neighbours_present_d
     ).get()
 
-    assert np.allclose(f_rms_fluc_gpu, f_rms_fluc_np)
-
-
-# TODO
-def test_validation_gpu_median_get_n_val():
-    pass
+    assert np.allclose(f_rms_residual_gpu, f_rms_residual_np)
 
 
 # INTEGRATION TESTS

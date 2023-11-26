@@ -227,23 +227,23 @@ def test_correlation_gpu_correlate_windows(correlation_gpu, piv_field_gpu):
 
 
 def test_get_peak_idx(correlation_gpu):
-    assert isinstance(correlation_gpu._get_peak_idx(), gpuarray.GPUArray)
+    assert isinstance(correlation_gpu._peak1_idx, gpuarray.GPUArray)
 
 
 def test_get_peak_value(correlation_gpu):
-    assert isinstance(correlation_gpu._get_peak_value(), gpuarray.GPUArray)
+    assert isinstance(correlation_gpu._corr_peak1, gpuarray.GPUArray)
 
 
 def test_correlation_gpu_check_non_positive_correlation(correlation_gpu, piv_field_gpu):
     fft_ht, fft_wd = correlation_gpu.fft_shape
 
-    corr_peak = correlation_gpu._corr_peak1.get()
+    corr_peak = correlation_gpu._corr_peak1_.get()
     corr_peak[:] = 0
-    correlation_gpu._corr_peak1 = gpuarray.to_gpu(corr_peak)
+    correlation_gpu._corr_peak1_ = gpuarray.to_gpu(corr_peak)
     correlation_gpu._check_non_positive_correlation()
 
     assert np.all(
-        correlation_gpu.peak1_idx.get() == (fft_ht // 2) * fft_wd + fft_wd // 2
+        correlation_gpu._peak1_idx_.get() == (fft_ht // 2) * fft_wd + fft_wd // 2
     )
 
 
@@ -269,7 +269,7 @@ def test_correlation_gpu_center_displacement(piv_field_gpu, correlation_gpu):
 @pytest.mark.parametrize("s2n_method", list(gpu_process.ALLOWED_S2N_METHODS))
 def test_correlation_gpu_get_s2n(correlation_gpu, s2n_method):
     correlation_gpu.s2n_method = s2n_method
-    s2n = correlation_gpu._get_s2n()
+    s2n = correlation_gpu._s2n_ratio
 
     assert isinstance(s2n, gpuarray.GPUArray)
 
@@ -282,7 +282,7 @@ def test_correlation_gpu_free_gpu_data(correlation_gpu):
     correlation_gpu.free_gpu_data()
 
     assert correlation_gpu._correlation is None
-    assert correlation_gpu._corr_peak1 is None
+    assert correlation_gpu._corr_peak1_ is None
     assert correlation_gpu._corr_idx is None
 
 
@@ -292,10 +292,23 @@ def test_piv_field_gpu_get_mask(piv_field_gpu):
     assert isinstance(mask, gpuarray.GPUArray)
 
 
-def test_piv_field_gpu_stack_iw():
-    # TODO test that offsets are computed properly
-    # TODO fold stack_iw with correlate_windows into another method
-    pass
+@pytest.mark.parametrize("search_size", [16, 32])
+def test_piv_field_gpu_stack_iw(search_size):
+    # Need to test with center_field
+    shape = (48, 48)
+    window_size = 16
+    offset = (search_size - window_size) // 2
+
+    piv_field = gpu_process.PIVFieldGPU(shape, 16, 8)
+    frame = np.zeros(shape, dtype=DTYPE_f)
+    frame[4, 5] = 1
+    frame = gpuarray.to_gpu(frame)
+    win_a, win_b = piv_field.stack_iw(frame, frame, search_size=search_size)
+    win_a = win_a.get()
+    win_b = win_b.get()
+
+    assert win_a[0][4, 5] == 1
+    assert win_b[0][4 + offset, 5 + offset] == 1
 
 
 def test_piv_field_gpu_free_gpu_data(piv_field_gpu):
@@ -325,9 +338,16 @@ def test_piv_field_gpu_center_offset(piv_field_gpu):
     assert isinstance(offset_y, int)
 
 
-# TODO
-def test_piv_field_gpu_get_search_offset(piv_field_gpu):
-    pass
+@pytest.mark.parametrize("search_size", [16, 31, 32])
+def test_piv_field_gpu_get_search_offset(search_size, piv_field_gpu):
+    offset_a, offset_b = piv_field_gpu._get_search_offset(search_size)
+    center_offset_x, center_offset_y = piv_field_gpu.center_offset
+    search_offset = -(search_size - piv_field_gpu.window_size) // 2
+
+    assert offset_a[0] == center_offset_x
+    assert offset_a[1] == center_offset_y
+    assert offset_b[0] == center_offset_x + search_offset
+    assert offset_b[1] == center_offset_y + search_offset
 
 
 def test_piv_gpu_coords(piv_gpu):
@@ -352,13 +372,13 @@ def test_piv_gpu_s2n(piv_gpu):
 def test_piv_gpu_free_gpu_data(piv_gpu):
     piv_gpu.free_gpu_data()
 
-    assert piv_gpu._piv_fields is None
-    assert piv_gpu._frame_mask is None
+    assert piv_gpu._piv_fields_ is None
+    assert piv_gpu._frame_mask_ is None
     assert piv_gpu._corr_gpu is None
 
 
 def test_piv_gpu_get_piv_fields(piv_gpu):
-    s2n = piv_gpu._get_piv_fields()
+    s2n = piv_gpu._piv_fields
 
     assert isinstance(s2n, list)
 
@@ -373,14 +393,31 @@ def test_piv_gpu_mask_frame(piv_gpu):
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_frame_mask(piv_gpu, boolean_np_array):
+def test_piv_gpu_frame_mask(piv_gpu, boolean_np_array):
     shape = (16, 16)
 
     piv_gpu.mask = boolean_np_array(shape)
-    piv_gpu._frame_mask = None
-    frame_mask = piv_gpu._get_frame_mask()
+    piv_gpu._frame_mask_ = None
+    frame_mask = piv_gpu._frame_mask
 
     assert isinstance(frame_mask, gpuarray.GPUArray)
+
+
+def test_piv_gpu_piv_field_k(piv_gpu):
+    piv_gpu._k = 1
+    piv_field_k = piv_gpu._piv_field_k
+
+    assert piv_field_k == piv_gpu._piv_fields[1]
+
+
+def test_piv_gpu_get_new_velocity(piv_gpu, frames_gpu, peaks_reshape):
+    dp_u, dp_v = peaks_reshape
+
+    piv_gpu._k = 0
+    u, v = piv_gpu._get_new_velocity(frames_gpu, dp_u, dp_v)
+
+    assert isinstance(u, gpuarray.GPUArray)
+    assert isinstance(v, gpuarray.GPUArray)
 
 
 def test_piv_gpu_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
@@ -389,23 +426,22 @@ def test_piv_gpu_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
 
     u = v = gpu_array(shape, center=0.0, half_width=1.0)
     mask = boolean_gpu_array(shape, seed=1)
-    piv_gpu._piv_field_k._mask = mask
-    piv_gpu._piv_field_k = piv_gpu._get_piv_fields()[0]
     piv_gpu._k = 1
+    piv_gpu._piv_field_k._mask = mask
     dp_u, dp_v = piv_gpu._get_predictions(u, v)
 
     assert isinstance(dp_u, gpuarray.GPUArray)
     assert isinstance(dp_v, gpuarray.GPUArray)
 
 
-# TODO
-def test_piv_gpu_get_new_velocity():
-    pass
+def test_piv_gpu_get_displacement_peaks(piv_gpu, frames_gpu, peaks_reshape):
+    dp_u, dp_v = peaks_reshape
 
+    piv_gpu._k = 0
+    i_peak, j_peak = piv_gpu._get_displacement_peaks(frames_gpu, dp_u, dp_v)
 
-# TODO
-def test_piv_gpu_get_displacement_peaks():
-    pass
+    assert isinstance(i_peak, gpuarray.GPUArray)
+    assert isinstance(j_peak, gpuarray.GPUArray)
 
 
 def test_piv_gpu_get_search_size(piv_gpu):
@@ -660,12 +696,16 @@ def test_gpu_window_slice_strain(dt, array_pair):
     assert np.allclose(win_gpu, win_np, atol=1e-6)
 
 
-# TODO
-def test_piv_field_search_offset(piv_field_gpu):
-    offset_x, offset_y = piv_field_gpu.center_offset
+def test_zero_pad_offset():
+    shape_a = (1, 16, 16)
+    shape_b = (1, 31, 32)
 
-    assert isinstance(offset_x, int)
-    assert isinstance(offset_y, int)
+    win_a = np.zeros(shape_a)
+    win_b = np.zeros(shape_b)
+    offset_x, offset_y = gpu_process._zero_pad_offset(win_a, win_b)
+
+    assert offset_x == (shape_b[2] - shape_a[2]) // 2
+    assert offset_y == (shape_b[1] - shape_a[1]) // 2
 
 
 def test_gpu_normalize_intensity(array_pair):
@@ -852,7 +892,7 @@ def test_correlation_gpu_get_second_peak(correlation_gpu):
             1,
         )
     )
-    correlation_gpu.peak1_idx = gpuarray.to_gpu(row_peak * fft_shape + col_peak)
+    correlation_gpu._peak1_idx_ = gpuarray.to_gpu(row_peak * fft_shape + col_peak)
 
     x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
     r = (x - (shape[1] - 1) / 2) ** 2 + (y - (shape[0] - 1) / 2) ** 2
@@ -860,7 +900,7 @@ def test_correlation_gpu_get_second_peak(correlation_gpu):
     win_d = gpuarray.to_gpu(np.expand_dims(win, 0).astype(DTYPE_f))
     correlation_gpu._correlate_windows(win_d, win_d)
     corr = correlation_gpu._correlation
-    peak1_idx = correlation_gpu.peak1_idx
+    peak1_idx = correlation_gpu._peak1_idx_
     corr_max2 = gpu_process._get_second_peak(corr, peak1_idx, 1).get()
 
     assert corr_max2 < np.amax(corr.get())
@@ -916,9 +956,12 @@ def test_gpu_mask_rms(array_pair):
     assert np.array_equal(correlation_masked_gpu, correlation_masked_np)
 
 
-# TODO
-def test_max_iter():
-    pass
+def test_piv_iter():
+    window_size_iters = [(32, 2), (16, 2), (8, 3)]
+
+    iters = list(gpu_process._piv_iter(window_size_iters))
+
+    assert sum(iters) == 21
 
 
 def test_field_shift(array_pair):

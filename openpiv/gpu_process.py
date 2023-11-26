@@ -122,7 +122,7 @@ class CorrelationGPU:
         self.n_fft = n_fft
 
         self._correlation = None
-        self._corr_peak1 = None
+        self._corr_peak1_ = None
         self._corr_idx = None
 
     def __call__(self, win_a, win_b, shift=None, strain=None):
@@ -146,7 +146,7 @@ class CorrelationGPU:
             3D float, locations of the subpixel peaks.
 
         """
-        self._s2n_ratio = None
+        self._s2n_ratio_ = None
 
         self._init_fft_shape(win_a)
 
@@ -156,7 +156,7 @@ class CorrelationGPU:
     def free_gpu_data(self):
         """Frees data from GPU."""
         self._correlation = None
-        self._corr_peak1 = None
+        self._corr_peak1_ = None
         self._corr_idx = None
 
     @property
@@ -185,7 +185,56 @@ class CorrelationGPU:
         if self._correlation is None:
             return None
 
-        return self._get_s2n()
+        return self._s2n_ratio
+
+    @property
+    def _peak1_idx(self):
+        """Returns the row and column of the highest peak in the cross--correlation."""
+        if self._peak1_idx_ is None:
+            self._peak1_idx_ = _peak_idx(self._correlation)
+
+        return self._peak1_idx_
+
+    @property
+    def _corr_peak1(self):
+        """Returns the value of the highest peak in the cross-correlation."""
+        if self._corr_peak1_ is None:
+            self._corr_peak1_ = _peak_value(self._correlation, self._peak1_idx)
+
+        return self._corr_peak1_
+
+    @property
+    def _s2n_ratio(self):
+        """Computes the signal-to-noise ratio using one of three available methods.
+
+        The signal-to-noise ratio is computed from the correlation and is a measure of
+        the quality of the matching between two interrogation windows. Note that this
+        method returns the base-10 logarithm of the signal-to-noise ratio.
+        The signal-to-noise field takes +np.Inf values where there is no noise.
+
+        Returns
+        -------
+        ndarray
+            2D float (m, n), the base-10 logarithm of the signal-to-noise ratio from the
+            correlation map for each vector.
+
+        """
+        if self._s2n_ratio_ is None:
+            # Compute signal-to-noise ratio by the elected method.
+            if self.s2n_method == "peak2energy":
+                s2n_ratio = _peak2energy(self._correlation, self._corr_peak1)
+            elif self.s2n_method == "peak2rms":
+                s2n_ratio = _peak2rms(self._correlation, self._corr_peak1)
+            else:
+                assert 0 <= self.s2n_width < int(min(self.fft_shape) / 2), (
+                    "Mask width must be integer from 0 and to less than half the"
+                    "correlation window height or width. Recommended value is 2."
+                )
+                s2n_ratio = self._get_peak2peak()
+
+            self._s2n_ratio_ = s2n_ratio
+
+        return self._s2n_ratio_
 
     def _init_fft_shape(self, win):
         """Creates the shape of the fft windows padded up to power of 2 to boost
@@ -212,15 +261,15 @@ class CorrelationGPU:
 
         """
         _check_arrays(win_a, win_b, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-        self.peak1_idx = None
-        self._corr_peak1 = None
+        self._peak1_idx_ = None
+        self._corr_peak1_ = None
 
         # Normalize array by computing the norm of each IW.
         win_a_norm = _gpu_normalize_intensity(win_a)
         win_b_norm = _gpu_normalize_intensity(win_b)
 
         # Zero pad windows to fft shape.
-        offset = _search_offset(win_a, win_b)
+        offset = _zero_pad_offset(win_a, win_b)
         win_a_zp = _gpu_zero_pad(win_a_norm, self.fft_shape, offset=offset)
         win_b_zp = _gpu_zero_pad(win_b_norm, self.fft_shape)
 
@@ -233,29 +282,15 @@ class CorrelationGPU:
         # Non-positive correlations are defaulted to center.
         self._check_non_positive_correlation()
 
-    def _get_peak_idx(self):
-        """Returns the row and column of the highest peak in the cross--correlation."""
-        if self.peak1_idx is None:
-            self.peak1_idx = _peak_idx(self._correlation)
-
-        return self.peak1_idx
-
-    def _get_peak_value(self):
-        """Returns the value of the highest peak in the cross-correlation."""
-        if self._corr_peak1 is None:
-            self._corr_peak1 = _peak_value(self._correlation, self.peak1_idx)
-
-        return self._corr_peak1
-
     def _check_non_positive_correlation(self):
         """Sets the row and column to the center if the correlation peak is near
         zero."""
-        peak1_idx = self._get_peak_idx()
-        corr_peak1 = self._get_peak_value()
-        center = gpuarray.ones_like(peak1_idx, dtype=DTYPE_i) * DTYPE_i(
+        center = gpuarray.ones_like(self._peak1_idx, dtype=DTYPE_i) * DTYPE_i(
             (self.fft_ht // 2) * self.fft_wd + self.fft_wd // 2
         )
-        self.peak1_idx = gpuarray.if_positive(corr_peak1, peak1_idx, center)
+        self._peak1_idx_ = gpuarray.if_positive(
+            self._corr_peak1, self._peak1_idx, center
+        )
 
     def _get_displacement(self):
         """Returns the subpixel locations of the displacement peaks.
@@ -272,7 +307,7 @@ class CorrelationGPU:
 
         # Get the subpixel location.
         row_sp, col_sp = _gpu_subpixel_approximation(
-            self._correlation, self.peak1_idx, self.subpixel_method
+            self._correlation, self._peak1_idx_, self.subpixel_method
         )
 
         # Center the peak displacement.
@@ -295,48 +330,14 @@ class CorrelationGPU:
 
         return i_peak, j_peak
 
-    def _get_s2n(self):
-        """Computes the signal-to-noise ratio using one of three available methods.
-
-        The signal-to-noise ratio is computed from the correlation and is a measure of
-        the quality of the matching between two interrogation windows. Note that this
-        method returns the base-10 logarithm of the signal-to-noise ratio.
-        The signal-to-noise field takes +np.Inf values where there is no noise.
-
-        Returns
-        -------
-        ndarray
-            2D float (m, n), the base-10 logarithm of the signal-to-noise ratio from the
-            correlation map for each vector.
-
-        """
-        corr_peak1 = self._get_peak_value()
-
-        if self._s2n_ratio is None:
-            # Compute signal-to-noise ratio by the elected method.
-            if self.s2n_method == "peak2energy":
-                s2n_ratio = _peak2energy(self._correlation, corr_peak1)
-            elif self.s2n_method == "peak2rms":
-                s2n_ratio = _peak2rms(self._correlation, corr_peak1)
-            else:
-                assert 0 <= self.s2n_width < int(min(self.fft_shape) / 2), (
-                    "Mask width must be integer from 0 and to less than half the"
-                    "correlation window height or width. Recommended value is 2."
-                )
-                s2n_ratio = self._get_peak2peak()
-
-            self._s2n_ratio = s2n_ratio
-
-        return self._s2n_ratio
-
     def _get_peak2peak(self):
         """Returns the signal-to-noise ratio computed using the peak-to-peak method."""
         assert self._correlation is not None
-        peak1_idx = self._get_peak_idx()
-        corr_peak1 = self._get_peak_value()
 
-        corr_peak2 = _get_second_peak(self._correlation, peak1_idx, self.s2n_width)
-        s2n_ratio = _peak2peak(corr_peak1, corr_peak2)
+        corr_peak2 = _get_second_peak(
+            self._correlation, self._peak1_idx, self.s2n_width
+        )
+        s2n_ratio = _peak2peak(self._corr_peak1, corr_peak2)
 
         return s2n_ratio
 
@@ -521,8 +522,8 @@ class PIVFieldGPU:
 
         Returns
         -------
-        tuple of ints
-            [offset_a, offset_b]
+        offset_a, offset_b
+            tuple of ints [offset_x, offset_y]
 
         """
         offset_a = 0
@@ -800,8 +801,8 @@ class PIVGPU:
         self.s2n_width = s2n_width
         self.n_fft = n_fft
 
-        self._piv_fields = None
-        self._frame_mask = None
+        self._piv_fields_ = None
+        self._frame_mask_ = None
         self._corr_gpu = None
 
     def __call__(self, frame_a, frame_b):
@@ -838,7 +839,6 @@ class PIVGPU:
         # MAIN LOOP
         for k in _piv_iter(self.window_size_iters):
             self._k = k
-            self._piv_field_k = self._get_piv_fields()[k]
             _log_iteration(k)
 
             # Compute the predictors dp_x and dp_y from the previous displacements.
@@ -871,8 +871,7 @@ class PIVGPU:
             2D float (m, n)
 
         """
-        piv_fields = self._get_piv_fields()
-        return piv_fields[-1].coords
+        return self._piv_fields[-1].coords
 
     @property
     def field_mask(self):
@@ -884,8 +883,7 @@ class PIVGPU:
             2D int (m, n), boolean values (True for vectors interpolated from previous
             iteration).
         """
-        piv_fields = self._get_piv_fields()
-        return piv_fields[-1].mask
+        return self._piv_fields[-1].mask
 
     @property
     def s2n_ratio(self):
@@ -899,24 +897,38 @@ class PIVGPU:
         """
         if self._corr_gpu is None:
             return None
-        shape = self._get_piv_fields()[-1].shape
+        shape = self._piv_fields[-1].shape
 
         return self._corr_gpu.s2n_ratio.reshape(shape)
 
     def free_gpu_data(self):
         """Frees data from GPU."""
-        self._piv_fields = None
-        self._frame_mask = None
+        self._piv_fields_ = None
+        self._frame_mask_ = None
         self._corr_gpu = None
 
-    def _get_piv_fields(self):
-        """Returns piv-field object for each iteration."""
-        if self._piv_fields is None:
-            self._piv_fields = []
+    @property
+    def _frame_mask(self):
+        """Mask for the frame stored as a GPUArray."""
+        if self.mask is not None and self._frame_mask_ is None:
+            self._frame_mask_ = gpuarray.to_gpu(self.mask)
+
+        return self._frame_mask_
+
+    @property
+    def _piv_field_k(self):
+        """PIVField at current iteration."""
+        return self._piv_fields[self._k]
+
+    @property
+    def _piv_fields(self):
+        """PIVField for each iteration."""
+        if self._piv_fields_ is None:
+            self._piv_fields_ = []
             for window_size in _window_sizes(self.window_size_iters):
                 window_size = window_size
                 spacing = _spacing(window_size, self.overlap_ratio)
-                self._piv_fields.append(
+                self._piv_fields_.append(
                     PIVFieldGPU(
                         self.frame_shape,
                         window_size,
@@ -926,14 +938,14 @@ class PIVGPU:
                     )
                 )
 
-        return self._piv_fields
+        return self._piv_fields_
 
     def _frames_to_gpu(self, frame_a, frame_b):
         """Sends frames to device with masking."""
         _check_arrays(
             frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2
         )
-        frame_mask = self._get_frame_mask()
+        frame_mask = self._frame_mask
 
         frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
         frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
@@ -943,13 +955,6 @@ class PIVGPU:
             frame_b_d = gpu_misc.gpu_mask(frame_b, frame_mask)
 
         return frame_a_d, frame_b_d
-
-    def _get_frame_mask(self):
-        """Returns the mask for the frame as a GPUArray."""
-        if self.mask is not None and self._frame_mask is None:
-            self._frame_mask = gpuarray.to_gpu(self.mask)
-
-        return self._frame_mask
 
     def _get_new_velocity(self, frames, dp_u, dp_v):
         """Returns velocity fields from prediction."""
@@ -968,13 +973,12 @@ class PIVGPU:
         _check_arrays(
             u, v, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u.shape, ndim=2
         )
-        piv_fields = self._get_piv_fields()
-        x0, y0 = piv_fields[self._k - 1].grid_coords
+        x0, y0 = self._piv_fields[self._k - 1].grid_coords
         x1, y1 = self._piv_field_k.grid_coords
-        mask = piv_fields[self._k - 1].get_gpu_mask()
+        mask = self._piv_fields[self._k - 1].get_gpu_mask()
 
         # Interpolate if dimensions do not agree.
-        if piv_fields[self._k - 1].window_size != self._piv_field_k.window_size:
+        if self._piv_fields[self._k - 1].window_size != self._piv_field_k.window_size:
             dp_u = gpu_misc.gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
             dp_v = gpu_misc.gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
         else:
@@ -1009,7 +1013,7 @@ class PIVGPU:
         return i_peak, j_peak
 
     def _get_search_size(self):
-        """Returns the extended size used during the first iteration."""
+        """Returns the search size for the current iteration.."""
         search_size = None
         if self._k == 0 and self.search_ratio is not None:
             search_size = int(self._piv_field_k.window_size * self.search_ratio)
@@ -1350,7 +1354,7 @@ def gpu_fft_shift(correlation):
 
 
 def _window_sizes(window_size_iters):
-    """Returns the window size at each iteration."""
+    """Generator for window size at each iteration."""
     for ws_iter in window_size_iters:
         for _ in range(ws_iter[1]):
             yield ws_iter[0]
@@ -1414,9 +1418,9 @@ __global__ void window_slice(float *output, float *input, int ws, int spacing,
     int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
 
     if (inside_domain) {
-    // Apply the mapping.
-    output[w_range] = input[(y * wd + x)];
-    } else {output[w_range] = 0;}
+        // Apply the mapping.
+        output[w_range] = input[(y * wd + x)];
+    } else {output[w_range] = 0.0f;}
 }
 
 __global__ void window_slice_deform(float *output, float *input, float *shift,
@@ -1478,11 +1482,11 @@ __global__ void window_slice_deform(float *output, float *input, float *shift,
     int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
 
     if (inside_domain) {
-    // Apply the mapping.
-    output[w_range] = ((x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
-                       + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
-                       + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
-                       + (x - x1) * (y - y1) * input[(y2 * wd + x2)]);  // f22
+        // Apply the mapping.
+        output[w_range] = ((x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
+                           + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
+                           + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
+                           + (x - x1) * (y - y1) * input[(y2 * wd + x2)]);  // f22
     } else {output[w_range] = 0.0f;}
 }
 """
@@ -1586,7 +1590,7 @@ def _gpu_window_slice(
     return win
 
 
-def _search_offset(win_a, win_b):
+def _zero_pad_offset(win_a, win_b):
     """Returns offset required to align the data in both windows.
 
     Parameters
@@ -1607,7 +1611,7 @@ def _search_offset(win_a, win_b):
         ht_b >= ht_b and wd_b >= wd_a
     ), "Dimensions of the second window must be equal or larger than the first."
 
-    offset = ((wd_b - wd_a) // 2, (wd_b - wd_a) // 2)
+    offset = ((wd_b - wd_a) // 2, (ht_b - ht_a) // 2)
 
     return offset
 
@@ -2297,7 +2301,7 @@ def _gpu_mask_rms(correlation_positive, corr_peak):
 
 
 def _piv_iter(window_size_iters):
-    """Returns the total number of PIV iterations that will be performed."""
+    """Generator for PIV iterations."""
     i = 0
     for ws_iter in window_size_iters:
         for _ in range(ws_iter[1]):

@@ -14,10 +14,6 @@ DTYPE_f = np.float32
 # dirs
 data_dir = "../data/"
 
-# test data
-frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
-frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
-
 
 # UTILS
 def pytest_addoption(parser):
@@ -143,7 +139,8 @@ def array_pair():
 
 
 @pytest.fixture
-def piv_field_gpu():
+def piv_field_gpu(frames):
+    frame_a, frame_b = frames
     frame_shape = frame_a.shape
     window_size = 32
     spacing = 16
@@ -154,11 +151,27 @@ def piv_field_gpu():
 
 
 @pytest.fixture
-def correlation_gpu(piv_field_gpu):
-    frame_a_d = gpuarray.to_gpu(frame_a)
-    frame_b_d = gpuarray.to_gpu(frame_b)
+def frames():
+    frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
+    frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
 
-    win_a, win_b = piv_field_gpu.stack_iw(frame_a_d, frame_b_d)
+    return frame_a, frame_b
+
+
+@pytest.fixture
+def frames_gpu(frames):
+    frame_a, frame_b = frames
+    frame_a = gpuarray.to_gpu(frame_a)
+    frame_b = gpuarray.to_gpu(frame_b)
+
+    return frame_a, frame_b
+
+
+@pytest.fixture
+def correlation_gpu(piv_field_gpu, frames_gpu):
+    frame_a, frame_b = frames_gpu
+
+    win_a, win_b = piv_field_gpu.stack_iw(frame_a, frame_b)
 
     correlation_gpu = gpu_process.CorrelationGPU()
     correlation_gpu(win_a, win_b)
@@ -229,7 +242,8 @@ def validation_gpu(piv_field_gpu, boolean_gpu_array):
 
 
 @pytest.fixture
-def piv_gpu():
+def piv_gpu(frames):
+    frame_a, frame_b = frames
     piv_gpu = gpu_process.PIVGPU(frame_a)
     piv_gpu(frame_a, frame_b)
 

@@ -289,11 +289,15 @@ class ValidationGPU:
         median_tol = self.validation_tols["median"]
 
         for k in range(self._num_fields):
-            f_median_fluc = _gpu_median_fluc(
+            f_median_residual = _gpu_median_residual(
                 f_median[k], f_neighbours[k], self._neighbours_present
             )
             self._val_locations = _neighbour_validation(
-                self._f[k], f_median[k], f_median_fluc, median_tol, self._val_locations
+                self._f[k],
+                f_median[k],
+                f_median_residual,
+                median_tol,
+                self._val_locations,
             )
 
     def _mean_validation(self):
@@ -303,11 +307,11 @@ class ValidationGPU:
         mean_tol = self.validation_tols["mean"]
 
         for k in range(self._num_fields):
-            f_mean_fluc = _gpu_mean_fluc(
+            f_mean_residual = _gpu_mean_residual(
                 f_mean[k], f_neighbours[k], self._neighbours_present
             )
             self._val_locations = _neighbour_validation(
-                self._f[k], f_mean[k], f_mean_fluc, mean_tol, self._val_locations
+                self._f[k], f_mean[k], f_mean_residual, mean_tol, self._val_locations
             )
 
     def _rms_validation(self):
@@ -380,14 +384,14 @@ __global__ void local_validation(int *val_locations, float *f, float tol, int si
 }
 
 __global__ void neighbour_validation(int *val_locations, float *f, float *f_mean, float
-                    *f_fluc, float tol, int size)
+                    *f_residual, float tol, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
     // a small number is added to prevent singularities in uniform flow
     val_locations[t_idx] = val_locations[t_idx] || (fabsf(f[t_idx] - f_mean[t_idx])
-                                                   / (f_fluc[t_idx] + 0.1f) > tol);
+                                                   / (f_residual[t_idx] + 0.1f) > tol);
 }
 """
 )
@@ -416,7 +420,7 @@ def _local_validation(f, tol, val_locations=None):
     return val_locations
 
 
-def _neighbour_validation(f, f_mean, f_mean_fluc, tol, val_locations=None):
+def _neighbour_validation(f, f_mean, f_mean_residual, tol, val_locations=None):
     """Updates the validation list by checking if the neighbouring elements exceed the
     tolerance."""
     size = f.size
@@ -431,7 +435,7 @@ def _neighbour_validation(f, f_mean, f_mean_fluc, tol, val_locations=None):
         val_locations,
         f,
         f_mean,
-        f_mean_fluc,
+        f_mean_residual,
         DTYPE_f(tol),
         DTYPE_i(size),
         block=(block_size, 1, 1),
@@ -637,8 +641,8 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
     f_median[t_idx] = median(A, B);
 }
 
-__global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, int *np,
-                    int size)
+__global__ void median_residual(float *f_median_residual, float *f_median, float *nb,
+                    int *np, int size)
 {
     // nb : value of the neighbouring points
     // np : 1 if there is a neighbour, 0 if no neighbour
@@ -660,7 +664,7 @@ __global__ void median_fluc(float *f_median_fluc, float *f_median, float *nb, in
     // Sort the arrays.
     sort(A, B);
 
-    f_median_fluc[t_idx] = median(A, B);
+    f_median_residual[t_idx] = median(A, B);
 }
 """
 )
@@ -703,7 +707,7 @@ def _gpu_median_velocity(f_neighbours, neighbours_present):
     return f_median
 
 
-def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
+def _gpu_median_residual(f_median, f_neighbours, neighbours_present):
     """Calculates the magnitude of the median velocity fluctuations on a 3x3 grid around
     each point in a velocity field.
 
@@ -725,13 +729,13 @@ def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
     m, n = f_median.shape
     size = f_median.size
 
-    f_median_fluc = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    median_u_fluc = mod_median_velocity.get_function("median_fluc")
-    median_u_fluc(
-        f_median_fluc,
+    median_u_residual = mod_median_velocity.get_function("median_residual")
+    median_u_residual(
+        f_median_residual,
         f_median,
         f_neighbours,
         neighbours_present,
@@ -740,7 +744,7 @@ def _gpu_median_fluc(f_median, f_neighbours, neighbours_present):
         grid=(grid_size, 1),
     )
 
-    return f_median_fluc
+    return f_median_residual
 
 
 mod_mean_velocity = SourceModule(
@@ -771,7 +775,8 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
     f_mean[t_idx] = numerator / denominator;
 }
 
-__global__ void mean_fluc(float *f_fluc, float *f_mean, float *nb, int *np, int size)
+__global__ void mean_residual(float *f_residual, float *f_mean, float *nb, int *np,
+                    int size)
 {
     // nb : value of the neighbouring points.
     // np : 1 if there is a neighbour, 0 if no neighbour.
@@ -787,7 +792,7 @@ __global__ void mean_fluc(float *f_fluc, float *f_mean, float *nb, int *np, int 
 
     // Mean fluctuation is normalized by number of terms summed.
     float denominator = num_neighbours(np, t_idx);
-    f_fluc[t_idx] = numerator / denominator;
+    f_residual[t_idx] = numerator / denominator;
 }
 
 __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
@@ -853,7 +858,7 @@ def _gpu_mean_velocity(f_neighbours, neighbours_present):
     return f_mean
 
 
-def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
+def _gpu_mean_residual(f_mean, f_neighbours, neighbours_present):
     """Calculates the magnitude of the mean velocity fluctuations on a 3x3 grid around
     each point in a velocity field.
 
@@ -875,13 +880,13 @@ def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
     m, n = f_mean.shape
     size = f_mean.size
 
-    f_fluc = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_fluc = mod_mean_velocity.get_function("mean_fluc")
-    mean_fluc(
-        f_fluc,
+    mean_residual = mod_mean_velocity.get_function("mean_residual")
+    mean_residual(
+        f_residual,
         f_mean,
         f_neighbours,
         neighbours_present,
@@ -890,7 +895,7 @@ def _gpu_mean_fluc(f_mean, f_neighbours, neighbours_present):
         grid=(grid_size, 1),
     )
 
-    return f_fluc
+    return f_residual
 
 
 def _gpu_rms(f_mean, neighbours, neighbours_present):
