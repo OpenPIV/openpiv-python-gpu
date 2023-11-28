@@ -129,9 +129,9 @@ class ValidationGPU:
         self._n_val = None
         self._val_locations = None
         self._f = None
-        self._f_neighbours = None
-        self._f_median = None
-        self._f_mean = None
+        self._neighbours_ = None
+        self._median_ = None
+        self._mean_ = None
 
         self._check_validation_methods()
         self._check_validation_tolerances()
@@ -218,7 +218,7 @@ class ValidationGPU:
     @property
     def median(self):
         """Local median surrounding 8 velocity vectors."""
-        f_median = self._get_median()
+        f_median = self._median
         if len(f_median) == 1:
             f_median = f_median[0]
 
@@ -227,7 +227,7 @@ class ValidationGPU:
     @property
     def mean(self):
         """Local mean of surrounding 8 velocity vectors."""
-        f_mean = self._get_mean()
+        f_mean = self._mean
         if len(f_mean) == 1:
             f_mean = f_mean[0]
 
@@ -236,7 +236,48 @@ class ValidationGPU:
     @property
     def num_validation_locations(self):
         """Local mean of surrounding 8 velocity vectors."""
-        return self._get_n_val()
+        if self._val_locations is None:
+            return None
+        if self._n_val is None:
+            self._n_val = int(gpuarray.sum(self._val_locations).get())
+
+        return self._n_val
+
+    @property
+    def _neighbours(self):
+        """Returns neighbouring values for each field."""
+        if self._neighbours_ is None:
+            self._neighbours_ = [
+                _gpu_get_neighbours(f, self._neighbours_present) for f in self._f
+            ]
+
+        return self._neighbours_
+
+    @property
+    def _median(self):
+        """Returns field containing median of surrounding points for each field."""
+        f_neighbours = self._neighbours
+
+        if self._median_ is None:
+            self._median_ = [
+                _gpu_median_velocity(f_neighbours[k], self._neighbours_present)
+                for k in range(self._num_fields)
+            ]
+
+        return self._median_
+
+    @property
+    def _mean(self):
+        """Returns field containing mean of surrounding points for each field."""
+        f_neighbours = self._neighbours
+
+        if self._mean_ is None:
+            self._mean_ = [
+                _gpu_mean_velocity(f_neighbours[k], self._neighbours_present)
+                for k in range(self._num_fields)
+            ]
+
+        return self._mean_
 
     def _check_validation_methods(self):
         """Checks that input validation methods are allowed."""
@@ -263,9 +304,9 @@ class ValidationGPU:
         """Clears previous validation data.."""
         self._val_locations = None
         self._f = None
-        self._f_neighbours = None
-        self._f_median = None
-        self._f_mean = None
+        self._neighbours_ = None
+        self._median_ = None
+        self._mean_ = None
 
     def _s2n_validation(self, s2n_ratio):
         """Performs signal-to-noise validation on each field."""
@@ -284,8 +325,8 @@ class ValidationGPU:
 
     def _median_validation(self):
         """Performs median validation on each field."""
-        f_neighbours = self._get_neighbours()
-        f_median = self._get_median()
+        f_neighbours = self._neighbours
+        f_median = self._median
         median_tol = self.validation_tols["median"]
 
         for k in range(self._num_fields):
@@ -302,8 +343,8 @@ class ValidationGPU:
 
     def _mean_validation(self):
         """Performs mean validation on each field."""
-        f_neighbours = self._get_neighbours()
-        f_mean = self._get_mean()
+        f_neighbours = self._neighbours
+        f_mean = self._mean
         mean_tol = self.validation_tols["mean"]
 
         for k in range(self._num_fields):
@@ -316,8 +357,8 @@ class ValidationGPU:
 
     def _rms_validation(self):
         """Performs RMS validation on each field."""
-        f_neighbours = self._get_neighbours()
-        f_mean = self._get_mean()
+        f_neighbours = self._neighbours
+        f_mean = self._mean
         rms_tol = self.validation_tols["rms"]
 
         for k in range(self._num_fields):
@@ -330,47 +371,6 @@ class ValidationGPU:
         """Removes masked locations from the validation locations."""
         if self.mask is not None and self._val_locations is not None:
             self._val_locations = gpu_mask(self._val_locations, self.mask)
-
-    def _get_neighbours(self):
-        """Returns neighbouring values for each field."""
-        if self._f_neighbours is None:
-            self._f_neighbours = [
-                _gpu_get_neighbours(f, self._neighbours_present) for f in self._f
-            ]
-
-        return self._f_neighbours
-
-    def _get_median(self):
-        """Returns field containing median of surrounding points for each field."""
-        f_neighbours = self._get_neighbours()
-
-        if self._f_median is None:
-            self._f_median = [
-                _gpu_median_velocity(f_neighbours[k], self._neighbours_present)
-                for k in range(self._num_fields)
-            ]
-
-        return self._f_median
-
-    def _get_mean(self):
-        """Returns field containing mean of surrounding points for each field."""
-        f_neighbours = self._get_neighbours()
-
-        if self._f_mean is None:
-            self._f_mean = [
-                _gpu_mean_velocity(f_neighbours[k], self._neighbours_present)
-                for k in range(self._num_fields)
-            ]
-
-        return self._f_mean
-
-    def _get_n_val(self):
-        if self._val_locations is None:
-            return None
-        if self._n_val is None:
-            self._n_val = int(gpuarray.sum(self._val_locations).get())
-
-        return self._n_val
 
 
 mod_validation = SourceModule(

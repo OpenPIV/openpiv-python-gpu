@@ -115,9 +115,9 @@ def test_validation_clear_validation_data(validation_gpu, peaks_reshape):
         for data in [
             validation_gpu._val_locations,
             validation_gpu._f,
-            validation_gpu._f_neighbours,
-            validation_gpu._f_mean,
-            validation_gpu._f_median,
+            validation_gpu._neighbours_,
+            validation_gpu._mean_,
+            validation_gpu._median_,
         ]
     )
 
@@ -134,9 +134,9 @@ def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
             validation_gpu._val_locations,
             validation_gpu._f,
             validation_gpu._neighbours_present,
-            validation_gpu._f_neighbours,
-            validation_gpu._f_mean,
-            validation_gpu._f_median,
+            validation_gpu._neighbours_,
+            validation_gpu._mean_,
+            validation_gpu._median_,
         ]
     )
 
@@ -152,9 +152,10 @@ def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation
 
 def test_validation_gpu_median_num_validation_locations(validation_gpu, peaks_reshape):
     validation_gpu(*peaks_reshape)
+    val_locations = validation_gpu._val_locations.get()
     n_val = validation_gpu.num_validation_locations
 
-    assert isinstance(n_val, int)
+    assert np.sum(val_locations) == n_val
 
 
 def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
@@ -263,13 +264,13 @@ def test_validation_gpu_get_neighbours(peaks_reshape, validation_gpu):
     validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
 
-    validation_gpu._f_neighbours = None
+    validation_gpu._neighbours_ = None
     f_neighbours_l = [
         gpu_validation._gpu_get_neighbours(f_d, neighbours_present_d).get()
         for f_d in peaks_reshape
     ]
     f_neighbours_gpu_l = [
-        f_neighbours_d.get() for f_neighbours_d in validation_gpu._get_neighbours()
+        f_neighbours_d.get() for f_neighbours_d in validation_gpu._neighbours
     ]
     assert all(
         [np.array_equal(f_neighbours_gpu_l[i], f_neighbours_l[i]) for i in range(n)]
@@ -280,16 +281,16 @@ def test_validation_gpu_get_median(peaks_reshape, validation_gpu):
     validation_gpu._f = peaks_reshape
     validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
-    f_neighbours_dl = validation_gpu._get_neighbours()
+    f_neighbours_dl = validation_gpu._neighbours
 
-    validation_gpu._f_neighbours = None
+    validation_gpu._neighbours_ = None
     f_median_l = [
         gpu_validation._gpu_median_velocity(
             f_neighbours_dl[i], neighbours_present_d
         ).get()
         for i in range(n)
     ]
-    f_median_gpu_l = [f_median_d.get() for f_median_d in validation_gpu._get_median()]
+    f_median_gpu_l = [f_median_d.get() for f_median_d in validation_gpu._median]
     assert all([np.array_equal(f_median_gpu_l[i], f_median_l[i]) for i in range(n)])
 
 
@@ -297,25 +298,17 @@ def test_validation_gpu_get_mean(peaks_reshape, validation_gpu):
     validation_gpu._f = peaks_reshape
     validation_gpu._num_fields = n = len(peaks_reshape)
     neighbours_present_d = validation_gpu._neighbours_present
-    f_neighbours_dl = validation_gpu._get_neighbours()
+    f_neighbours_dl = validation_gpu._neighbours
 
-    validation_gpu._f_neighbours = None
+    validation_gpu._neighbours_ = None
     f_mean_l = [
         gpu_validation._gpu_mean_velocity(
             f_neighbours_dl[i], neighbours_present_d
         ).get()
         for i in range(n)
     ]
-    f_mean_gpu_l = [f_mean_d.get() for f_mean_d in validation_gpu._get_mean()]
+    f_mean_gpu_l = [f_mean_d.get() for f_mean_d in validation_gpu._mean]
     assert all([np.array_equal(f_mean_gpu_l[i], f_mean_l[i]) for i in range(n)])
-
-
-def test_validation_gpu_get_n_val(validation_gpu, peaks_reshape):
-    validation_gpu(*peaks_reshape)
-    val_locations = validation_gpu._val_locations.get()
-    n_val = validation_gpu._get_n_val()
-
-    assert np.sum(val_locations) == n_val
 
 
 def test_local_validation(array_pair, boolean_array_pair):
