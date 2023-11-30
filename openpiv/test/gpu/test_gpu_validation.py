@@ -113,7 +113,7 @@ def test_validation_clear_validation_data(validation_gpu, peaks_reshape):
     assert all(
         data is None
         for data in [
-            validation_gpu._val_locations,
+            validation_gpu.val_locations,
             validation_gpu._f,
             validation_gpu._neighbours_,
             validation_gpu._mean_,
@@ -131,7 +131,7 @@ def test_validation_gpu_free_data(validation_gpu, peaks_reshape):
     assert all(
         data is None
         for data in [
-            validation_gpu._val_locations,
+            validation_gpu.val_locations,
             validation_gpu._f,
             validation_gpu._neighbours_present,
             validation_gpu._neighbours_,
@@ -152,7 +152,7 @@ def test_validation_gpu_median_mean(num_fields, type_, peaks_reshape, validation
 
 def test_validation_gpu_median_num_validation_locations(validation_gpu, peaks_reshape):
     validation_gpu(*peaks_reshape)
-    val_locations = validation_gpu._val_locations.get()
+    val_locations = validation_gpu.val_locations.get()
     n_val = validation_gpu.num_validation_locations
 
     assert np.sum(val_locations) == n_val
@@ -163,7 +163,7 @@ def test_validation_gpu_s2n_validation(validation_gpu, s2n_ratio):
 
     val_locations = gpu_validation._local_validation(s2n_ratio / tol, 1).get()
     validation_gpu._s2n_validation(s2n_ratio)
-    val_locations_gpu = validation_gpu._val_locations.get()
+    val_locations_gpu = validation_gpu.val_locations.get()
 
     assert np.array_equal(val_locations_gpu, val_locations)
 
@@ -188,7 +188,7 @@ def test_validation_gpu_median_validation(peaks_reshape, mask, validation_gpu):
         )
     val_locations = val_locations_d.get()
     validation_gpu._median_validation()
-    val_locations_gpu = validation_gpu._val_locations.get()
+    val_locations_gpu = validation_gpu.val_locations.get()
 
     assert np.array_equal(val_locations, val_locations_gpu)
 
@@ -213,7 +213,7 @@ def test_validation_gpu_mean_validation(peaks_reshape, mask, validation_gpu):
         )
     val_locations = val_locations_d.get()
     validation_gpu._mean_validation()
-    val_locations_gpu = validation_gpu._val_locations.get()
+    val_locations_gpu = validation_gpu.val_locations.get()
 
     assert np.array_equal(val_locations, val_locations_gpu)
 
@@ -237,8 +237,8 @@ def test_validation_gpu_rms_validation(peaks_reshape, mask, validation_gpu):
             f_d, f_mean_d, f_rms_d, tol, val_locations=val_locations_d
         )
     val_locations = val_locations_d.get()
-    validation_gpu._rms_validation()
-    val_locations_gpu = validation_gpu._val_locations.get()
+    validation_gpu._rms_validation_vec2d()
+    val_locations_gpu = validation_gpu.val_locations.get()
 
     assert np.array_equal(val_locations, val_locations_gpu)
 
@@ -250,9 +250,9 @@ def test_validation_gpu_mask_val_locations(validation_gpu, mask, boolean_array_p
     val_locations, val_locations_d = boolean_array_pair(mask.shape, seed=1)
 
     val_locations_np = (mask.get() == 0) * val_locations
-    validation_gpu._val_locations = val_locations_d
+    validation_gpu.val_locations = val_locations_d
     validation_gpu._mask_val_locations()
-    val_locations_gpu = validation_gpu._val_locations.get()
+    val_locations_gpu = validation_gpu.val_locations.get()
 
     assert np.array_equal(val_locations_gpu, val_locations_np)
 

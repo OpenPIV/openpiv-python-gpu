@@ -807,9 +807,10 @@ __global__ void forward_order(float *dest, float *src, int wd, int size)
     int row = t_idx / wd;
     int col = t_idx % wd;
 
-    dest[row * wd + col] = src[(row * wd
-                             + (col <= (wd - 1) / 2) * (2 * col)
-                             + (col >= (wd + 1) / 2) * (2 * wd - 2 * col - 1))];
+    dest[row * wd + col] = src[
+        row * wd + (col <= (wd - 1) / 2) * (2 * col)
+        + (col >= (wd + 1) / 2) * (2 * wd - 2 * col - 1)
+    ];
 }
 
 __global__ void backward_order(float *dest, float *src, int wd, int size)
@@ -819,8 +820,9 @@ __global__ void backward_order(float *dest, float *src, int wd, int size)
     int row = t_idx / wd;
     int col = t_idx % wd;
 
-    dest[row * wd + col] = src[row * wd + (col % 2 == 0) * (col / 2)
-                                        + (col % 2 == 1) * (wd - 1 - col / 2)];
+    dest[row * wd + col] = src[
+        row * wd + (col % 2 == 0) * (col / 2) + (col % 2 == 1) * (wd - 1 - col / 2)
+    ];
 }
 """
 )
@@ -859,8 +861,15 @@ def _dct_order(y, direction):
 
 mod_flip = SourceModule(
     """
-__global__ void flip_frequency(float *dest, float *src, int offset, int left_pad,
-                    int y_width, int wd, int size)
+__global__ void flip_frequency(
+    float *dest,
+    float *src,
+    int offset,
+    int left_pad,
+    int y_width,
+    int wd,
+    int size
+)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}

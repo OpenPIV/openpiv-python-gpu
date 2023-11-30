@@ -297,9 +297,20 @@ def gpu_remove_negative(f):
 
 mod_interpolate = SourceModule(
     """
-__global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid,
-                    float *y_grid, float offset_x, float offset_y, float spacing_x,
-                    float spacing_y, int ht, int wd, int n, int size)
+__global__ void bilinear_interpolation(
+    float *f1,
+    float *f0,
+    float *x_grid,
+    float *y_grid,
+    float offset_x,
+    float offset_y,
+    float spacing_x,
+    float spacing_y,
+    int ht,
+    int wd,
+    int n,
+    int size
+)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
@@ -322,14 +333,26 @@ __global__ void bilinear_interpolation(float *f1, float *f0, float *x_grid,
 
     // Apply the mapping.
     f1[t_idx] = (x2 - x) * (y2 - y) * f0[y1 * wd + x1]  // f11
-                + (x - x1) * (y2 - y) * f0[y1 * wd + x2]  // f21
-                + (x2 - x) * (y - y1) * f0[y2 * wd + x1]  // f12
-                + (x - x1) * (y - y1) * f0[y2 * wd + x2];  // f22
+              + (x - x1) * (y2 - y) * f0[y1 * wd + x2]  // f21
+              + (x2 - x) * (y - y1) * f0[y2 * wd + x1]  // f12
+              + (x - x1) * (y - y1) * f0[y2 * wd + x2];  // f22
 }
 
-__global__ void bilinear_interpolation_mask(float *f1, float *f0, float *x_grid,
-                    float *y_grid, int *mask, float offset_x, float offset_y,
-                    float spacing_x, float spacing_y, int ht, int wd, int n, int size)
+__global__ void bilinear_interpolation_mask(
+    float *f1,
+    float *f0,
+    float *x_grid,
+    float *y_grid,
+    int *mask,
+    float offset_x,
+    float offset_y,
+    float spacing_x,
+    float spacing_y,
+    int ht,
+    int wd,
+    int n,
+    int size
+)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
@@ -360,13 +383,13 @@ __global__ void bilinear_interpolation_mask(float *f1, float *f0, float *x_grid,
 
     // Apply the mapping along x-axis.
     float f_y1 = ((x2 - x) * (!m11 * !m21) + (!m11 * m21)) * f0[y1 * wd + x1]  // f11
-                 + ((x - x1) * (!m11 * !m21) + (m11 * !m21)) * f0[y1 * wd + x2]; // f21
+               + ((x - x1) * (!m11 * !m21) + (m11 * !m21)) * f0[y1 * wd + x2]; // f21
     float f_y2 = ((x2 - x) * (!m12 * !m22) + (!m12 * m22)) * f0[y2 * wd + x1] // f12
-                 + ((x - x1) * (!m12 * !m22) + (m12 * !m22)) * f0[y2 * wd + x2]; // f22
+               + ((x - x1) * (!m12 * !m22) + (m12 * !m22)) * f0[y2 * wd + x2]; // f22
 
     // Apply the mapping along y-axis.
     f1[t_idx] = ((y2 - y) * (!m_y1 * !m_y2) + (!m_y1 * m_y2)) * f_y1
-                + ((y - y1) * (!m_y1 * !m_y2) + (m_y1 * !m_y2)) * f_y2;
+              + ((y - y1) * (!m_y1 * !m_y2) + (m_y1 * !m_y2)) * f_y2;
 }
 """
 )

@@ -1381,8 +1381,17 @@ def _center_offset(frame_shape, window_size, spacing):
 
 mod_window_slice = SourceModule(
     """
-__global__ void window_slice(float *output, float *input, int ws, int spacing,
-                    int offset_x, int offset_y, int n, int wd, int ht)
+__global__ void window_slice(
+    float *output,
+    float *input,
+    int ws,
+    int spacing,
+    int offset_x,
+    int offset_y,
+    int n,
+    int wd,
+    int ht
+)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int idx_i = blockIdx.x;
@@ -1406,9 +1415,22 @@ __global__ void window_slice(float *output, float *input, int ws, int spacing,
     } else {output[w_range] = 0.0f;}
 }
 
-__global__ void window_slice_deform(float *output, float *input, float *shift,
-                    float *strain, float dt, int deform, int ws, int spacing,
-                    int offset_x, int offset_y, int n_windows, int n, int wd, int ht)
+__global__ void window_slice_deform(
+    float *output,
+    float *input,
+    float *shift,
+    float *strain,
+    float dt,
+    int deform,
+    int ws,
+    int spacing,
+    int offset_x,
+    int offset_y,
+    int n_windows,
+    int n,
+    int wd,
+    int ht
+)
 {
     // dt : factor to apply to the shift and strain tensors
     // wd : width (number of columns in the full image)
@@ -1466,10 +1488,10 @@ __global__ void window_slice_deform(float *output, float *input, float *shift,
 
     if (inside_domain) {
         // Apply the mapping.
-        output[w_range] = ((x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
-                           + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
-                           + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
-                           + (x - x1) * (y - y1) * input[(y2 * wd + x2)]);  // f22
+        output[w_range] = (x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
+                        + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
+                        + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
+                        + (x - x1) * (y - y1) * input[(y2 * wd + x2)];  // f22
     } else {output[w_range] = 0.0f;}
 }
 """
@@ -1601,8 +1623,13 @@ def _zero_pad_offset(win_a, win_b):
 
 mod_norm = SourceModule(
     """
-__global__ void normalize(float *array, float *array_norm, float *mean, int window_size,
-                    int size)
+__global__ void normalize(
+    float *array,
+    float *array_norm,
+    float *mean,
+    int window_size,
+    int size
+)
 {
     // global thread id for 1D grid of 2D blocks
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1658,8 +1685,16 @@ def _gpu_normalize_intensity(win):
 
 mod_zp = SourceModule(
     """
-__global__ void zero_pad(float *array_zp, float *array, int fft_ht, int fft_wd, int ht,
-                    int wd, int dx, int dy)
+__global__ void zero_pad(
+    float *array_zp,
+    float *array,
+    int fft_ht,
+    int fft_wd,
+    int ht,
+    int wd,
+    int dx,
+    int dy
+)
 {
     // index, x blocks are windows; y and z blocks are x and y dimensions, respectively
     int ind_i = blockIdx.x;
@@ -1773,8 +1808,13 @@ def _gpu_cross_correlate(win_a, win_b):
 
 mod_index_update = SourceModule(
     """
-__global__ void window_index_f(float *dest, float *src, int *indices, int ws,
-                    int n_windows)
+__global__ void window_index_f(
+    float *dest,
+    float *src,
+    int *indices,
+    int ws,
+    int n_windows
+)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= n_windows) {return;}
@@ -1875,8 +1915,16 @@ def _peak_value(correlation, peak_idx):
 
 mod_subpixel_approximation = SourceModule(
     """
-__global__ void gaussian(float *row_sp, float *col_sp, int *p_idx, float *corr,
-                    int n_windows, int ht, int wd, int ws)
+__global__ void gaussian(
+    float *row_sp,
+    float *col_sp,
+    int *p_idx,
+    float *corr,
+    int n_windows,
+    int ht,
+    int wd,
+    int ws
+)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1910,8 +1958,16 @@ __global__ void gaussian(float *row_sp, float *col_sp, int *p_idx, float *corr,
     } else {col_sp[w_idx] = col;}
 }
 
-__global__ void parabolic(float *row_sp, float *col_sp, int *p_idx, float *corr,
-                    int n_windows, int ht, int wd, int ws)
+__global__ void parabolic(
+    float *row_sp,
+    float *col_sp,
+    int *p_idx,
+    float *corr,
+    int n_windows,
+    int ht,
+    int wd,
+    int ws
+)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int w_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2140,8 +2196,15 @@ def _peak2peak(corr_peak1, corr_peak2):
 
 mod_mask_peak = SourceModule(
     """
-__global__ void mask_peak(float *corr, int *p_idx, int mask_w, int ht,
-                    int wd, int mask_dim, int size)
+__global__ void mask_peak(
+    float *corr,
+    int *p_idx,
+    int mask_w,
+    int ht,
+    int wd,
+    int mask_dim,
+    int size
+)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int idx_i = blockIdx.x;
@@ -2222,7 +2285,13 @@ def _gpu_mask_peak(correlation_positive, peak_idx, mask_width):
 
 mod_correlation_rms = SourceModule(
     """
-__global__ void correlation_rms(float *corr, float *corr_p, int ht, int wd, int size)
+__global__ void correlation_rms(
+    float *corr,
+    float *corr_p,
+    int ht,
+    int wd,
+    int size
+)
 {
     // x blocks are windows; y and z blocks are x and y dimensions, respectively.
     int idx_i = blockIdx.x;
@@ -2310,8 +2379,13 @@ def _field_shift(u, v):
 
 mod_update = SourceModule(
     """
-__global__ void update_values(float *f_new, float *f_old, float *peak, int *mask,
-                    int size)
+__global__ void update_values(
+    float *f_new,
+    float *f_old,
+    float *peak,
+    int *mask,
+    int size
+)
 {
     // u_new : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
