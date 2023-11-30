@@ -813,6 +813,7 @@ __global__ void forward_order(float *dest, float *src, int wd, int size)
     ];
 }
 
+
 __global__ void backward_order(float *dest, float *src, int wd, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;

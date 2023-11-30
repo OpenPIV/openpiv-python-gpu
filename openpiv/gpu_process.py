@@ -1415,6 +1415,7 @@ __global__ void window_slice(
     } else {output[w_range] = 0.0f;}
 }
 
+
 __global__ void window_slice_deform(
     float *output,
     float *input,
@@ -1958,6 +1959,7 @@ __global__ void gaussian(
     } else {col_sp[w_idx] = col;}
 }
 
+
 __global__ void parabolic(
     float *row_sp,
     float *col_sp,
@@ -1991,6 +1993,7 @@ __global__ void parabolic(
         col_sp[w_idx] = col + 0.5f * (cl - cr) / (cl - 2.0f * c + cr + small);
     } else {col_sp[w_idx] = col;}
 }
+
 
 __global__ void centroid(float *row_sp, float *col_sp, int *p_idx, float *corr,
                     int n_windows, int ht, int wd, int ws)

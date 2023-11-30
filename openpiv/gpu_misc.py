@@ -29,6 +29,7 @@ __global__ void gpu_logical_or_f(float *f_out, float *f1, float *f2, int size)
     f_out[t_idx] = f1[t_idx] || f2[t_idx];
 }
 
+
 __global__ void gpu_logical_or_i(int *f_out, int *f1, int *f2, int size)
 {
     // frame_masked : output argument
@@ -87,6 +88,7 @@ __global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
 
     f_masked[t_idx] = f[t_idx] * (mask[t_idx] == 0.0f);
 }
+
 
 __global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
 {
@@ -152,6 +154,7 @@ __global__ void scalar_mod_f(float *i, float *r, float *f, int m, int size)
     r[t_idx] = f_value % m;
 }
 
+
 __global__ void scalar_mod_i(int *i, int *r, int *f, int m, int size)
 {
     // i, r : output arguments
@@ -216,6 +219,7 @@ mod_replace_nan = SourceModule(
     """
 #include <math.h>
 
+
 __global__ void replace_nan(float *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -257,6 +261,7 @@ __global__ void replace_negative_f(float *f, int size)
     // Check for negative values.
     f[t_idx] = value * (value > 0.0f);
 }
+
 
 __global__ void replace_negative_i(int *f, int size)
 {
@@ -337,6 +342,7 @@ __global__ void bilinear_interpolation(
               + (x2 - x) * (y - y1) * f0[y2 * wd + x1]  // f12
               + (x - x1) * (y - y1) * f0[y2 * wd + x2];  // f22
 }
+
 
 __global__ void bilinear_interpolation_mask(
     float *f1,

@@ -258,7 +258,9 @@ class ValidationGPU:
         """Returns field containing median of surrounding points for each field."""
         if self._median_ is None:
             self._median_ = [
-                _gpu_median_velocity(self._neighbours[k], self._neighbours_present)
+                _gpu_average_velocity(
+                    self._neighbours[k], self._neighbours_present, "median_velocity"
+                )
                 for k in range(self._num_fields)
             ]
 
@@ -269,7 +271,9 @@ class ValidationGPU:
         """Returns field containing mean of surrounding points for each field."""
         if self._mean_ is None:
             self._mean_ = [
-                _gpu_mean_velocity(self._neighbours[k], self._neighbours_present)
+                _gpu_average_velocity(
+                    self._neighbours[k], self._neighbours_present, "mean_velocity"
+                )
                 for k in range(self._num_fields)
             ]
 
@@ -324,8 +328,11 @@ class ValidationGPU:
         median_tol = self.validation_tols["median"]
 
         for k in range(self._num_fields):
-            f_median_residual = _gpu_median_residual(
-                self._median[k], self._neighbours_[k], self._neighbours_present
+            f_median_residual = _gpu_residual(
+                self._median[k],
+                self._neighbours_[k],
+                self._neighbours_present,
+                "median_residual",
             )
             self.val_locations = _neighbour_validation(
                 self._f[k],
@@ -343,8 +350,13 @@ class ValidationGPU:
         u_median, v_median = self._median
 
         if self._num_fields == 2:
-            residual = _gpu_median_residual_vec2d(
-                u_median, v_median, u_neighbours, v_neighbours, self._neighbours_present
+            residual = _gpu_residual_vec2d(
+                u_median,
+                v_median,
+                u_neighbours,
+                v_neighbours,
+                self._neighbours_present,
+                "median_residual_vec2d",
             )
             self.val_locations = _neighbour_validation_vec2d(
                 u,
@@ -365,8 +377,11 @@ class ValidationGPU:
         mean_tol = self.validation_tols["mean"]
 
         for k in range(self._num_fields):
-            f_mean_residual = _gpu_mean_residual(
-                self._mean[k], self._neighbours[k], self._neighbours_present
+            f_mean_residual = _gpu_residual(
+                self._mean[k],
+                self._neighbours[k],
+                self._neighbours_present,
+                "mean_residual",
             )
             self.val_locations = _neighbour_validation(
                 self._f[k],
@@ -384,8 +399,13 @@ class ValidationGPU:
         u_neighbours, v_neighbours = self._neighbours_
 
         if self._num_fields == 2:
-            residual = _gpu_mean_residual_vec2d(
-                u_mean, v_mean, u_neighbours, v_neighbours, self._neighbours_present
+            residual = _gpu_residual_vec2d(
+                u_mean,
+                v_mean,
+                u_neighbours,
+                v_neighbours,
+                self._neighbours_present,
+                "mean_residual_vec2d",
             )
             self.val_locations = _neighbour_validation_vec2d(
                 u, v, u_mean, v_mean, residual, mean_tol, self.val_locations
@@ -402,7 +422,9 @@ class ValidationGPU:
         rms_tol = self.validation_tols["rms"]
 
         for k in range(self._num_fields):
-            f_rms = _gpu_rms(f_mean[k], f_neighbours[k], self._neighbours_present)
+            f_rms = _gpu_residual(
+                f_mean[k], f_neighbours[k], self._neighbours_present, "rms"
+            )
             self.val_locations = _neighbour_validation(
                 self._f[k], f_mean[k], f_rms, rms_tol, self.val_locations
             )
@@ -415,8 +437,13 @@ class ValidationGPU:
         u_neighbours, v_neighbours = self._neighbours_
 
         if self._num_fields == 2:
-            rms = _gpu_rms_vec2d(
-                u_mean, v_mean, u_neighbours, v_neighbours, self._neighbours_present
+            rms = _gpu_residual_vec2d(
+                u_mean,
+                v_mean,
+                u_neighbours,
+                v_neighbours,
+                self._neighbours_present,
+                "rms_vec2d",
             )
             self.val_locations = _neighbour_validation_vec2d(
                 u, v, u_mean, v_mean, rms, rms_tol, self.val_locations
@@ -442,6 +469,7 @@ __global__ void local_validation(int *val_locations, float *f, float tol, int si
     val_locations[t_idx] = val_locations[t_idx] || (f[t_idx] > tol);
 }
 
+
 __global__ void neighbour_validation(
     int *val_locations,
     float *f,
@@ -459,6 +487,7 @@ __global__ void neighbour_validation(
         fabsf(f[t_idx] - f_mean[t_idx]) / (r[t_idx] + 0.1f) > tol
     );
 }
+
 
 __global__ void neighbour_validation_vec2d(
     int *val_locations,
@@ -597,6 +626,7 @@ __global__ void find_neighbours(int *np, int *mask, int n, int m, int size)
     np[t_idx] = in_bound * (!mask[(row_idx * n + col_idx) * in_bound]);
 }
 
+
 __global__ void get_neighbours(float *nb, int *np, float *f, int n, int size)
 {
     // nb : values of the neighbouring points
@@ -697,7 +727,7 @@ def _gpu_get_neighbours(f, neighbours_present):
     return neighbours
 
 
-mod_median_velocity = SourceModule(
+mod_average_velocity = SourceModule(
     """
 // device-side function to swap elements of two arrays.
 __device__ void swap(float *A, int a, int b)
@@ -706,6 +736,7 @@ __device__ void swap(float *A, int a, int b)
     A[a] = A[b];
     A[b] = tmp_A;
 }
+
 
 // device-side function to compare and swap elements of two arrays.
 __device__ void compare(float *A, float *B, int a, int b)
@@ -723,6 +754,7 @@ __device__ void compare(float *A, float *B, int a, int b)
         swap(B, a, b);
     }
 }
+
 
 // device-side function to do an 8-wire sorting network.
 __device__ void sort(float *A, float *B)
@@ -749,6 +781,7 @@ __device__ void sort(float *A, float *B)
     compare(A, B, 3, 4);
 }
 
+
 __device__ float median(float *A, float *B)
 {
     // Sort the arrays.
@@ -761,6 +794,7 @@ __device__ float median(float *A, float *B)
     if (N % 2 == 0) {return (A[N / 2 - 1] + A[N / 2]) / 2;}
     else {return A[N / 2];}
 }
+
 
 __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 {
@@ -781,6 +815,7 @@ __global__ void median_velocity(float *f_median, float *nb, int *np, int size)
 
     f_median[t_idx] = median(A, B);
 }
+
 
 __global__ void median_residual(
     float *median_residual,
@@ -809,6 +844,7 @@ __global__ void median_residual(
 
     median_residual[t_idx] = median(A, B);
 }
+
 
 __global__ void median_residual_vec2d(
     float *median_residual,
@@ -840,163 +876,8 @@ __global__ void median_residual_vec2d(
 
     median_residual[t_idx] = median(A, B);
 }
-"""
-)
 
 
-def _gpu_median_velocity(f_neighbours, neighbours_present):
-    """Calculates the median velocity on a 3x3 grid around each point in a velocity
-    field.
-
-    Parameters
-    ----------
-    f_neighbours: GPUArray
-        4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present: GPUArray
-        4D int (m, n, 8), value of one where a neighbour is present.
-
-    Returns
-    -------
-    GPUArray
-        2D float (m, n), median velocities at each point.
-
-    """
-    m, n, _ = f_neighbours.shape
-    size = m * n
-    _check_arrays(
-        f_neighbours, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=(m, n, 8)
-    )
-    _check_arrays(
-        neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
-    )
-
-    f_median = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    block_size = _BLOCK_SIZE
-    grid_size = ceil(size / block_size)
-    median_velocity = mod_median_velocity.get_function("median_velocity")
-    median_velocity(
-        f_median,
-        f_neighbours,
-        neighbours_present,
-        DTYPE_i(size),
-        block=(block_size, 1, 1),
-        grid=(grid_size, 1),
-    )
-
-    return f_median
-
-
-def _gpu_median_residual(f_median, f_neighbours, neighbours_present):
-    """Returns the median of normalized residual velocities on a 3x3 grid around each
-    point in a velocity field.
-
-    Parameters
-    ----------
-    f_median : GPUArray
-        2D float (m, n), mean velocities around each point.
-    f_neighbours : GPUArray
-        4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present : GPUArray
-        4D int  (m, n, 8), value of one where a neighbour is present.
-
-    Returns
-    -------
-    GPUArray
-        2D float (m, n), median of normalized residual velocities at each point.
-
-    """
-    m, n = f_median.shape
-    size = f_median.size
-    _check_arrays(f_median, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    _check_arrays(
-        f_neighbours, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=(m, n, 8)
-    )
-    _check_arrays(
-        neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
-    )
-
-    f_median_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    block_size = _BLOCK_SIZE
-    grid_size = ceil(size / block_size)
-    median_u_residual = mod_median_velocity.get_function("median_residual")
-    median_u_residual(
-        f_median_residual,
-        f_median,
-        f_neighbours,
-        neighbours_present,
-        DTYPE_i(size),
-        block=(block_size, 1, 1),
-        grid=(grid_size, 1),
-    )
-
-    return f_median_residual
-
-
-def _gpu_median_residual_vec2d(
-    u_median, v_median, u_neighbours, v_neighbours, neighbours_present
-):
-    """Returns the median of normalized residual velocities on a 3x3 grid around each
-    point in a velocity field.
-
-    Parameters
-    ----------
-    u_median, v_median : GPUArray
-        2D float (m, n), mean velocity components around each point.
-    u_neighbours, v_neighbours : GPUArray
-        4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present : GPUArray
-        4D int  (m, n, 8), value of one where a neighbour is present.
-
-    Returns
-    -------
-    GPUArray
-        2D float (m, n), median of residual velocities at each point.
-
-    """
-    m, n = u_median.shape
-    size = u_median.size
-    _check_arrays(
-        u_median,
-        v_median,
-        array_type=gpuarray.GPUArray,
-        dtype=DTYPE_f,
-        shape=u_median.shape,
-    )
-    _check_arrays(
-        u_neighbours,
-        v_neighbours,
-        array_type=gpuarray.GPUArray,
-        dtype=DTYPE_f,
-        shape=(m, n, 8),
-    )
-    _check_arrays(
-        neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
-    )
-
-    residual = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    block_size = _BLOCK_SIZE
-    grid_size = ceil(size / block_size)
-    median_residual = mod_median_velocity.get_function("median_residual_vec2d")
-    median_residual(
-        residual,
-        u_median,
-        v_median,
-        u_neighbours,
-        v_neighbours,
-        neighbours_present,
-        DTYPE_i(size),
-        block=(block_size, 1, 1),
-        grid=(grid_size, 1),
-    )
-
-    return residual
-
-
-mod_mean_velocity = SourceModule(
-    """
 __device__ float num_neighbours(int *np, int t_idx)
 {
     float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2]
@@ -1023,6 +904,7 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
     f_mean[t_idx] = numerator / denominator;
 }
 
+
 __global__ void mean_residual(
     float *mean_residual,
     float *f_mean,
@@ -1047,6 +929,7 @@ __global__ void mean_residual(
     float denominator = num_neighbours(np, t_idx);
     mean_residual[t_idx] = numerator / denominator;
 }
+
 
 __global__ void mean_residual_vec2d(
     float *mean_residual,
@@ -1081,6 +964,7 @@ __global__ void mean_residual_vec2d(
     mean_residual[t_idx] = numerator / denominator;
 }
 
+
 __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
 {
     // nb : value of the neighbouring points
@@ -1104,6 +988,7 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
     f_rms[t_idx] = sqrtf(numerator / denominator);
 
 }
+
 
 __global__ void rms_vec2d(
     float *rms,
@@ -1146,14 +1031,13 @@ __global__ void rms_vec2d(
     rms[t_idx] = sqrtf(numerator / denominator);
 
 }
-
 """
 )
 
 
-def _gpu_mean_velocity(f_neighbours, neighbours_present):
-    """Returns the mean of normalized residual velocities on a 3x3 grid around each
-    point in a velocity field.
+def _gpu_average_velocity(f_neighbours, neighbours_present, method):
+    """Calculates the median velocity on a 3x3 grid around each point in a velocity
+    field.
 
     Parameters
     ----------
@@ -1161,11 +1045,13 @@ def _gpu_mean_velocity(f_neighbours, neighbours_present):
         4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present: GPUArray
         4D int (m, n, 8), value of one where a neighbour is present.
+    str {'median_velocity', 'mean_velocity'}
+        Which residual to compute.
 
     Returns
     -------
     GPUArray
-        2D float (m, n), mean velocities at each point.
+        2D float (m, n), median velocities at each point.
 
     """
     m, n, _ = f_neighbours.shape
@@ -1177,13 +1063,13 @@ def _gpu_mean_velocity(f_neighbours, neighbours_present):
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    f_mean = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_velocity = mod_mean_velocity.get_function("mean_velocity")
-    mean_velocity(
-        f_mean,
+    get_average_velocity = mod_average_velocity.get_function(method)
+    get_average_velocity(
+        f_median,
         f_neighbours,
         neighbours_present,
         DTYPE_i(size),
@@ -1191,31 +1077,33 @@ def _gpu_mean_velocity(f_neighbours, neighbours_present):
         grid=(grid_size, 1),
     )
 
-    return f_mean
+    return f_median
 
 
-def _gpu_mean_residual(f_mean, f_neighbours, neighbours_present):
-    """Returns the mean of normalized residual velocities on a 3x3 grid around each
-    point in a velocity field.
+def _gpu_residual(f_median, f_neighbours, neighbours_present, method):
+    """Returns the mean/median/rms of normalized residual velocities on a 3x3 grid around
+    each point in a velocity field.
 
     Parameters
     ----------
-    f_mean: GPUArray
+    f_median : GPUArray
         2D float (m, n), mean velocities around each point.
     f_neighbours : GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present : GPUArray
-        4D int (m, n, 8), value of one where a neighbour is present.
+        4D int  (m, n, 8), value of one where a neighbour is present.
+    method : str {'mean_residual', 'median_residual', 'rms'}
+        Which residual to compute.
 
     Returns
     -------
     GPUArray
-        2D float (m, n), mean of residual velocities at each point.
+        2D float (m, n), median of normalized residual velocities at each point.
 
     """
-    m, n = f_mean.shape
-    size = f_mean.size
-    _check_arrays(f_mean, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
+    m, n = f_median.shape
+    size = f_median.size
+    _check_arrays(f_median, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
     _check_arrays(
         f_neighbours, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=(m, n, 8)
     )
@@ -1223,14 +1111,14 @@ def _gpu_mean_residual(f_mean, f_neighbours, neighbours_present):
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    f_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_residual = mod_mean_velocity.get_function("mean_residual")
-    mean_residual(
-        f_residual,
-        f_mean,
+    get_residual = mod_average_velocity.get_function(method)
+    get_residual(
+        f_median_residual,
+        f_median,
         f_neighbours,
         neighbours_present,
         DTYPE_i(size),
@@ -1238,38 +1126,40 @@ def _gpu_mean_residual(f_mean, f_neighbours, neighbours_present):
         grid=(grid_size, 1),
     )
 
-    return f_residual
+    return f_median_residual
 
 
-def _gpu_mean_residual_vec2d(
-    u_mean, v_mean, u_neighbours, v_neighbours, neighbours_present
+def _gpu_residual_vec2d(
+    u_median, v_median, u_neighbours, v_neighbours, neighbours_present, method
 ):
-    """Returns the mean of normalized residual velocities on a 3x3 grid around each
+    """Returns the median of normalized residual velocities on a 3x3 grid around each
     point in a velocity field.
 
     Parameters
     ----------
-    u_mean, v_mean: GPUArray
-        2D float (m, n), mean velocities around each point.
+    u_median, v_median : GPUArray
+        2D float (m, n), mean velocity components around each point.
     u_neighbours, v_neighbours : GPUArray
         4D float (m, n, 8), neighbouring velocities of every point.
     neighbours_present : GPUArray
-        4D int (m, n, 8), value of one where a neighbour is present.
+        4D int  (m, n, 8), value of one where a neighbour is present.
+    method : str {'mean_residual_vec2d', 'median_residual_vec2d', 'rms_vec2d'}
+        Which residual to compute.
 
     Returns
     -------
     GPUArray
-        2D float (m, n), mean of residual velocities at each point.
+        2D float (m, n), median of residual velocities at each point.
 
     """
-    m, n = u_mean.shape
-    size = u_mean.size
+    m, n = u_median.shape
+    size = u_median.size
     _check_arrays(
-        u_mean,
-        v_mean,
+        u_median,
+        v_median,
         array_type=gpuarray.GPUArray,
         dtype=DTYPE_f,
-        shape=u_mean.shape,
+        shape=u_median.shape,
     )
     _check_arrays(
         u_neighbours,
@@ -1286,11 +1176,11 @@ def _gpu_mean_residual_vec2d(
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    mean_residual = mod_mean_velocity.get_function("mean_residual_vec2d")
-    mean_residual(
+    get_residual = mod_average_velocity.get_function(method)
+    get_residual(
         residual,
-        u_mean,
-        v_mean,
+        u_median,
+        v_median,
         u_neighbours,
         v_neighbours,
         neighbours_present,
@@ -1300,103 +1190,3 @@ def _gpu_mean_residual_vec2d(
     )
 
     return residual
-
-
-def _gpu_rms(f_mean, f_neighbours, neighbours_present):
-    """Returns the rms of normalized residual velocities in a 3x3 grid around each point
-    in a velocity field.
-
-    Parameters
-    ----------
-    f_mean : GPUArray
-        2D float (m, n), mean velocities around each point.
-    f_neighbours : GPUArray
-        4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present : GPUArray
-        4D int (m, n, 8), value of one where a neighbour is present.
-
-    Returns
-    -------
-    GPUArray
-        2D float (m, n), RMS velocities at each point.
-
-    """
-    m, n = f_mean.shape
-    size = f_mean.size
-    _check_arrays(f_mean, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    _check_arrays(
-        f_neighbours, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=(m, n, 8)
-    )
-    _check_arrays(
-        neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
-    )
-
-    f_rms = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    block_size = _BLOCK_SIZE
-    grid_size = ceil(size / block_size)
-    u_rms = mod_mean_velocity.get_function("rms")
-    u_rms(
-        f_rms,
-        f_mean,
-        f_neighbours,
-        neighbours_present,
-        DTYPE_i(size),
-        block=(block_size, 1, 1),
-        grid=(grid_size, 1),
-    )
-
-    return f_rms
-
-
-def _gpu_rms_vec2d(u_mean, v_mean, u_neighbours, v_neighbours, neighbours_present):
-    """Returns the rms of normalized residual velocities in a 3x3 grid around each point
-    in a velocity field.
-
-    Parameters
-    ----------
-    u_mean, v_mean : GPUArray
-        2D float (m, n), mean velocities around each point.
-    u_neighbours, v_neighbours : GPUArray
-        4D float (m, n, 8), neighbouring velocities of every point.
-    neighbours_present : GPUArray
-        4D int (m, n, 8), value of one where a neighbour is present.
-
-    Returns
-    -------
-    GPUArray
-        2D float (m, n), RMS velocities at each point.
-
-    """
-    m, n = u_mean.shape
-    size = u_mean.size
-    _check_arrays(u_mean, v_mean, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
-    _check_arrays(
-        u_neighbours,
-        v_neighbours,
-        array_type=gpuarray.GPUArray,
-        dtype=DTYPE_f,
-        shape=(m, n, 8),
-    )
-    _check_arrays(
-        neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
-    )
-
-    rms = gpuarray.empty((m, n), dtype=DTYPE_f)
-
-    block_size = _BLOCK_SIZE
-    grid_size = ceil(size / block_size)
-    u_rms = mod_mean_velocity.get_function("rms_vec2d")
-    u_rms(
-        rms,
-        u_mean,
-        v_mean,
-        u_neighbours,
-        v_neighbours,
-        neighbours_present,
-        DTYPE_i(size),
-        block=(block_size, 1, 1),
-        grid=(grid_size, 1),
-    )
-
-    return rms
