@@ -1,1 +1,1 @@
-"""Test module for gpu_mp.py."""
+"""Test module for mp.py."""

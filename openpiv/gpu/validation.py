@@ -1,16 +1,17 @@
 """This module is for GPU-accelerated validation algorithms."""
 
 from math import ceil, prod, log10
-
 import numpy as np
+
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 
 # import pycuda.cumath as cumath
+
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from openpiv.gpu_misc import _check_arrays, gpu_mask, _Subset, _Number
+from gpu.misc import _check_arrays, gpu_mask, _Subset, _Number
 
 # Define 32-bit types
 DTYPE_i = np.int32

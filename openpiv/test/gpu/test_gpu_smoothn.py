@@ -1,4 +1,4 @@
-"""Test module for gpu_smoothn.py.
+"""Test module for smoothn.py.
 
 Still need to test for non-isotropic spacing and n-dim vector fields.
 
@@ -12,7 +12,7 @@ from numbers import Number
 import scipy.fft as fft
 import pycuda.gpuarray as gpuarray
 
-import openpiv.gpu_smoothn as gpu_smoothn
+import gpu.smoothn as gpu_smoothn
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32

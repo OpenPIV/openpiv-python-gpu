@@ -6,10 +6,7 @@ writing to the same file. Please remember to use a queue if doing file I/O concu
 """
 from multiprocessing import (
     Process,
-    Manager,
-    Pool,
     cpu_count,
-    set_start_method,
     current_process,
 )
 from math import ceil
@@ -209,7 +206,7 @@ def mp_gpu_func(frame_a, frame_b, num_gpus, kwargs):
 def gpu_func(frame_a, frame_b, kwargs):
     # start a PyCUDA context
     # import pycuda.autoinit
-    import openpiv.gpu_process as gpu_process
+    import gpu.process as gpu_process
 
     # GPU process
     with warnings.catch_warnings():

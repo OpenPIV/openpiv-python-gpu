@@ -20,10 +20,10 @@ from pycuda.compiler import SourceModule
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from openpiv.gpu_validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
-from openpiv.gpu_smoothn import gpu_smoothn
-import gpu_misc
-from openpiv.gpu_misc import (
+from gpu.validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+from gpu.smoothn import gpu_smoothn
+import gpu.misc as gpu_misc
+from gpu.misc import (
     _check_arrays,
     _Validator,
     _Bool,

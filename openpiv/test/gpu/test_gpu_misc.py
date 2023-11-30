@@ -1,12 +1,12 @@
-"""Test module for gpu_misc.py."""
+"""Test module for misc.py."""
 
 import numpy as np
 import pytest
 
 import pycuda.gpuarray as gpuarray
 
-import openpiv.gpu_misc as gpu_misc
-import openpiv.gpu_process as gpu_process
+import gpu.misc as gpu_misc
+import gpu.process as gpu_process
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32

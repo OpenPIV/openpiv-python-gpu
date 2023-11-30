@@ -21,7 +21,7 @@ from pycuda.compiler import SourceModule
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from openpiv.gpu_misc import _check_arrays
+from gpu.misc import _check_arrays
 
 # scikit-cuda gives an annoying warning everytime it's imported.
 with warnings.catch_warnings():

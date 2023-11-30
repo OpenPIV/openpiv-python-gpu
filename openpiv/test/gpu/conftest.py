@@ -4,8 +4,8 @@ import numpy as np
 from imageio.v2 import imread
 import pycuda.gpuarray as gpuarray
 
-import gpu_process
-import gpu_validation
+from gpu import process as gpu_process, validation as gpu_validation
+
 
 # GLOBAL VARIABLES
 DTYPE_i = np.int32

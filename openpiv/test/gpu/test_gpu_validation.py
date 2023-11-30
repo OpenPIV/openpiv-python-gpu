@@ -1,4 +1,4 @@
-"""Test module for gpu_validation.py."""
+"""Test module for validation.py."""
 
 import pytest
 import numpy as np
@@ -10,7 +10,7 @@ import pycuda.gpuarray as gpuarray
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-import gpu_validation
+from gpu import validation as gpu_validation
 
 DTYPE_i = np.int32
 DTYPE_f = np.float32
@@ -486,14 +486,14 @@ def test_validation_gpu_(
 
 
 @pytest.fixture
-def validation(peaks_reshape):
-    def validation(f, **params):
+def validate(peaks_reshape):
+    def validate(f, **params):
         val_locations = gpu_validation.gpu_validation(*f, **params).get()
 
         assert np.sum(val_locations) > 0
         assert not np.any(np.isnan(val_locations))
 
-    return partial(validation, peaks_reshape)
+    return partial(validate, peaks_reshape)
 
 
 @pytest.mark.integtest
@@ -502,33 +502,33 @@ class TestValidationParams:
         "mask_",
         [True, False],
     )
-    def test_validation_gpu_mask(self, mask_, mask, validation):
+    def test_validation_gpu_mask(self, mask_, mask, validate):
         mask_ = mask if mask else None
-        validation(mask=mask_)
+        validate(mask=mask_)
 
     @pytest.mark.parametrize(
         "validation_method", list(gpu_validation.ALLOWED_VALIDATION_METHODS)
     )
     def test_validation_gpu_validation_method(
-        self, validation_method, s2n_ratio, validation
+        self, validation_method, s2n_ratio, validate
     ):
-        validation(s2n=s2n_ratio, validation_method=validation_method)
+        validate(s2n=s2n_ratio, validation_method=validation_method)
 
     @pytest.mark.parametrize("s2n_tol", [1.5, gpu_validation.S2N_TOL])
-    def test_validation_gpu_s2n_tol(self, s2n_tol, validation):
-        validation(s2n_tol=s2n_tol)
+    def test_validation_gpu_s2n_tol(self, s2n_tol, validate):
+        validate(s2n_tol=s2n_tol)
 
     @pytest.mark.parametrize("median_tol", [1.5, gpu_validation.MEDIAN_TOL])
-    def test_validation_gpu_median_tol(self, median_tol, validation):
-        validation(median_tol=median_tol)
+    def test_validation_gpu_median_tol(self, median_tol, validate):
+        validate(median_tol=median_tol)
 
     @pytest.mark.parametrize("mean_tol", [1.5, gpu_validation.MEAN_TOL])
-    def test_validation_gpu_mean_tol(self, mean_tol, validation):
-        validation(mean_tol=mean_tol)
+    def test_validation_gpu_mean_tol(self, mean_tol, validate):
+        validate(mean_tol=mean_tol)
 
     @pytest.mark.parametrize("rms_tol", [1.5, gpu_validation.RMS_TOL])
-    def test_validation_gpu_rms_tol(self, rms_tol, validation):
-        validation(rms_tol=rms_tol)
+    def test_validation_gpu_rms_tol(self, rms_tol, validate):
+        validate(rms_tol=rms_tol)
 
 
 # REGRESSION TESTS

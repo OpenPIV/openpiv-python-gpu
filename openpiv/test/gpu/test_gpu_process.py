@@ -13,7 +13,7 @@ import pycuda.gpuarray as gpuarray
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-import openpiv.gpu_process as gpu_process
+import gpu.process as gpu_process
 
 # GLOBAL VARIABLES
 DTYPE_i = np.int32
