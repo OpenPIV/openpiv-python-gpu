@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/148214993.svg)](https://zenodo.org/badge/latestdoi/148214993)
 
-[openpiv-python](https://github.com/OpenPIV/openpiv-python) with the addition of GPU-accelerated functions.
+Version of [openpiv-python](https://github.com/OpenPIV/openpiv-python) with the addition of GPU-accelerated functions.
 Compared to the CPU-bound functions, the GPU-accelerated modules perform much faster, making them suitable for large
 datasets.
 The GPU-acceleration is done using Nvidia's CUDA platform, so it can run only on machines with Nvidia GPUs.
@@ -13,23 +13,18 @@ python skills.
 
 ## Warning
 
-The GPU functionality OpenPIV-Python is still in *pre-beta* state. This means that
+The GPU functions of OpenPIV-Python is still in *pre-beta* state. This means that
 it still might have some bugs and the API may change. However, testing and contributing
-is very welcome, especially if you can contribute with new algorithms and features.
+is welcome, especially if you can contribute with new algorithms and features.
 
 Validation of the code for instantaneous and time averaged flow has been done, and a 
 paper on that topic has been published.
 
 ## Test without installation
-Click the link - thanks to BinderHub, Jupyter and Conda you can now get it in your browser with zero installation:
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/openpiv/openpiv-python/master?filepath=openpiv%2Fexamples%2Fnotebooks%2Ftutorial1.ipynb)
 
-To try the GPU functionality on Google Colab:
-[Openpiv_Python_Cython_GPU_demo.ipynb](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Basic.ipynb). 
+Try the GPU functionality on Google Colab: [Basic Tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Basic.ipynb).
 When viewing the file on GitHub there will be a link to view the notebook with Google Colab.
 Click the link to load the notebook into Colaboratory where you can test the GPU capabilities.
-
-
 
 ## Install from source
 
@@ -50,8 +45,8 @@ To perform a global installation, use:
 
 ## Documentation
 
-The OpenPIV documentation is available on the project web page at <https://openpiv.readthedocs.org>. For documentation
-of the GPU-accelerated modules, see API reference or the tutorial notebooks below.
+The OpenPIV documentation is available on the project web page at <https://openpiv.readthedocs.org>.
+For documentation of the GPU-accelerated modules, see API reference or the tutorial notebooks below.
 
 ## Demo notebooks 
 
@@ -59,8 +54,8 @@ Two tutorial notebooks demonstrate the usage of the GPU-accelerated functions:
 1. [Basic tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
 2. [Advanced tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
 
-Notebooks containing examples for non-GPU PIV functions are available in another repository: [OpenPIV-Python-Examples](https://github.com/OpenPIV/openpiv-python-examples)
-
+Notebooks containing examples for non-GPU PIV functions are available in the base repository:
+[OpenPIV-Python-Examples](https://github.com/OpenPIV/openpiv-python-examples)
 
 ## Contributors
 
@@ -69,8 +64,8 @@ Notebooks containing examples for non-GPU PIV functions are available in another
 3. [Alex Liberzon](https://github.com/alexlib)
 4. [Eric Yang](https://github.com/ericyang125)
 
-
-Copyright statement: `smoothn.py` is a Python version of `smoothn.m` originally created by D. Garcia [https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn], written by Prof. Lewis and available on Github [https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py]. We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license. 
+Copyright statement: `smoothn.py` is [a Python version of `smoothn.m` originally created by D. Garcia](https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn), written by Prof. Lewis and [available on Github](https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py).
+We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license. 
 
 ## How to cite this work
 
@@ -115,7 +110,6 @@ Ensure that cl.exe is on your Windows PATH.
 Follow the instructions for installation at:
 
 https://docs.nvidia.com/cuda/
-
 
 ### Installing scikit-cuda and PyCUDA
 
