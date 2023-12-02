@@ -1,37 +1,36 @@
 from os import path
 from setuptools import setup, find_packages
 
+
 # read the contents of your README file
 this_directory = path.abspath(path.dirname(__file__))
+# with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
     name="OpenPIV",
-    version='0.23.8',
+    version='0.25.1',
     packages=find_packages(),
     include_package_data=True,
     long_description=long_description,
     long_description_content_type='text/markdown',
     setup_requires=[
         'setuptools',
-        'cython',
-        'numpy'
     ],
     install_requires=[
         'numpy',
-        'imageio',
+        'imageio>=2.22.4',
         'matplotlib>=3',
         'scikit-image',
         'scipy',
         'natsort',
-        'GitPython',
-        'pytest',
-        'watermark',
-        'tqdm'
-        'skcuda'
+        'tqdm',
+        'importlib_resources'
         'pycuda'
+        'skcuda'
     ],
+    extras_require={"tests": ["pytest"]},
     classifiers=[
         # PyPI-specific version type. The number specified here is a magic
         # constant
@@ -42,6 +41,8 @@ setup(
         # Sublist of all supported Python versions.
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
 
         # Sublist of all supported platforms and environments.
         'Operating System :: MacOS :: MacOS X',

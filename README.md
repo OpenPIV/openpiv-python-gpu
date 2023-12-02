@@ -2,34 +2,38 @@
 
 [![DOI](https://zenodo.org/badge/148214993.svg)](https://zenodo.org/badge/latestdoi/148214993)
 
-A version of [openpiv-python](https://github.com/OpenPIV/openpiv-python) with the addition of GPU-accelerated modules.
+[openpiv-python](https://github.com/OpenPIV/openpiv-python) with the addition of GPU-accelerated functions.
 Compared to the CPU-bound functions, the GPU-accelerated modules perform much faster, making them suitable for large
 datasets.
-The GPU-acceleration is done using Nvidia's CUDA platform, so it requires running on machines with Nvidia GPUs.
+The GPU-acceleration is done using Nvidia's CUDA platform, so it can run only on machines with Nvidia GPUs.
 
 OpenPIV-Python consists of Python modules for scripting and executing the analysis of a set of PIV image pairs. In
 addition, a Qt and Tk graphical user interfaces are in development, to ease the use for those users who don't have
 python skills.
 
 ## Warning
-The OpenPIV-Python GPU version is still in pre-beta state. This means that
+
+The GPU functionality OpenPIV-Python is still in *pre-beta* state. This means that
 it still might have some bugs and the API may change. However, testing and contributing
 is very welcome, especially if you can contribute with new algorithms and features.
 
 Validation of the code for instantaneous and time averaged flow has been done, and a 
 paper on that topic has been published.
 
-So far, testing has been done on Linux environments only.
-
 ## Test without installation
-You can test the code without needing to install anything locally. Included in this repository is the IPython Notebook
+Click the link - thanks to BinderHub, Jupyter and Conda you can now get it in your browser with zero installation:
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/openpiv/openpiv-python/master?filepath=openpiv%2Fexamples%2Fnotebooks%2Ftutorial1.ipynb)
+
+To try the GPU functionality on Google Colab:
 [Openpiv_Python_Cython_GPU_demo.ipynb](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Basic.ipynb). 
-When viewing the file on GitHub there will be a link to view the notebook with Google's Colaboratory. 
-Clicking this will load the notebook into Colaboratory where you can test the GPU capabilities.
+When viewing the file on GitHub there will be a link to view the notebook with Google Colab.
+Click the link to load the notebook into Colaboratory where you can test the GPU capabilities.
+
+
 
 ## Install from source
 
-First, install the Nvidia CUDA toolkit, which is available for Windows or specific Linux kernels only
+The GPU functions require the Nvidia CUDA toolkit, which is available for Windows or specific Linux kernels only
 ([supported linux kernels](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#system-requirements)).
 
 Depending on your platform, the CUDA toolkit or the CUDA-related python packages (`PyCUDA, scikit-cuda`) could be
@@ -40,23 +44,22 @@ Clone the repository from GitHub:
 
     git clone https://github.com/OpenPIV/openpiv-python-gpu.git
 
-Either add the directory to your PYTHONPATH, or to do a global installation, use:
+To perform a global installation, use:
 
     python setup.py install
 
 ## Documentation
 
 The OpenPIV documentation is available on the project web page at <https://openpiv.readthedocs.org>. For documentation
-of the GPU-accelerated modules, see the notebooks below.
+of the GPU-accelerated modules, see API reference or the tutorial notebooks below.
 
 ## Demo notebooks 
 
 Two tutorial notebooks demonstrate the usage of the GPU-accelerated functions:
-- [Basic tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
-- [Advanced tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
+1. [Basic tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
+2. [Advanced tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
 
-Notebooks for the CPU-bound PIV-functions are available in another repository:
-- [openpiv-python-examples](https://github.com/OpenPIV/openpiv-python-examples)
+Notebooks containing examples for non-GPU PIV functions are available in another repository: [OpenPIV-Python-Examples](https://github.com/OpenPIV/openpiv-python-examples)
 
 
 ## Contributors
@@ -66,14 +69,12 @@ Notebooks for the CPU-bound PIV-functions are available in another repository:
 3. [Alex Liberzon](https://github.com/alexlib)
 4. [Eric Yang](https://github.com/ericyang125)
 
-Copyright statement: `smoothn.py` is a Python version of `smoothn.m` originally created by
-[D. Garcia](https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn), written by Prof. Lewis, and available on
-[GitHub](https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py). We include
-versions of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for
-releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the
-authors regarding their license. 
+
+Copyright statement: `smoothn.py` is a Python version of `smoothn.m` originally created by D. Garcia [https://de.mathworks.com/matlabcentral/fileexchange/25634-smoothn], written by Prof. Lewis and available on Github [https://github.com/profLewis/geogg122/blob/master/Chapter5_Interpolation/python/smoothn.py]. We include a version of it in the `openpiv` folder for convenience and preservation. We are thankful to the original authors for releasing their work as an open source. OpenPIV license does not relate to this code. Please communicate with the authors regarding their license. 
 
 ## How to cite this work
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4409178.svg)](https://doi.org/10.5281/zenodo.4409178)
 
 Dallas CA, Wu M, Chou VP, Liberzon A, Sullivan PE. GPU Accelerated Open Source Particle Image Velocimetry Software for
 High Performance Computing Systems. ASME. J. Fluids Eng. 2019.

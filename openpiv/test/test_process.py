@@ -1,14 +1,14 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage.util import random_noise
+from skimage import img_as_ubyte
+from scipy.ndimage import shift as shift_img
+# import pkg_resources as pkg
+from importlib_resources import files
 from openpiv.pyprocess import extended_search_area_piv as piv
 from openpiv.pyprocess import fft_correlate_images, \
                               correlation_to_displacement
-import matplotlib.pyplot as plt
 
-import numpy as np
-
-
-from skimage.util import random_noise
-from skimage import img_as_ubyte
-from scipy.ndimage import shift
 
 threshold = 0.25
 
@@ -27,7 +27,7 @@ shift_u = -3.5  # shift to the left, should be placed in columns, axis=1
 # ^
 # |
 # |
-shift_v = 2.2   # shift upwards, should be placed in rows, axis=0 
+shift_v = 2.5   # shift upwards, should be placed in rows, axis=0 
 
 
 def create_pair(image_size=32, u=shift_u, v=shift_v):
@@ -42,7 +42,7 @@ def create_pair(image_size=32, u=shift_u, v=shift_v):
 
     # frame_b = np.roll(np.roll(frame_a, u, axis=1), v, axis=0)
     # scipy shift allows to shift by floating values
-    frame_b = shift(frame_a, (v, u), mode='wrap')
+    frame_b = shift_img(frame_a, (v, u), mode='wrap')
 
     # fig, ax = plt.subplots(1, 2, figsize=(10, 5))
     # ax[0].imshow(frame_a, cmap=plt.cm.gray)
@@ -125,7 +125,26 @@ def test_process_extended_search_area():
 
 
 def test_sig2noise_ratio():
-    return False
+    """ s2n ratio test """
+    from openpiv import tools 
+    im1 = files('openpiv.data').joinpath('test1/exp1_001_a.bmp')
+    im2 = files('openpiv.data').joinpath('test1/exp1_001_b.bmp')
+    
+
+    frame_a = tools.imread(im1)
+    frame_b = tools.imread(im2)
+    
+    u, v, s2n = piv(
+        frame_a.astype(np.int32),
+        frame_b.astype(np.int32),
+        window_size=32,
+        search_area_size=64,
+        sig2noise_method="peak2peak",
+        subpixel_method="gaussian"
+    )   
+    # print(s2n.flatten().min(),s2n.mean(),s2n.max())
+    assert np.allclose(s2n.mean(), 1.422, rtol=1e-3)
+    assert np.allclose(s2n.max(), 2.264, rtol=1e-3)
 
 
 def test_fft_correlate():
