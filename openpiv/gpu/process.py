@@ -11,8 +11,8 @@ import logging
 import warnings
 from math import sqrt, ceil, log2, prod
 from numbers import Number
-
 import numpy as np
+
 import pycuda.gpuarray as gpuarray
 import pycuda.cumath as cumath
 from pycuda.compiler import SourceModule
@@ -20,10 +20,17 @@ from pycuda.compiler import SourceModule
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from gpu.validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
-from gpu.smoothn import gpu_smoothn
-import gpu.misc as gpu_misc
-from gpu.misc import (
+# scikit-cuda gives a warning everytime it's imported.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)
+    import skcuda.fft as cufft
+    from skcuda import misc as cumisc
+
+
+from openpiv.gpu.validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+from openpiv.gpu.smoothn import gpu_smoothn
+import openpiv.gpu.misc as gpu_misc
+from openpiv.gpu.misc import (
     _check_arrays,
     _Validator,
     _Bool,
@@ -33,12 +40,7 @@ from gpu.misc import (
     _Array,
 )
 
-# Initialize the scikit-cuda library. This is necessary when certain cumisc calls happen
-# that don't autoinit.
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", UserWarning)
-    import skcuda.fft as cufft
-    from skcuda import misc as cumisc
+# Initialize the scikit-cuda library.
 cumisc.init()
 
 # Define 32-bit types.
@@ -552,10 +554,20 @@ def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
 
     Example
     -------
-    x, y, u, v, mask, s2n = gpu_piv(frame_a, frame_b, mask=None,
-        window_size_iters=(1, 2), min_window_size=16,
-    overlap_ratio=0.5, dt=1, deform=True, smooth=True, nb_validation_iter=2,
-        validation_method='median_velocity', median_tol=2)
+    x, y, u, v, mask, s2n = gpu_piv(
+        frame_a,
+        frame_b,
+        mask=None,
+        window_size_iters=(1, 2),
+        min_window_size=16,
+        overlap_ratio=0.5,
+        dt=1,
+        deform=True,
+        smooth=True,
+        nb_validation_iter=2,
+        validation_method='median_velocity',
+        median_tol=2
+    )
 
     """
     piv_gpu = PIVGPU(frame_a.shape, **kwargs)

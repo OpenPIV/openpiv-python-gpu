@@ -6,12 +6,11 @@ import numpy as np
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 
-# import pycuda.cumath as cumath
 
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from gpu.misc import _check_arrays, gpu_mask, _Subset, _Number
+from openpiv.gpu.misc import _check_arrays, gpu_mask, _Subset, _Number
 
 # Define 32-bit types
 DTYPE_i = np.int32

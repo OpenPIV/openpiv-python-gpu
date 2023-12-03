@@ -10,8 +10,8 @@ that the smoothing performance has been preserved.
 import logging
 import warnings
 from math import sqrt, log2, log10, ceil
-
 import numpy as np
+
 from scipy.optimize import fmin_l_bfgs_b
 from scipy.fft import dct, idct
 from scipy.ndimage import distance_transform_edt
@@ -21,13 +21,15 @@ from pycuda.compiler import SourceModule
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-from gpu.misc import _check_arrays
-
-# scikit-cuda gives an annoying warning everytime it's imported.
+# scikit-cuda gives a warning everytime it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
     import skcuda.fft as cufft
     from skcuda import misc as cumisc
+
+from openpiv.gpu.misc import _check_arrays
+
+# Initialize the scikit-cuda library.
 cumisc.init()
 
 DTYPE_i = np.int32
