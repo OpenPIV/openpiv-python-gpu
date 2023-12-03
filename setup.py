@@ -26,7 +26,9 @@ setup(
         "scipy",
         "natsort",
         "tqdm",
-        "importlib_resources" "pycuda" "skcuda",
+        "importlib_resources",
+        "pycuda",
+        "skcuda",
     ],
     extras_require={"tests": ["pytest", "pytest-benchmark", "pytest-regressions"]},
     classifiers=[
