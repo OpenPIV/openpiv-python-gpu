@@ -713,10 +713,10 @@ class PIVGPU:
         Whether to smooth the intermediate fields.
     num_validation_iters : int, optional
         Number of iterations per validation cycle.
-    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'},
+    validation_method : str {'median_velocity', 'mean_velocity', 'rms_velocity', 's2n'},
         tuple or None, optional
         Method(s) to use for validation.
-    s2n_tol, median_tol, mean_tol, rms_tol : float, optional
+    median_tol, mean_tol, rms_tol, s2n_tol: float, optional
         Tolerance of the validation methods.
     smoothing_par : float or None, optional
         Smoothing parameter to pass to smoothn to apply to the intermediate velocity

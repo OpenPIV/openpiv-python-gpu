@@ -22,14 +22,13 @@ paper on that topic has been published.
 
 ## Test without installation
 
-Try the GPU functionality on Google Colab: [Basic Tutorial](https://github.com/OpenPIV/openpiv-python-gpu/openpiv/tutorials/Openpiv_Python_GPU_Tutorial_Basic.ipynb).
+Try the GPU functionality on Google Colab: [Basic Tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb).
 When viewing the file on GitHub there will be a link to view the notebook with Google Colab.
 Click the link to load the notebook into Colaboratory where you can test the GPU capabilities.
 
 ## Install from source
 
-The GPU functions require the Nvidia CUDA toolkit, which is available for Windows or specific Linux kernels only
-([supported linux kernels](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#system-requirements)).
+The GPU functions require the Nvidia CUDA toolkit, which is available for Windows or [supported Linux kernels only](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#system-requirements).
 
 Depending on your platform, the CUDA toolkit or the CUDA-related python packages (`PyCUDA, scikit-cuda`) could be
 problematic to install.
