@@ -28,7 +28,7 @@ setup(
         "tqdm",
         "importlib_resources",
         "pycuda",
-        "skcuda",
+        "scikit-cuda",
     ],
     extras_require={"tests": ["pytest", "pytest-benchmark", "pytest-regressions"]},
     classifiers=[
