@@ -312,12 +312,6 @@ class ValidationGPU:
         """Performs signal-to-noise validation on each field."""
         if s2n_ratio is None:
             return
-        _check_arrays(
-            s2n_ratio,
-            array_type=gpuarray.GPUArray,
-            dtype=DTYPE_f,
-            size=prod(self.f_shape),
-        )
         s2n_tol = log10(self.validation_tols["s2n"])
 
         sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)

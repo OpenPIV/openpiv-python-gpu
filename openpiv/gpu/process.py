@@ -937,9 +937,6 @@ class PIVGPU:
 
     def _frames_to_gpu(self, frame_a, frame_b):
         """Sends frames to device with masking."""
-        _check_arrays(
-            frame_a, frame_b, array_type=np.ndarray, shape=frame_a.shape, ndim=2
-        )
         frame_mask = self._frame_mask
 
         frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
@@ -965,9 +962,6 @@ class PIVGPU:
 
     def _get_predictions(self, u, v):
         """Returns the predicted velocity field to begin the next iteration."""
-        _check_arrays(
-            u, v, array_type=gpuarray.GPUArray, dtype=DTYPE_f, shape=u.shape, ndim=2
-        )
         x0, y0 = self._piv_fields[self._k - 1].grid_coords
         x1, y1 = self._piv_field_k.grid_coords
         mask = self._piv_fields[self._k - 1].get_gpu_mask()
@@ -1112,13 +1106,6 @@ class PIVGPU:
 
     def _get_residual(self, i_peak, j_peak):
         """Normalizes the residual by the maximum quantization error of 0.5 pixel."""
-        _check_arrays(
-            i_peak,
-            j_peak,
-            array_type=gpuarray.GPUArray,
-            dtype=DTYPE_f,
-            shape=i_peak.shape,
-        )
         try:
             self.residual = (
                 sqrt(gpuarray.sum(i_peak**2 + j_peak**2).get() / i_peak.size) / 0.5
