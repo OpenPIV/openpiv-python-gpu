@@ -1428,12 +1428,12 @@ __global__ void fft_shift(float *destination, float *source, int ht, int wd, int
     if (idx_x >= wd || idx_y >= ht) {return;}
 
     // Compute the mapping.
-    int row_dest = (idx_y + ht / 2) % ht;
-    int col_dest = (idx_x + wd / 2) % wd;
+    // int row_dest = (idx_y + ht / 2) % ht;
+    // int col_dest = (idx_x + wd / 2) % wd;
 
     // Get the source and destination indices.
     int s_idx = ws * idx_i + wd * idx_y + idx_x;
-    int d_idx = ws * idx_i + wd * row_dest + col_dest;
+    int d_idx = ws * idx_i + wd * ((idx_y + ht / 2) % ht) + (idx_x + wd / 2) % wd;
     destination[d_idx] = source[s_idx];
 }
 """
@@ -1593,15 +1593,15 @@ __global__ void window_slice(
     int y = (idx_i / n) * spacing + offset_y + idx_y;
 
     // Indices of new array to map to.
-    int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+    // int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
     // Find limits of domain.
     int inside_domain = (x >= 0 && x < wd && y >= 0 && y < ht);
 
     if (inside_domain) {
         // Apply the mapping.
-        output[w_range] = input[(y * wd + x)];
-    } else {output[w_range] = 0.0f;}
+        output[idx_i * ws * ws + ws * idx_y + idx_x] = input[(y * wd + x)];
+    } else {output[idx_i * ws * ws + ws * idx_y + idx_x] = 0.0f;}
 }
 
 
@@ -1671,18 +1671,20 @@ __global__ void window_slice_deform(
     int y2 = y1 + 1;
 
     // Indices of image to map to.
-    int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
+    // int w_range = idx_i * ws * ws + ws * idx_y + idx_x;
 
     // Find limits of domain.
-    int inside_domain = (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht);
+    // int inside_domain = x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht;
 
-    if (inside_domain) {
+    if (x1 >= 0 && x2 < wd && y1 >= 0 && y2 < ht) {
         // Apply the mapping.
-        output[w_range] = (x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
-                        + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
-                        + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
-                        + (x - x1) * (y - y1) * input[(y2 * wd + x2)];  // f22
-    } else {output[w_range] = 0.0f;}
+        output[idx_i * ws * ws + ws * idx_y + idx_x] = (
+            (x2 - x) * (y2 - y) * input[(y1 * wd + x1)]  // f11
+            + (x - x1) * (y2 - y) * input[(y1 * wd + x2)]  // f21
+            + (x2 - x) * (y - y1) * input[(y2 * wd + x1)]  // f12
+            + (x - x1) * (y - y1) * input[(y2 * wd + x2)]
+        );  // f22
+    } else {output[idx_i * ws * ws + ws * idx_y + idx_x] = 0.0f;}
 }
 """
 )
@@ -1826,9 +1828,9 @@ __global__ void normalize(
     if (t_idx >= size) {return;}
 
     // indices for mean matrix
-    int w_idx = t_idx / window_size;
+    // int w_idx = t_idx / window_size;
 
-    array_norm[t_idx] = array[t_idx] - mean[w_idx];
+    array_norm[t_idx] = array[t_idx] - mean[t_idx / window_size];
 }
 """
 )
@@ -1892,11 +1894,13 @@ __global__ void zero_pad(
     int ind_y = blockIdx.z * blockDim.y + threadIdx.y;
 
     // get range of values to map
-    int data_range = ind_i * ht * wd + wd * ind_y + ind_x;
-    int zp_range = ind_i * fft_ht * fft_wd + fft_wd * (ind_y + dy) + ind_x + dx;
+    // int data_range = ind_i * ht * wd + wd * ind_y + ind_x;
+    // int zp_range = ind_i * fft_ht * fft_wd + fft_wd * (ind_y + dy) + ind_x + dx;
 
     // apply the map
-    array_zp[zp_range] = array[data_range];
+    array_zp[ind_i * fft_ht * fft_wd + fft_wd * (ind_y + dy) + ind_x + dx] = (
+        array[ind_i * ht * wd + wd * ind_y + ind_x]
+    );
 }
 """
 )
@@ -2531,10 +2535,12 @@ __global__ void correlation_rms(
     int idx_x = blockIdx.y * blockDim.x + threadIdx.x;
     int idx_y = blockIdx.z * blockDim.y + threadIdx.y;
     if (idx_x >= wd || idx_y >= ht) {return;}
-    int idx = idx_i * size + idx_y * wd + idx_x;
+    // int idx = idx_i * size + idx_y * wd + idx_x;
 
     // Mask the point if its value greater than the half-peak value.
-    if (corr[idx] >= corr_p[idx_i] / 2.0f) {corr[idx] = 0.0f;}
+    if (corr[idx_i * size + idx_y * wd + idx_x] >= corr_p[idx_i] / 2.0f) {
+        corr[idx_i * size + idx_y * wd + idx_x] = 0.0f;
+    }
 }
 """
 )

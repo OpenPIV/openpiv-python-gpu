@@ -216,7 +216,6 @@ mod_replace_nan = SourceModule(
     """
 #include <math.h>
 
-
 __global__ void replace_nan(float *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -253,10 +252,9 @@ __global__ void replace_negative_f(float *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
-    float value = f[t_idx];
 
     // Check for negative values.
-    f[t_idx] = value * (value > 0.0f);
+    f[t_idx] *= (f[t_idx] > 0.0f);
 }
 
 
@@ -264,10 +262,9 @@ __global__ void replace_negative_i(int *f, int size)
 {
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
-    float value = f[t_idx];
 
     // Check for negative values.
-    f[t_idx] = value * (value > 0);
+    f[t_idx] *= (f[t_idx] > 0);
 }
 """
 )

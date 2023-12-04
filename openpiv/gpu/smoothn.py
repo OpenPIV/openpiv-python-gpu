@@ -876,7 +876,6 @@ __global__ void flip_frequency(
     int row = t_idx / (y_width - left_pad);
     int col = t_idx % (y_width - left_pad);
 
-    //dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 + offset];
     dest[row * y_width + col + left_pad] = src[row * wd + wd - col - 1 - offset];
 }
 """
