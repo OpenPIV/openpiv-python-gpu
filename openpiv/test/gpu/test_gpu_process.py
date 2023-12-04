@@ -272,7 +272,7 @@ def test_piv_field_gpu_stack_iw(search_size):
     window_size = 16
     offset = (search_size - window_size) // 2
 
-    piv_field = gpu_process.PIVFieldGPU(shape, 16, 8)
+    piv_field = gpu_process.PIVField(shape, 16, 8)
     frame = np.zeros(shape, dtype=DTYPE_f)
     frame[4, 5] = 1
     frame = gpuarray.to_gpu(frame)
@@ -1035,7 +1035,7 @@ def correlate():
     win_b = gpuarray.to_gpu(win_b)
 
     def correlate(**params):
-        corr_gpu = gpu_process.CorrelationGPU(**params)
+        corr_gpu = gpu_process.Correlation(**params)
         corr_gpu(win_a, win_b)
         i_peak, j_peak = corr_gpu.get_displacement_peaks()
 
@@ -1291,7 +1291,7 @@ def test_stack_iw_determinism(search_ratio, frames_gpu, ndarrays_regression):
     _ = gpu_process.gpu_piv(frame_a_random, frame_b_random, **params)
 
     # Process deterministic data
-    piv_field = gpu_process.PIVFieldGPU(shape, 32, 16)
+    piv_field = gpu_process.PIVField(shape, 32, 16)
     win_a, win_b = piv_field.stack_iw(frame_a, frame_b)
     ndarrays_regression.check({"win_a": win_a.get(), "win_b": win_b.get()})
 
@@ -1339,7 +1339,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
     }
     frame_a, frame_b = create_pair_shift(shape, u_shift, v_shift)
 
-    piv_gpu = gpu_process.PIVGPU(shape, **args)
+    piv_gpu = gpu_process.PIV(shape, **args)
 
     @benchmark
     def repeat_10():

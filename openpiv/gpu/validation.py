@@ -61,14 +61,14 @@ def gpu_validation(
         of invalid vectors.
 
     """
-    validation_gpu = ValidationGPU(
+    validation_gpu = Validation(
         f[0], mask, validation_method, s2n_tol, median_tol, mean_tol, rms_tol
     )
 
     return validation_gpu(*f, s2n=s2n)
 
 
-class ValidationGPU:
+class Validation:
     """Validates vector-fields and returns an array indicating which location need to be
     validated.
 

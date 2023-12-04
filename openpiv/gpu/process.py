@@ -27,7 +27,7 @@ with warnings.catch_warnings():
     from skcuda import misc as cumisc
 
 
-from openpiv.gpu.validation import ValidationGPU, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+from openpiv.gpu.validation import Validation, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu.smoothn import gpu_smoothn
 import openpiv.gpu.misc as gpu_misc
 from openpiv.gpu.misc import (
@@ -76,7 +76,7 @@ class _NFFT(_Integer):
         return int(value), int(value)
 
 
-class CorrelationGPU:
+class Correlation:
     """Performs the cross-correlation of interrogation windows.
 
     Can perform correlation by extended search area, where the first window is larger
@@ -324,7 +324,7 @@ class CorrelationGPU:
         return s2n_ratio
 
 
-class PIVFieldGPU:
+class PIVField:
     """Geometric information of PIV windows.
 
     Parameters
@@ -566,7 +566,7 @@ def gpu_piv(frame_a, frame_b, return_s2n=False, **kwargs):
     )
 
     """
-    piv_gpu = PIVGPU(frame_a.shape, **kwargs)
+    piv_gpu = PIV(frame_a.shape, **kwargs)
 
     x, y = piv_gpu.coords
     u, v = piv_gpu(frame_a, frame_b)
@@ -654,7 +654,7 @@ class _WindowSizeIters(_Validator):
         return tuple([(ws, num_iters) for ws, num_iters in window_size_iters])
 
 
-class PIVGPU:
+class PIV:
     """Iterative GPU-accelerated algorithm that uses translation and deformation of
     interrogation windows.
 
@@ -820,7 +820,7 @@ class PIVGPU:
         frames = self._frames_to_gpu(frame_a, frame_b)
 
         # Create the correlation object.
-        self._corr_gpu = CorrelationGPU(
+        self._corr_gpu = Correlation(
             subpixel_method=self.subpixel_method,
             s2n_method=self.s2n_method,
             s2n_width=self.s2n_width,
@@ -920,7 +920,7 @@ class PIVGPU:
                 window_size = window_size
                 spacing = _spacing(window_size, self.overlap_ratio)
                 self._piv_fields_.append(
-                    PIVFieldGPU(
+                    PIVField(
                         self.frame_shape,
                         window_size,
                         spacing,
@@ -1045,7 +1045,7 @@ class PIVGPU:
             s2n_ratio = self._corr_gpu.s2n_ratio
 
         # Create the validation object.
-        self._validation_gpu = ValidationGPU(
+        self._validation_gpu = Validation(
             u.shape,
             mask=mask,
             validation_method=self.validation_method,

@@ -145,7 +145,7 @@ def piv_field_gpu(frames):
     window_size = 32
     spacing = 16
 
-    piv_field_gpu = gpu_process.PIVFieldGPU(frame_shape, window_size, spacing)
+    piv_field_gpu = gpu_process.PIVField(frame_shape, window_size, spacing)
 
     return piv_field_gpu
 
@@ -173,7 +173,7 @@ def correlation_gpu(piv_field_gpu, frames_gpu):
 
     win_a, win_b = piv_field_gpu.stack_iw(frame_a, frame_b)
 
-    correlation_gpu = gpu_process.CorrelationGPU()
+    correlation_gpu = gpu_process.Correlation()
     correlation_gpu(win_a, win_b)
 
     return correlation_gpu
@@ -228,7 +228,7 @@ def validation_gpu(piv_field_gpu, boolean_gpu_array):
 
     mask = boolean_gpu_array(shape, seed=1)
 
-    validation_gpu = gpu_validation.ValidationGPU(
+    validation_gpu = gpu_validation.Validation(
         shape,
         mask=mask,
         validation_method="median_velocity",
@@ -244,7 +244,7 @@ def validation_gpu(piv_field_gpu, boolean_gpu_array):
 @pytest.fixture
 def piv_gpu(frames):
     frame_a, frame_b = frames
-    piv_gpu = gpu_process.PIVGPU(frame_a)
+    piv_gpu = gpu_process.PIV(frame_a)
     piv_gpu(frame_a, frame_b)
 
     return piv_gpu
