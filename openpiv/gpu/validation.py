@@ -1,8 +1,6 @@
 """This module is for GPU-accelerated validation algorithms."""
 
-from math import ceil, prod, log10
-import numpy as np
-
+from math import ceil, log10
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 
@@ -57,7 +55,7 @@ def gpu_validation(
     Returns
     -------
     GPUArray
-        2D int (m, n), array of indices that need to be validated. 1s indicate locations
+        2D int (m, n), locations that need to be validated. 1s indicate locations
         of invalid vectors.
 
     """
@@ -78,7 +76,7 @@ class Validation:
         (ht, wd) of the fields to be validated.
     mask : GPUArray or None
         2D float, mask for the velocity field.
-    validation_method : str {'s2n', 'median_velocity', 'mean_velocity', 'rms_velocity'},
+    validation_method : str {'median_velocity', 'mean_velocity', 'rms_velocity', 's2n'},
         optional
         Method(s) to use for validation.
     s2n_tol : float, optional
@@ -148,7 +146,7 @@ class Validation:
         Returns
         -------
         val_locations : GPUArray
-            2D int (m, n), array of indices that need to be validated. 1s indicate
+            2D int (m, n), locations that need to be validated. 1s indicate
             locations of invalid vectors.
 
         """
@@ -161,14 +159,14 @@ class Validation:
         self._f = f
 
         # Do the validations.
-        if "s2n" in self.validation_method:
-            self._s2n_validation(s2n)
         if "median_velocity" in self.validation_method:
             self._median_validation()
         if "mean_velocity" in self.validation_method:
             self._mean_validation()
         if "rms_velocity" in self.validation_method:
             self._rms_validation()
+        if "s2n" in self.validation_method:
+            self._s2n_validation(s2n)
 
         # Apply the mask to the final result.
         self._mask_val_locations()
@@ -213,7 +211,13 @@ class Validation:
 
     @property
     def median(self):
-        """Local median surrounding 8 velocity vectors."""
+        """Local median surrounding 8 velocity vectors.
+
+        Returns
+        -------
+        GPUArray or tuple
+
+        """
         f_median = self._median
         if len(f_median) == 1:
             f_median = f_median[0]
@@ -222,7 +226,13 @@ class Validation:
 
     @property
     def mean(self):
-        """Local mean of surrounding 8 velocity vectors."""
+        """Local mean of surrounding 8 velocity vectors.
+
+        Returns
+        -------
+        GPUArray or tuple
+
+        """
         f_mean = self._mean
         if len(f_mean) == 1:
             f_mean = f_mean[0]
@@ -231,7 +241,13 @@ class Validation:
 
     @property
     def num_validation_locations(self):
-        """Local mean of surrounding 8 velocity vectors."""
+        """Local mean of surrounding 8 velocity vectors.
+
+        Returns
+        -------
+        int
+
+        """
         if self.val_locations is None:
             return None
         if self._n_val is None:
@@ -303,15 +319,6 @@ class Validation:
         self._neighbours_ = None
         self._median_ = None
         self._mean_ = None
-
-    def _s2n_validation(self, s2n_ratio):
-        """Performs signal-to-noise validation on each field."""
-        if s2n_ratio is None:
-            return
-        s2n_tol = log10(self.validation_tols["s2n"])
-
-        sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)
-        self.val_locations = _local_validation(sig2noise_tol, 1, self.val_locations)
 
     def _median_validation(self):
         """Performs median validation on each field."""
@@ -443,6 +450,22 @@ class Validation:
                 "Validation not supported for vector fields with dimension != 2."
             )
 
+    def _s2n_validation(self, s2n_ratio):
+        """Performs signal-to-noise validation on each field.
+
+        Parameters
+        ----------
+        s2n_ratio : GPUArray
+            2D float (m, n), signal-to-noise ratio at each point of the velocity field.
+
+        """
+        if s2n_ratio is None:
+            return
+        s2n_tol = log10(self.validation_tols["s2n"])
+
+        sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)
+        self.val_locations = _local_validation(sig2noise_tol, 1, self.val_locations)
+
     def _mask_val_locations(self):
         """Removes masked locations from the validation locations."""
         if self.mask is not None and self.val_locations is not None:
@@ -504,8 +527,22 @@ __global__ void neighbour_validation_vec2d(
 
 
 def _local_validation(f, tol, val_locations=None):
-    """Updates the validation list by checking if the array elements exceed the
-    tolerance."""
+    """Updates the validation list by checking if the array elements meet the tolerance.
+
+    Parameters
+    ----------
+    f : GPUArray
+        2D float (m, n), scalar field to be validated.
+    tol : float
+        Validation tolerance.
+    val_locations : GPUArray
+        2D int (m, n), locations that need to be validated.
+
+    Returns
+    -------
+    GPUArray
+
+    """
     size = f.size
     _check_arrays(f, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
 
@@ -529,7 +566,26 @@ def _local_validation(f, tol, val_locations=None):
 
 def _neighbour_validation(f, f_mean, residual, tol, val_locations=None):
     """Updates the validation list by checking if the neighbouring elements exceed the
-    tolerance."""
+    tolerance.
+
+    Parameters
+    ----------
+    f : GPUArray
+        2D float (m, n), scalar field to be validated.
+    f_mean : GPUArray
+        2D float (m, n), mean/median of surrounding points.
+    residual : GPUArray
+        2D float (m, n), normalized residual of surrounding points.
+    tol : float
+        Validation tolerance.
+    val_locations : GPUArray
+        2D int (m, n), locations that need to be validated.
+
+    Returns
+    -------
+    GPUArray
+
+    """
     size = f.size
     _check_arrays(
         f,

@@ -407,13 +407,13 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
     Parameters
     ----------
     x0, y0 : GPUArray
-        1D float, grid coordinates of the original field
+        1D float, grid coordinates of the original field.
     x1, y1 : GPUArray
         1D float, grid coordinates of the field to be interpolated.
     f0 : GPUArray
         2D float (y0.size, x0.size), field to be interpolated.
-    mask : (y0.size, x0.size), GPUArray or None, optional
-        2D float, value of one where masked values are.
+    mask : GPUArray or None, optional
+        2D float (y0.size, x0.size), value of one where masked values are.
 
     Returns
     -------
@@ -489,7 +489,7 @@ def interpolate_replace(x0, y0, x1, y1, f0, f1, replace_locations, mask=None):
     Parameters
     ----------
     x0, y0 : GPUArray
-        1D float, grid coordinates of the original field
+        1D float, grid coordinates of the original field.
     x1, y1 : GPUArray
         1D float, grid coordinates of the field to be interpolated.
     f0 : GPUArray
@@ -499,8 +499,8 @@ def interpolate_replace(x0, y0, x1, y1, f0, f1, replace_locations, mask=None):
     replace_locations : GPUArray
         2D int (y1.size, x1.size) location of values to be replaced. Non-zero values
         indicate replacement.
-    mask : (y0.size, x0.size), GPUArray or None, optional
-        2D float, value of one where masked values are.
+    mask : GPUArray or None, optional
+        2D float (y0.size, x0.size), value of one where masked values are.
 
     Returns
     -------
