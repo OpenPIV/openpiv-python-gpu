@@ -11,11 +11,7 @@ from pycuda.compiler import SourceModule
 import pycuda.autoinit
 
 from openpiv.gpu.misc import _check_arrays, gpu_mask, _Subset, _Number
-
-# Define 32-bit types
-DTYPE_i = np.int32
-DTYPE_f = np.float32
-DTYPE_c = np.complex64
+from openpiv.gpu import DTYPE_i, DTYPE_f
 
 ALLOWED_VALIDATION_METHODS = {"s2n", "median_velocity", "mean_velocity", "rms_velocity"}
 S2N_TOL = 2

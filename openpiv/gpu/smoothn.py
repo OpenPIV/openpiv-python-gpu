@@ -28,13 +28,10 @@ with warnings.catch_warnings():
     from skcuda import misc as cumisc
 
 from openpiv.gpu.misc import _check_arrays
+from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
 
 # Initialize the scikit-cuda library.
 cumisc.init()
-
-DTYPE_i = np.int32
-DTYPE_f = np.float32
-DTYPE_c = np.complex64
 
 MAX_ROBUST_STEPS = 3
 ERR_P = 0.1

@@ -39,14 +39,10 @@ from openpiv.gpu.misc import (
     _Element,
     _Array,
 )
+from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
 
 # Initialize the scikit-cuda library.
 cumisc.init()
-
-# Define 32-bit types.
-DTYPE_i = np.int32
-DTYPE_f = np.float32
-DTYPE_c = np.complex64
 
 ALLOWED_SUBPIXEL_METHODS = {"gaussian", "parabolic", "centroid"}
 ALLOWED_S2N_METHODS = {"peak2peak", "peak2energy", "peak2rms"}

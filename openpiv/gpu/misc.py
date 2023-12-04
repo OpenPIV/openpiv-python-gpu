@@ -10,10 +10,7 @@ from pycuda.compiler import SourceModule
 # noinspection PyUnresolvedReferences
 import pycuda.autoinit
 
-# Define 32-bit types.
-DTYPE_i = np.int32
-DTYPE_f = np.float32
-DTYPE_c = np.complex64
+from openpiv.gpu import DTYPE_i, DTYPE_f
 
 _BLOCK_SIZE = 64
 
