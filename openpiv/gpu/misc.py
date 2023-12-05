@@ -17,23 +17,21 @@ _BLOCK_SIZE = 64
 
 mod_logical_or = SourceModule(
     """
-__global__ void gpu_logical_or_f(float *f_out, float *f1, float *f2, int size)
+__global__ void gpu_logical_or_f(float *f_out, float *f_in1, float *f_in2, int size)
 {
-    // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    f_out[t_idx] = f1[t_idx] || f2[t_idx];
+    f_out[t_idx] = f_in1[t_idx] || f_in2[t_idx];
 }
 
 
-__global__ void gpu_logical_or_i(int *f_out, int *f1, int *f2, int size)
+__global__ void gpu_logical_or_i(int *f_out, int *f_in1, int *f_in2, int size)
 {
-    // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
-    f_out[t_idx] = f1[t_idx] || f2[t_idx];
+    f_out[t_idx] = f_in1[t_idx] || f_in2[t_idx];
 }
 """
 )
@@ -79,7 +77,6 @@ mod_mask = SourceModule(
     """
 __global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
 {
-    // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -89,7 +86,6 @@ __global__ void gpu_mask_f(float *f_masked, float *f, int *mask, int size)
 
 __global__ void gpu_mask_i(int *f_masked, int *f, int *mask, int size)
 {
-    // frame_masked : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -142,7 +138,8 @@ mod_scalar_mod = SourceModule(
     """
 __global__ void scalar_mod_f(float *i, float *r, float *f, int m, int size)
 {
-    // i, r : output arguments
+    // i: integer part of quotient
+    // r: remainder part of quotient
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -154,7 +151,8 @@ __global__ void scalar_mod_f(float *i, float *r, float *f, int m, int size)
 
 __global__ void scalar_mod_i(int *i, int *r, int *f, int m, int size)
 {
-    // i, r : output arguments
+    // i: integer part of quotient
+    // r: remainder part of quotient
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 

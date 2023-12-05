@@ -142,6 +142,7 @@ class Correlation:
         """
         self._s2n_ratio_ = None
 
+        # Derive the shapes of the correlation windows.
         self._init_fft_shape(win_a)
 
         # Correlate the windows.
@@ -165,7 +166,7 @@ class Correlation:
             self._correlation, self._peak1_idx_, self.subpixel_method
         )
 
-        # Center the peak displacement.
+        # Center the peak displacement in the windows.
         i_peak, j_peak = self._center_displacement(row_sp, col_sp)
 
         return i_peak, j_peak
@@ -224,7 +225,7 @@ class Correlation:
 
         """
         if self._s2n_ratio_ is None:
-            # Compute signal-to-noise ratio by the elected method.
+            # Compute signal-to-noise ratio by the selected method.
             if self.s2n_method == "peak2energy":
                 s2n_ratio = _peak2energy(self._correlation, self._corr_peak1)
             elif self.s2n_method == "peak2rms":
@@ -366,9 +367,10 @@ class PIVField:
         self.spacing = spacing
         self.center_field = center_field
         self.search_ratio = search_ratio
+
+        # Derive field properties.
         self.shape = field_shape(frame_shape, window_size, spacing)
         self.size = prod(self.shape)
-
         self._x, self._y = field_coords(
             frame_shape, window_size, spacing, center_field=center_field
         )
@@ -435,8 +437,9 @@ class PIVField:
                 raise ValueError("search_size must be a positive integer or None.")
         else:
             search_size = self.window_size
-        offset_a, offset_b = self._get_search_offset(search_size)
+        offset_a, offset_b = self._get_offset(search_size)
 
+        # Get the windows.
         win_a = _gpu_window_slice(
             frame_a,
             self.shape,
@@ -501,7 +504,7 @@ class PIVField:
         """
         return _center_offset(self.frame_shape, self.window_size, self.spacing)
 
-    def _get_search_offset(self, search_size):
+    def _get_offset(self, search_size):
         """Returns offset to center each window with extended search.
 
         Parameters
@@ -924,7 +927,6 @@ class PIV:
         if self._piv_fields_ is None:
             self._piv_fields_ = []
             for window_size in _window_sizes(self.window_size_iters):
-                window_size = window_size
                 spacing = _spacing(window_size, self.overlap_ratio)
                 self._piv_fields_.append(
                     PIVField(
@@ -1333,10 +1335,17 @@ def field_coords(frame_shape, window_size, spacing, center_field=True):
 
 mod_strain = SourceModule(
     """
-__global__ void strain_gpu(float *strain, float *u, float *v, int *mask, float h, int m,
-                    int n, int size)
+__global__ void strain_gpu(
+    float *strain,
+    float *u,
+    float *v,
+    int *mask,
+    float h,
+    int m,
+    int n,
+    int size
+)
 {
-    // strain : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size * 2) {return;}
 
@@ -1346,23 +1355,24 @@ __global__ void strain_gpu(float *strain, float *u, float *v, int *mask, float h
     int col = t_idx % size % n;
     int idx = row * n + col;
 
-    // Use first order differencing on edges.
-    int interior = ((row > 0) * (row < m - 1) || !gradient_axis)
-                 * ((col > 0) * (col < n - 1) || gradient_axis);
-
-    // Get the indexes of the neighbouring points.
+    // Get indices of neighbouring points. Use first order differencing on edges.
     int idx0 = idx - (row > 0) * (gradient_axis) * n - (col > 0) * !gradient_axis;
     int idx1 = idx + (row < m - 1) * (gradient_axis) * n
                    + (col < n - 1) * !gradient_axis;
 
-    // Revert to first order differencing where field is masked.
-    interior = interior * !mask[idx0] * !mask[idx1];
+    // Revert to first order differencing on edges or where field is masked.
+    float h_factor = ((row > 0) * (row < m - 1) || !gradient_axis)
+                   * ((col > 0) * (col < n - 1) || gradient_axis)
+                   * !mask[idx0] * !mask[idx1]
+                   + 1.0f;
+
+    // Check if neighbouring points are masked.
     idx0 = idx0 * !mask[idx0] + idx * mask[idx0];
     idx1 = idx1 * !mask[idx1] + idx * mask[idx1];
 
     // Do the differencing.
-    strain[size * gradient_axis + idx] = (u[idx1] - u[idx0]) / (1 + interior) / h;
-    strain[size * (gradient_axis + 2) + idx] = (v[idx1] - v[idx0]) / (1 + interior) / h;
+    strain[size * gradient_axis + idx] = (u[idx1] - u[idx0]) / (h_factor) / h;
+    strain[size * (gradient_axis + 2) + idx] = (v[idx1] - v[idx0]) / (h_factor) / h;
 }
 """
 )
@@ -1566,6 +1576,280 @@ def _center_offset(frame_shape, window_size, spacing):
     offset_y = (ht - (spacing * (m - 1) + window_size)) // 2 + window_size % 2
 
     return offset_x, offset_y
+
+
+def _zero_pad_offset(win_a, win_b):
+    """Returns offset required to align the data in both windows.
+
+    Parameters
+    ----------
+    win_a, win_b : GPUArray
+        3D float (n_windows, ht, wd), interrogation windows.
+
+    Returns
+    -------
+    tuple of ints
+        [offset_x, offset_y].
+
+    """
+    n_windows_a, ht_a, wd_a = win_a.shape
+    n_windows_b, ht_b, wd_b = win_b.shape
+    assert n_windows_a == n_windows_b
+    assert (
+        ht_b >= ht_b and wd_b >= wd_a
+    ), "Dimensions of the second window must be equal or larger than the first."
+
+    offset = ((wd_b - wd_a) // 2, (ht_b - ht_a) // 2)
+
+    return offset
+
+
+def _peak_idx(correlation):
+    """Returns the row and column of the highest peak in correlation function.
+
+    Parameters
+    ----------
+    correlation : GPUArray
+        3D float (n_windows, wd, ht), image of the correlation function.
+
+    Returns
+    -------
+    peak_idx : GPUArray
+        1D int (n_windows,), index of peak location in reshaped correlation function.
+
+    """
+    n_windows, wd, ht = correlation.shape
+
+    # cumisc.argmax() has different behaviour when n_windows < 2.
+    if n_windows > 1:
+        corr_reshape = correlation.reshape(n_windows, wd * ht)
+        peak_idx = cumisc.argmax(corr_reshape, axis=1).astype(DTYPE_i)
+    else:
+        corr_reshape = correlation.reshape((wd * ht, 1))
+        peak_idx = cumisc.argmax(corr_reshape, axis=0).astype(DTYPE_i)
+
+    return peak_idx
+
+
+def _peak_value(correlation, peak_idx):
+    """Returns the value of the highest peak in correlation function.
+
+    Parameters
+    ----------
+    peak_idx : GPUArray
+        1D int (n_windows, wd, ht), image of the correlation function.
+
+    Returns
+    -------
+    GPUArray
+        1D int (n_windows,), flattened index of corr peak.
+
+    """
+    n_windows, wd, ht = correlation.shape
+    corr_reshape = correlation.reshape(n_windows, wd * ht)
+    peak_value = _gpu_window_index_f(corr_reshape, peak_idx)
+
+    return peak_value
+
+
+def _peak2energy(correlation, corr_peak):
+    """Returns the mean-energy measure of the signal-to-noise-ratio.
+
+    Parameters
+    ----------
+    correlation : GPUAray
+        3D float (n_windows, fft_ht, fft_wd), correlation data for each window.
+    corr_peak : GPUAray
+        1D float (n_windows,), value of first correlation peak for each window.
+
+    Returns
+    -------
+    GPUArray
+        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
+
+    """
+    _check_arrays(correlation, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
+    _check_arrays(
+        corr_peak,
+        array_type=gpuarray.GPUArray,
+        dtype=DTYPE_f,
+        size=correlation.shape[0],
+    )
+    n_windows, fft_wd, fft_ht = correlation.shape
+    size = fft_wd * fft_ht
+
+    # Remove negative correlation values.
+    gpu_misc.gpu_remove_negative(corr_peak)
+    gpu_misc.gpu_remove_negative(correlation)
+
+    corr_reshape = correlation.reshape(n_windows, size)
+    corr_energy = cumisc.mean(corr_reshape**2, axis=1)
+    s2n_ratio = cumath.log10(corr_peak**2 / corr_energy)
+    gpu_misc.gpu_remove_nan(s2n_ratio)
+
+    return s2n_ratio
+
+
+def _peak2rms(correlation, corr_peak):
+    """Returns the RMS-measure of the signal-to-noise-ratio.
+
+    Parameters
+    ----------
+    correlation : GPUAray
+        3D float (n_windows, fft_ht, fft_wd), correlation data for each window.
+    corr_peak : GPUAray
+        1D float (n_windows,), value of first correlation peak for each window.
+
+    Returns
+    -------
+    GPUArray
+        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
+
+
+    """
+    correlation_rms = _gpu_mask_rms(correlation, corr_peak)
+    s2n_ratio = _peak2energy(correlation_rms, corr_peak)
+
+    return s2n_ratio
+
+
+def _get_second_peak(correlation_positive, peak1_idx, mask_width):
+    """Find the value of the second-largest peak.
+
+    The second-largest peak is the height of the peak in the region outside a
+    width * width sub-matrix around the first correlation peak.
+
+    Parameters
+    ----------
+    correlation_positive : GPUArray
+        3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
+        removed.
+    peak1_idx : GPUArray
+        1D int (n_windows,) index locations of the first correlation peaks.
+    mask_width : int
+        Half size of the region around the first correlation peak to ignore for
+        finding the second peak.
+
+    Returns
+    -------
+    GPUArray
+        3D float (n_windows, fft_wd, fft_ht), value of the second correlation peak
+        for each interrogation window.
+
+    """
+    # Set points around the first peak to zero.
+    correlation_masked = _gpu_mask_peak(correlation_positive, peak1_idx, mask_width)
+
+    # Get the height of the second peak of correlation.
+    peak2_idx = _peak_idx(correlation_masked)
+    corr_max2 = _peak_value(correlation_masked, peak2_idx)
+
+    return corr_max2
+
+
+def _peak2peak(corr_peak1, corr_peak2):
+    """Returns the peak-to-peak measure of the signal-to-noise-ratio.
+
+    Parameters
+    ----------
+    corr_peak1, corr_peak2 : GPUArray
+        1D float (n_windows,), value of first/second correlation peak for each window.
+
+    Returns
+    -------
+    GPUArray
+        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
+
+    """
+    _check_arrays(
+        corr_peak1,
+        corr_peak2,
+        array_type=gpuarray.GPUArray,
+        dtype=DTYPE_f,
+        shape=corr_peak1.shape,
+    )
+
+    # Remove negative peaks.
+    gpu_misc.gpu_remove_negative(corr_peak1)
+    gpu_misc.gpu_remove_negative(corr_peak2)
+
+    s2n_ratio = cumath.log10(corr_peak1 / corr_peak2)
+    gpu_misc.gpu_remove_nan(s2n_ratio)
+
+    return s2n_ratio
+
+
+def _piv_iter(window_size_iters):
+    """Generator for PIV iterations.
+
+    Parameters
+    ----------
+    window_size_iters : tuple
+        2-tuples [window_size, num_iterations].
+
+    Yields
+    -------
+    int
+
+    """
+    i = 0
+    for ws_iter in window_size_iters:
+        for _ in range(ws_iter[1]):
+            yield i
+            i += 1
+
+
+def _field_shift(u, v):
+    """Returns the stacked pixel shifts in each direction.
+
+    Parameters
+    ----------
+    u, v : GPUArray
+        2D float (m, n), components of velocity.
+
+    Returns
+    -------
+    shift : GPUArray
+        3D float (2, m, n), [du, dv], shift of the second window.
+
+    """
+    _check_arrays(
+        u, v, array_type=gpuarray.GPUArray, shape=u.shape, dtype=DTYPE_f, ndim=2
+    )
+    m, n = u.shape
+
+    shift = gpuarray.empty((2, m, n), dtype=DTYPE_f)
+    shift[0, :, :] = u
+    shift[1, :, :] = v
+    # shift = gpuarray.stack(u, v, axis=0)  # This should work in latest version of
+    # PyCUDA.
+
+    return shift
+
+
+def _update_validation_locations(val_locations, new_val_locations):
+    """Returns combined validations locations.
+
+    Parameters
+    ----------
+    val_locations : GPUArray or None
+        2D int (m, n), previous locations to validate.
+    new_val_locations : GPUArray
+        2D int (m, n), current locations to validate.
+
+    Returns
+    -------
+    val_locations : GPUArray
+        2D int (m, n), new locations to validate.
+
+    """
+    if val_locations is None:
+        val_locations = new_val_locations
+    else:
+        # val_locations = gpuarray.logical_or(val_locations, val_locations)
+        val_locations = gpu_misc.gpu_logical_or(new_val_locations, val_locations)
+
+    return val_locations
 
 
 mod_window_slice = SourceModule(
@@ -1785,32 +2069,6 @@ def _gpu_window_slice(
         )
 
     return win
-
-
-def _zero_pad_offset(win_a, win_b):
-    """Returns offset required to align the data in both windows.
-
-    Parameters
-    ----------
-    win_a, win_b : GPUArray
-        3D float (n_windows, ht, wd), interrogation windows.
-
-    Returns
-    -------
-    tuple of ints
-        [offset_x, offset_y].
-
-    """
-    n_windows_a, ht_a, wd_a = win_a.shape
-    n_windows_b, ht_b, wd_b = win_b.shape
-    assert n_windows_a == n_windows_b
-    assert (
-        ht_b >= ht_b and wd_b >= wd_a
-    ), "Dimensions of the second window must be equal or larger than the first."
-
-    offset = ((wd_b - wd_a) // 2, (ht_b - ht_a) // 2)
-
-    return offset
 
 
 mod_norm = SourceModule(
@@ -2059,54 +2317,6 @@ def _gpu_window_index_f(correlation, indices):
     return peak
 
 
-def _peak_idx(correlation):
-    """Returns the row and column of the highest peak in correlation function.
-
-    Parameters
-    ----------
-    correlation : GPUArray
-        3D float (n_windows, wd, ht), image of the correlation function.
-
-    Returns
-    -------
-    peak_idx : GPUArray
-        1D int (n_windows,), index of peak location in reshaped correlation function.
-
-    """
-    n_windows, wd, ht = correlation.shape
-
-    # cumisc.argmax() has different behaviour when n_windows < 2.
-    if n_windows > 1:
-        corr_reshape = correlation.reshape(n_windows, wd * ht)
-        peak_idx = cumisc.argmax(corr_reshape, axis=1).astype(DTYPE_i)
-    else:
-        corr_reshape = correlation.reshape((wd * ht, 1))
-        peak_idx = cumisc.argmax(corr_reshape, axis=0).astype(DTYPE_i)
-
-    return peak_idx
-
-
-def _peak_value(correlation, peak_idx):
-    """Returns the value of the highest peak in correlation function.
-
-    Parameters
-    ----------
-    peak_idx : GPUArray
-        1D int (n_windows, wd, ht), image of the correlation function.
-
-    Returns
-    -------
-    GPUArray
-        1D int (n_windows,), flattened index of corr peak.
-
-    """
-    n_windows, wd, ht = correlation.shape
-    corr_reshape = correlation.reshape(n_windows, wd * ht)
-    peak_value = _gpu_window_index_f(corr_reshape, peak_idx)
-
-    return peak_value
-
-
 mod_subpixel_approximation = SourceModule(
     """
 __global__ void gaussian(
@@ -2304,133 +2514,6 @@ def _gpu_subpixel_approximation(correlation, peak_idx, method):
     return row_sp, col_sp
 
 
-def _peak2energy(correlation, corr_peak):
-    """Returns the mean-energy measure of the signal-to-noise-ratio.
-
-    Parameters
-    ----------
-    correlation : GPUAray
-        3D float (n_windows, fft_ht, fft_wd), correlation data for each window.
-    corr_peak : GPUAray
-        1D float (n_windows,), value of first correlation peak for each window.
-
-    Returns
-    -------
-    GPUArray
-        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
-
-    """
-    _check_arrays(correlation, array_type=gpuarray.GPUArray, dtype=DTYPE_f, ndim=3)
-    _check_arrays(
-        corr_peak,
-        array_type=gpuarray.GPUArray,
-        dtype=DTYPE_f,
-        size=correlation.shape[0],
-    )
-    n_windows, fft_wd, fft_ht = correlation.shape
-    size = fft_wd * fft_ht
-
-    # Remove negative correlation values.
-    gpu_misc.gpu_remove_negative(corr_peak)
-    gpu_misc.gpu_remove_negative(correlation)
-
-    corr_reshape = correlation.reshape(n_windows, size)
-    corr_energy = cumisc.mean(corr_reshape**2, axis=1)
-    s2n_ratio = cumath.log10(corr_peak**2 / corr_energy)
-    gpu_misc.gpu_remove_nan(s2n_ratio)
-
-    return s2n_ratio
-
-
-def _peak2rms(correlation, corr_peak):
-    """Returns the RMS-measure of the signal-to-noise-ratio.
-
-    Parameters
-    ----------
-    correlation : GPUAray
-        3D float (n_windows, fft_ht, fft_wd), correlation data for each window.
-    corr_peak : GPUAray
-        1D float (n_windows,), value of first correlation peak for each window.
-
-    Returns
-    -------
-    GPUArray
-        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
-
-
-    """
-    correlation_rms = _gpu_mask_rms(correlation, corr_peak)
-    s2n_ratio = _peak2energy(correlation_rms, corr_peak)
-
-    return s2n_ratio
-
-
-def _get_second_peak(correlation_positive, peak1_idx, mask_width):
-    """Find the value of the second-largest peak.
-
-    The second-largest peak is the height of the peak in the region outside a
-    width * width sub-matrix around the first correlation peak.
-
-    Parameters
-    ----------
-    correlation_positive : GPUArray
-        3D float (n_windows, fft_wd, fft_ht), correlation data with negative values
-        removed.
-    peak1_idx : GPUArray
-        1D int (n_windows,) index locations of the first correlation peaks.
-    mask_width : int
-        Half size of the region around the first correlation peak to ignore for
-        finding the second peak.
-
-    Returns
-    -------
-    GPUArray
-        3D float (n_windows, fft_wd, fft_ht), value of the second correlation peak
-        for each interrogation window.
-
-    """
-    # Set points around the first peak to zero.
-    correlation_masked = _gpu_mask_peak(correlation_positive, peak1_idx, mask_width)
-
-    # Get the height of the second peak of correlation.
-    peak2_idx = _peak_idx(correlation_masked)
-    corr_max2 = _peak_value(correlation_masked, peak2_idx)
-
-    return corr_max2
-
-
-def _peak2peak(corr_peak1, corr_peak2):
-    """Returns the peak-to-peak measure of the signal-to-noise-ratio.
-
-    Parameters
-    ----------
-    corr_peak1, corr_peak2 : GPUArray
-        1D float (n_windows,), value of first/second correlation peak for each window.
-
-    Returns
-    -------
-    GPUArray
-        1D float (m, n), signal-to-noise ratio at each point of the velocity field.
-
-    """
-    _check_arrays(
-        corr_peak1,
-        corr_peak2,
-        array_type=gpuarray.GPUArray,
-        dtype=DTYPE_f,
-        shape=corr_peak1.shape,
-    )
-
-    # Remove negative peaks.
-    gpu_misc.gpu_remove_negative(corr_peak1)
-    gpu_misc.gpu_remove_negative(corr_peak2)
-
-    s2n_ratio = cumath.log10(corr_peak1 / corr_peak2)
-    gpu_misc.gpu_remove_nan(s2n_ratio)
-
-    return s2n_ratio
-
-
 mod_mask_peak = SourceModule(
     """
 __global__ void mask_peak(
@@ -2591,54 +2674,6 @@ def _gpu_mask_rms(correlation_positive, corr_peak):
     return correlation_masked
 
 
-def _piv_iter(window_size_iters):
-    """Generator for PIV iterations.
-
-    Parameters
-    ----------
-    window_size_iters : tuple
-        2-tuples [window_size, num_iterations].
-
-    Yields
-    -------
-    int
-
-    """
-    i = 0
-    for ws_iter in window_size_iters:
-        for _ in range(ws_iter[1]):
-            yield i
-            i += 1
-
-
-def _field_shift(u, v):
-    """Returns the stacked pixel shifts in each direction.
-
-    Parameters
-    ----------
-    u, v : GPUArray
-        2D float (m, n), components of velocity.
-
-    Returns
-    -------
-    shift : GPUArray
-        3D float (2, m, n), [du, dv], shift of the second window.
-
-    """
-    _check_arrays(
-        u, v, array_type=gpuarray.GPUArray, shape=u.shape, dtype=DTYPE_f, ndim=2
-    )
-    m, n = u.shape
-
-    shift = gpuarray.empty((2, m, n), dtype=DTYPE_f)
-    shift[0, :, :] = u
-    shift[1, :, :] = v
-    # shift = gpuarray.stack(u, v, axis=0)  # This should work in latest version of
-    # PyCUDA.
-
-    return shift
-
-
 mod_update = SourceModule(
     """
 __global__ void update_values(
@@ -2649,7 +2684,6 @@ __global__ void update_values(
     int size
 )
 {
-    // u_new : output argument
     int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (t_idx >= size) {return;}
 
@@ -2691,31 +2725,6 @@ def _gpu_update_field(dp, peak, mask):
     )
 
     return f
-
-
-def _update_validation_locations(val_locations, new_val_locations):
-    """Returns combined validations locations.
-
-    Parameters
-    ----------
-    val_locations : GPUArray or None
-        2D int (m, n), previous locations to validate.
-    new_val_locations : GPUArray
-        2D int (m, n), current locations to validate.
-
-    Returns
-    -------
-    val_locations : GPUArray
-        2D int (m, n), new locations to validate.
-
-    """
-    if val_locations is None:
-        val_locations = new_val_locations
-    else:
-        # val_locations = gpuarray.logical_or(val_locations, val_locations)
-        val_locations = gpu_misc.gpu_logical_or(new_val_locations, val_locations)
-
-    return val_locations
 
 
 def _log_iteration(k):

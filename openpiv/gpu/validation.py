@@ -926,10 +926,10 @@ __global__ void median_residual_vec2d(
 
 __device__ float num_neighbours(int *np, int t_idx)
 {
-    float denominator = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2]
+    float n = np[t_idx * 8 + 0] + np[t_idx * 8 + 1] + np[t_idx * 8 + 2]
                       + np[t_idx * 8 + 3] + np[t_idx * 8 + 4]
                       + np[t_idx * 8 + 5] + np[t_idx * 8 + 6] + np[t_idx * 8 + 7];
-    return denominator + (denominator == 0.0f);
+    return n + (n == 0.0f);
 }
 
 
@@ -946,8 +946,7 @@ __global__ void mean_velocity(float *f_mean, float *nb, int *np, int size)
                     + nb[t_idx * 8 + 5] + nb[t_idx * 8 + 6] + nb[t_idx * 8 + 7];
 
     // Mean is normalized by number of terms summed.
-    float denominator = num_neighbours(np, t_idx);
-    f_mean[t_idx] = numerator / denominator;
+    f_mean[t_idx] = numerator / num_neighbours(np, t_idx);
 }
 
 
@@ -972,8 +971,7 @@ __global__ void mean_residual(
                     + fabsf(nb[t_idx * 8 + 6] - f_m) + fabsf(nb[t_idx * 8 + 7] - f_m);
 
     // Mean fluctuation is normalized by number of terms summed.
-    float denominator = num_neighbours(np, t_idx);
-    mean_residual[t_idx] = numerator / denominator;
+    mean_residual[t_idx] = numerator / num_neighbours(np, t_idx);
 }
 
 
@@ -1005,9 +1003,7 @@ __global__ void mean_residual_vec2d(
                     + hypotf(u_nb[t_idx * 8 + 7] - u_m, v_nb[t_idx * 8 + 7] - v_m);
 
     // Mean fluctuation is normalized by number of terms summed
-    // float denominator = sqrtf(2) * num_neighbours(np, t_idx);.
-    float denominator = num_neighbours(np, t_idx);
-    mean_residual[t_idx] = numerator / denominator;
+    mean_residual[t_idx] = numerator / num_neighbours(np, t_idx);
 }
 
 
@@ -1030,8 +1026,7 @@ __global__ void rms(float *f_rms, float *f_mean, float *nb, int *np, int size)
                     + powf(nb[t_idx * 8 + 7] - f_m, 2);
 
     // RMS is normalized by number of terms summed.
-    float denominator = num_neighbours(np, t_idx);
-    f_rms[t_idx] = sqrtf(numerator / denominator);
+    f_rms[t_idx] = sqrtf(numerator / num_neighbours(np, t_idx));
 
 }
 
@@ -1072,10 +1067,7 @@ __global__ void rms_vec2d(
                     + powf(v_nb[t_idx * 8 + 7] - v_m, 2);
 
     // RMS is normalized by number of terms summed.
-    // float denominator = 2.0f * num_neighbours(np, t_idx);
-    float denominator = num_neighbours(np, t_idx);
-    rms[t_idx] = sqrtf(numerator / denominator);
-
+    rms[t_idx] = sqrtf(numerator / num_neighbours(np, t_idx));
 }
 """
 )

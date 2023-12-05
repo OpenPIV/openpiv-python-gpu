@@ -313,7 +313,7 @@ def test_piv_field_gpu_center_offset(piv_field_gpu):
 
 @pytest.mark.parametrize("search_size", [16, 31, 32])
 def test_piv_field_gpu_get_search_offset(search_size, piv_field_gpu):
-    offset_a, offset_b = piv_field_gpu._get_search_offset(search_size)
+    offset_a, offset_b = piv_field_gpu._get_offset(search_size)
     center_offset_x, center_offset_y = piv_field_gpu.center_offset
     search_offset = -(search_size - piv_field_gpu.window_size) // 2
 
