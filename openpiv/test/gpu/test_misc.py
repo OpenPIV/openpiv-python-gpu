@@ -1,15 +1,9 @@
 """Test module for misc.py."""
-
 import numpy as np
 import pytest
+from pycuda import gpuarray
 
-import pycuda.gpuarray as gpuarray
-
-import gpu.misc as gpu_misc
-import gpu.process as gpu_process
-
-DTYPE_i = np.int32
-DTYPE_f = np.float32
+from openpiv.gpu import misc, process, DTYPE_i, DTYPE_f
 
 
 # UTILS
@@ -59,7 +53,7 @@ def interp_mask_np(x0, y0, x1, y1, f0, mask):
 
 
 def grid_coords(shape, window_size, spacing):
-    x, y = gpu_process.field_coords(shape, window_size, spacing)
+    x, y = process.field_coords(shape, window_size, spacing)
     x = x[0, :].astype(DTYPE_f)
     y = y[:, 0].astype(DTYPE_f)
 
@@ -83,7 +77,7 @@ def test_gpu_logical_or(d_type, array_pair, boolean_array_pair):
     f2, f2_d = boolean_array_pair(shape, seed=1)
 
     f_out = np.logical_or(f1, f2)
-    f_out_gpu = gpu_misc.gpu_logical_or(f1_d, f2_d).get()
+    f_out_gpu = misc.gpu_logical_or(f1_d, f2_d).get()
 
     assert np.array_equal(f_out_gpu, f_out)
 
@@ -96,7 +90,7 @@ def test_gpu_mask(d_type, array_pair, boolean_array_pair):
     mask, mask_d = boolean_array_pair(shape, seed=1)
 
     f_masked = f * (1 - mask)
-    f_masked_gpu = gpu_misc.gpu_mask(f_d, mask_d).get()
+    f_masked_gpu = misc.gpu_mask(f_d, mask_d).get()
 
     assert np.array_equal(f_masked_gpu, f_masked)
 
@@ -110,7 +104,7 @@ def test_gpu_scalar_mod_i(d_type, array_pair):
 
     i = f // m
     r = f % m
-    i_d, r_d = gpu_misc.gpu_scalar_mod(f_d, m)
+    i_d, r_d = misc.gpu_scalar_mod(f_d, m)
     i_gpu = i_d.get()
     r_gpu = r_d.get()
 
@@ -127,7 +121,7 @@ def test_gpu_replace_nan_f(np_array):
     f_d = gpuarray.to_gpu(f)
 
     f_finite = np.nan_to_num(f, nan=0, posinf=np.inf)
-    gpu_misc.gpu_remove_nan(f_d)
+    misc.gpu_remove_nan(f_d)
     f_finite_gpu = f_d.get()
 
     assert np.array_equal(f_finite_gpu, f_finite)
@@ -140,7 +134,7 @@ def test_gpu_replace_negative_f(d_type, array_pair):
     f, f_d = array_pair(shape, center=0.0, half_width=2, d_type=d_type)
 
     f[f < 0] = 0
-    gpu_misc.gpu_remove_negative(f_d)
+    misc.gpu_remove_negative(f_d)
     f_positive_gpu = f_d.get()
 
     assert np.array_equal(f_positive_gpu, f)
@@ -152,7 +146,7 @@ def test_gpu_interpolate_mask(spacing, array_pair, boolean_array_pair):
     window_size0 = 4
     window_size1 = 2
     spacing0, spacing1 = spacing
-    f0_shape = gpu_process.field_shape(shape, window_size0, spacing0)
+    f0_shape = process.field_shape(shape, window_size0, spacing0)
 
     f0, f0_d = array_pair(f0_shape, center=0.0, half_width=1.0)
     mask, mask_d = boolean_array_pair(f0_shape, seed=1)
@@ -163,7 +157,7 @@ def test_gpu_interpolate_mask(spacing, array_pair, boolean_array_pair):
     x1_d, y1_d = gpu_arrays(x1, y1)
 
     f1 = interp_mask_np(x0, y0, x1, y1, f0, mask)
-    f1_gpu = gpu_misc.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d).get()
+    f1_gpu = misc.gpu_interpolate(x0_d, y0_d, x1_d, y1_d, f0_d, mask=mask_d).get()
 
     assert np.allclose(f1_gpu, f1)
 
@@ -174,8 +168,8 @@ def test_interpolate_replace(array_pair, boolean_array_pair):
     spacing0 = 2
     window_size1 = 2
     spacing1 = 1
-    f0_shape = gpu_process.field_shape(shape, window_size0, spacing0)
-    f1_shape = gpu_process.field_shape(shape, window_size1, spacing1)
+    f0_shape = process.field_shape(shape, window_size0, spacing0)
+    f1_shape = process.field_shape(shape, window_size1, spacing1)
 
     f0, f0_d = array_pair(f0_shape, center=0.0, half_width=1.0)
     f1, f1_d = array_pair(f1_shape, center=0.0, half_width=1.0)
@@ -190,7 +184,7 @@ def test_interpolate_replace(array_pair, boolean_array_pair):
     f1 = interp_mask_np(x0, y0, x1, y1, f0, mask) * val_locations + f1 * (
         val_locations == 0
     )
-    f1_gpu = gpu_misc.interpolate_replace(
+    f1_gpu = misc.interpolate_replace(
         x0_d, y0_d, x1_d, y1_d, f0_d, f1_d, val_locations_d, mask=mask_d
     ).get()
 

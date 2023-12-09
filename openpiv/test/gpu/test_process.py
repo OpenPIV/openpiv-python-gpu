@@ -1,23 +1,15 @@
-import numpy as np
-import pytest
 from math import sqrt, log2
 
+import numpy as np
+import pytest
 import scipy.fft as fft
 from scipy.ndimage import distance_transform_edt, shift, map_coordinates
 from scipy.signal import correlate2d
-from skimage import img_as_ubyte
+from skimage.util import img_as_ubyte
 from skimage.util import random_noise
-from imageio.v2 import imread
-import pycuda.gpuarray as gpuarray
+from pycuda import gpuarray
 
-# noinspection PyUnresolvedReferences
-import pycuda.autoinit
-
-import gpu.process as gpu_process
-
-# GLOBAL VARIABLES
-DTYPE_i = np.int32
-DTYPE_f = np.float32
+from openpiv.gpu import process, DTYPE_i, DTYPE_f
 
 # dirs
 data_dir = "../data/"
@@ -166,9 +158,6 @@ def _window_size_parameterization(ws_iters, min_window_size):
         ws_iters = (ws_iters,)
     for i, num_iters in enumerate(ws_iters):
         yield (2 ** (len(ws_iters) - i - 1)) * min_window_size, num_iters
-    # for i, num_iters in enumerate(ws_iters):
-    #     for _ in range(num_iters):
-    #         yield (2 ** (len(ws_iters) - i - 1)) * min_window_size
 
 
 # UNIT TESTS
@@ -239,7 +228,7 @@ def test_correlation_gpu_center_displacement(piv_field_gpu, correlation_gpu):
     assert np.array_equal(j_peak, row_sp - fft_shape // 2)
 
 
-@pytest.mark.parametrize("s2n_method", list(gpu_process.ALLOWED_S2N_METHODS))
+@pytest.mark.parametrize("s2n_method", list(process.ALLOWED_S2N_METHODS))
 def test_correlation_gpu_get_s2n(correlation_gpu, s2n_method):
     correlation_gpu.s2n_method = s2n_method
     s2n = correlation_gpu._s2n_ratio
@@ -272,7 +261,7 @@ def test_piv_field_gpu_stack_iw(search_size):
     window_size = 16
     offset = (search_size - window_size) // 2
 
-    piv_field = gpu_process.PIVField(shape, 16, 8)
+    piv_field = process.PIVField(shape, 16, 8)
     frame = np.zeros(shape, dtype=DTYPE_f)
     frame[4, 5] = 1
     frame = gpuarray.to_gpu(frame)
@@ -356,10 +345,9 @@ def test_piv_gpu_get_piv_fields(piv_gpu):
     assert isinstance(s2n, list)
 
 
-def test_piv_gpu_mask_frame(piv_gpu):
+def test_piv_gpu_mask_frame(piv_gpu, frames):
     # Need to test the switch cases.
-    frame_a = imread(data_dir + "test1/exp1_001_a.bmp").astype(np.float32)
-    frame_b = imread(data_dir + "test1/exp1_001_b.bmp").astype(np.float32)
+    frame_a, frame_b = frames
     frame_a_masked, frame_b_masked = piv_gpu._frames_to_gpu(frame_a, frame_b)
 
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
@@ -508,7 +496,7 @@ def test_piv_gpu_get_residual(piv_gpu, array_pair):
 @pytest.mark.parametrize("spacing", [8, 7])
 def test_get_field_shape(frame_shape: tuple, window_size, spacing):
     ht, wd = frame_shape
-    m, n = gpu_process.field_shape(frame_shape, window_size, spacing)
+    m, n = process.field_shape(frame_shape, window_size, spacing)
 
     assert m == int((ht - window_size) // spacing) + 1
     assert n == int((wd - window_size) // spacing) + 1
@@ -527,10 +515,10 @@ def test_get_field_coords(frame_shape: tuple, window_size, spacing, center_field
     offset_x = 0
     offset_y = 0
     if center_field:
-        offset_x, offset_y = gpu_process._center_offset(
+        offset_x, offset_y = process._center_offset(
             frame_shape, window_size, spacing
         )
-    x, y = gpu_process.field_coords(frame_shape, window_size, spacing, center_field)
+    x, y = process.field_coords(frame_shape, window_size, spacing, center_field)
     m, n = x.shape
 
     assert x[0, 0] == half_width + offset_x
@@ -547,7 +535,7 @@ def test_gpu_strain(array_pair):
 
     u_y, u_x = np.gradient(u)
     v_y, v_x = np.gradient(v)
-    strain_gpu = (gpu_process.gpu_strain(u_d, v_d)).get()
+    strain_gpu = (process.gpu_strain(u_d, v_d)).get()
 
     assert np.array_equal(u_x, strain_gpu[0])
     assert np.array_equal(u_y, strain_gpu[1])
@@ -562,14 +550,14 @@ def test_gpu_fft_shift(shape, array_pair):
     correlation, correlation_d = array_pair(shape, center=0.0, half_width=1.0)
 
     correlation_shifted_np = fft.fftshift(correlation, axes=(1, 2))
-    correlation_shifted_gpu = gpu_process.gpu_fft_shift(correlation_d).get()
+    correlation_shifted_gpu = process.gpu_fft_shift(correlation_d).get()
 
     assert np.array_equal(correlation_shifted_gpu, correlation_shifted_np)
 
 
 def test_window_sizes():
     ws_iters = [(32, 2), (16, 1), (8, 3)]
-    window_size_l = list(gpu_process._window_sizes(ws_iters))
+    window_size_l = list(process._window_sizes(ws_iters))
 
     assert window_size_l == [32, 32, 16, 8, 8, 8]
 
@@ -578,7 +566,7 @@ def test_window_sizes():
 def test_spacing(overlap_ratio, spacing):
     window_size = 8
 
-    assert spacing == gpu_process._spacing(window_size, overlap_ratio)
+    assert spacing == process._spacing(window_size, overlap_ratio)
 
 
 def test_field_mask():
@@ -589,7 +577,7 @@ def test_field_mask():
     x1, y1 = np.meshgrid(np.arange(0, ht, 2), np.arange(0, wd, 2))
     frame_mask = np.round((1 + np.cos(x0 * w) * np.cos(y0 * w)) / 2).astype(int)
     field_mask0 = np.round((1 + np.cos(x1 * w) * np.cos(y1 * w)) / 2).astype(int)
-    field_mask1 = gpu_process._field_mask(x1, y1, frame_mask)
+    field_mask1 = process._field_mask(x1, y1, frame_mask)
 
     assert np.array_equal(field_mask1, field_mask0)
 
@@ -599,7 +587,7 @@ def test_field_mask():
     [(64, 8, 4, 0), (66, 8, 4, 1), (66, 7, 4, 2)],
 )
 def test_center_offset(frame_size, window_size, spacing, offset):
-    offset_x, offset_y = gpu_process._center_offset(
+    offset_x, offset_y = process._center_offset(
         (frame_size, frame_size), window_size, spacing
     )
 
@@ -614,7 +602,7 @@ def test_gpu_window_slice(window_size, spacing, offset, pass_shift, array_pair):
     frame_shape = (16, 16)
     window_size = 8
     spacing = 4
-    field_shape = gpu_process.field_shape(frame_shape, window_size, spacing)
+    field_shape = process.field_shape(frame_shape, window_size, spacing)
     offset = 0
 
     frame, frame_d = array_pair(frame_shape, center=0.0, half_width=1.0)
@@ -625,7 +613,7 @@ def test_gpu_window_slice(window_size, spacing, offset, pass_shift, array_pair):
     )
 
     win_np = window_slice_np(frame, field_shape, window_size, spacing, offset)
-    win_gpu = gpu_process._gpu_window_slice(
+    win_gpu = process._gpu_window_slice(
         frame_d, field_shape, window_size, spacing, offset, shift=shift_d
     ).get()
 
@@ -654,7 +642,7 @@ def test_gpu_window_slice_shift(dt, array_pair):
     y = y + v * dt
     coordinates = [y, x]
     win_np[:, :, :] = map_coordinates(frame[:, :], coordinates, order=1)
-    win_gpu = gpu_process._gpu_window_slice(
+    win_gpu = process._gpu_window_slice(
         frame_d, field_shape, ws, spacing, offset, dt=dt, shift=shift_d
     ).get()
 
@@ -690,7 +678,7 @@ def test_gpu_window_slice_strain(dt, array_pair):
     y = y + (v_x * r_x + v_y * r_y) * dt
     coordinates = [y, x]
     win_np[:, :, :] = map_coordinates(frame[:, :], coordinates, order=1)
-    win_gpu = gpu_process._gpu_window_slice(
+    win_gpu = process._gpu_window_slice(
         frame_d, field_shape, ws, spacing, offset, dt=dt, shift=shift_d, strain=strain_d
     ).get()
 
@@ -703,7 +691,7 @@ def test_zero_pad_offset():
 
     win_a = np.zeros(shape_a)
     win_b = np.zeros(shape_b)
-    offset_x, offset_y = gpu_process._zero_pad_offset(win_a, win_b)
+    offset_x, offset_y = process._zero_pad_offset(win_a, win_b)
 
     assert offset_x == (shape_b[2] - shape_a[2]) // 2
     assert offset_y == (shape_b[1] - shape_a[1]) // 2
@@ -717,7 +705,7 @@ def test_gpu_normalize_intensity(array_pair):
 
     mean = np.mean(win.reshape((n_windows, ht * wd)), axis=1).reshape((n_windows, 1, 1))
     win_norm_np = win - mean
-    win_norm_gpu = gpu_process._gpu_normalize_intensity(win_d).get()
+    win_norm_gpu = process._gpu_normalize_intensity(win_d).get()
 
     assert np.allclose(win_norm_gpu, win_norm_np)
 
@@ -733,7 +721,7 @@ def test_gpu_zero_pad(offset, array_pair):
 
     win_zp_np = np.zeros((n_windows, fft_ht, fft_wd), dtype=DTYPE_f)
     win_zp_np[:, offset : offset + ht, offset : offset + wd] = win
-    win_zp_gpu = gpu_process._gpu_zero_pad(win_d, fft_shape, offset).get()
+    win_zp_gpu = process._gpu_zero_pad(win_d, fft_shape, offset).get()
 
     assert np.array_equal(win_zp_gpu, win_zp_np)
 
@@ -752,7 +740,7 @@ def test_cross_correlate(shape: tuple, array_pair):
             win_b[i, :, :], win_a[i, :, :], mode="full", boundary="wrap"
         )[m - 1 :, n - 1 :]
     correlation_np = correlation
-    correlation_d = gpu_process._gpu_cross_correlate(win_a_d, win_b_d)
+    correlation_d = process._gpu_cross_correlate(win_a_d, win_b_d)
     correlation_gpu = correlation_d.get()
 
     assert np.allclose(correlation_gpu, correlation_np, atol=1e-5)
@@ -773,7 +761,7 @@ def test_gpu_window_index_f(array_pair):
     )
 
     values_np = data[np.arange(n_windows), indices].squeeze()
-    values_gpu = gpu_process._gpu_window_index_f(data_d, indices_d).get()
+    values_gpu = process._gpu_window_index_f(data_d, indices_d).get()
 
     assert np.array_equal(values_gpu, values_np)
 
@@ -787,7 +775,7 @@ def test_find_peak(array_pair):
     peak_idx_np = np.argmax(correlation.reshape(n_windows, ht * wd), axis=1).astype(
         dtype=DTYPE_i
     )
-    peak_idx_gpu = gpu_process._peak_idx(correlation_d).get()
+    peak_idx_gpu = process._peak_idx(correlation_d).get()
 
     assert np.array_equal(peak_idx_gpu, peak_idx_np)
 
@@ -804,7 +792,7 @@ def test_get_peak(array_pair):
     corr_peak_np = correlation.reshape(n_windows, ht * wd)[
         np.arange(n_windows), peak_idx
     ]
-    corr_peak_gpu = gpu_process._peak_value(correlation_d, peak_idx_d).get()
+    corr_peak_gpu = process._peak_value(correlation_d, peak_idx_d).get()
 
     assert np.array_equal(corr_peak_gpu, corr_peak_np)
 
@@ -828,7 +816,7 @@ def test_gpu_subpixel_approximation(method, tol, np_array):
     else:
         correlation_d = gaussian_peak(shape, row_sp, col_sp)
 
-    row_sp_d, col_sp_d = gpu_process._gpu_subpixel_approximation(
+    row_sp_d, col_sp_d = process._gpu_subpixel_approximation(
         correlation_d, peak_idx, method
     )
     row_sp_gpu, col_sp_gpu = np_arrays(row_sp_d, col_sp_d)
@@ -852,7 +840,7 @@ def test_peak2rms(array_pair):
         corr_peak**2
         / np.mean(correlation_masked.reshape(n_windows, size) ** 2, axis=1)
     )
-    s2n_gpu = gpu_process._peak2rms(correlation_d, corr_peak_d).get()
+    s2n_gpu = process._peak2rms(correlation_d, corr_peak_d).get()
 
     assert np.allclose(s2n_gpu, s2n_np)
 
@@ -868,7 +856,7 @@ def test_peak2energy(array_pair):
     s2n_np = np.log10(
         corr_peak**2 / np.mean(correlation.reshape(n_windows, size) ** 2, axis=1)
     )
-    s2n_gpu = gpu_process._peak2energy(correlation_d, corr_peak_d).get()
+    s2n_gpu = process._peak2energy(correlation_d, corr_peak_d).get()
 
     assert np.allclose(s2n_gpu, s2n_np)
 
@@ -902,7 +890,7 @@ def test_correlation_gpu_get_second_peak(correlation_gpu):
     correlation_gpu._correlate_windows(win_d, win_d)
     corr = correlation_gpu._correlation
     peak1_idx = correlation_gpu._peak1_idx_
-    corr_max2 = gpu_process._get_second_peak(corr, peak1_idx, 1).get()
+    corr_max2 = process._get_second_peak(corr, peak1_idx, 1).get()
 
     assert corr_max2 < np.amax(corr.get())
 
@@ -915,7 +903,7 @@ def test_peak2peak(array_pair):
     corr_peak2, corr_peak2_d = array_pair((n_windows,), seed=1)
 
     s2n_np = np.log10(corr_peak1 / corr_peak2)
-    s2n_gpu = gpu_process._peak2peak(corr_peak1_d, corr_peak2_d).get()
+    s2n_gpu = process._peak2peak(corr_peak1_d, corr_peak2_d).get()
 
     assert np.allclose(s2n_gpu, s2n_np)
 
@@ -935,7 +923,7 @@ def test_gpu_mask_peak(width, array_pair, np_array):
     peak_idx = gpuarray.to_gpu(row_peak * wd + col_peak)
 
     correlation_masked_np = mask_peak_np(correlation, row_peak, col_peak, width)
-    correlation_masked_gpu = gpu_process._gpu_mask_peak(
+    correlation_masked_gpu = process._gpu_mask_peak(
         correlation_d, peak_idx, width
     ).get()
 
@@ -952,7 +940,7 @@ def test_gpu_mask_rms(array_pair):
     correlation_masked_np = correlation * (
         correlation < corr_peak.reshape(n_windows, 1, 1) / 2
     )
-    correlation_masked_gpu = gpu_process._gpu_mask_rms(correlation_d, corr_peak_d).get()
+    correlation_masked_gpu = process._gpu_mask_rms(correlation_d, corr_peak_d).get()
 
     assert np.array_equal(correlation_masked_gpu, correlation_masked_np)
 
@@ -960,7 +948,7 @@ def test_gpu_mask_rms(array_pair):
 def test_piv_iter():
     window_size_iters = [(32, 2), (16, 2), (8, 3)]
 
-    iters = list(gpu_process._piv_iter(window_size_iters))
+    iters = list(process._piv_iter(window_size_iters))
 
     assert sum(iters) == 21
 
@@ -972,7 +960,7 @@ def test_field_shift(array_pair):
     v, v_d = array_pair(shape, center=0.0, half_width=1.0, seed=1)
 
     shift_np = np.stack([u, v], axis=0)
-    shift_gpu = gpu_process._field_shift(u_d, v_d).get()
+    shift_gpu = process._field_shift(u_d, v_d).get()
 
     assert np.array_equal(shift_gpu, shift_np)
 
@@ -985,7 +973,7 @@ def test_gpu_update_field(array_pair, boolean_array_pair):
     mask, mask_d = boolean_array_pair(shape, seed=2)
 
     f_np = (dp + peak) * (mask == 0)
-    f_gpu = gpu_process._gpu_update_field(dp_d, peak_d, mask_d).get()
+    f_gpu = process._gpu_update_field(dp_d, peak_d, mask_d).get()
 
     assert np.array_equal(f_np, f_gpu)
 
@@ -997,7 +985,7 @@ def test_update_validation_locations(val_locations, gpu_array):
     val_locations = gpu_array(shape) if val_locations else None
     new_val_locations = gpu_array(shape, seed=1)
 
-    val_locations = gpu_process._update_validation_locations(
+    val_locations = process._update_validation_locations(
         val_locations, new_val_locations
     )
 
@@ -1006,21 +994,21 @@ def test_update_validation_locations(val_locations, gpu_array):
 
 # INTEGRATION TESTS
 @pytest.fixture
-def process(request):
+def process_shift(request):
     frame_shape = request.param
     u_shift = 8
     v_shift = -4
     frame_a, frame_b = create_pair_shift(frame_shape, u_shift, v_shift)
 
-    def process(**params):
+    def process_shift(**params):
         trim_slice = slice(2, -2, 1)
 
-        _, _, u, v, _, _ = gpu_process.gpu_piv(frame_a, frame_b, **params)
+        _, _, u, v, _, _ = process.gpu_piv(frame_a, frame_b, **params)
 
         assert np.linalg.norm(u[trim_slice, trim_slice] - u_shift) / sqrt(u.size) < 0.1
         assert np.linalg.norm(-v[trim_slice, trim_slice] - v_shift) / sqrt(u.size) < 0.1
 
-    return process
+    return process_shift
 
 
 @pytest.fixture
@@ -1035,7 +1023,7 @@ def correlate():
     win_b = gpuarray.to_gpu(win_b)
 
     def correlate(**params):
-        corr_gpu = gpu_process.Correlation(**params)
+        corr_gpu = process.Correlation(**params)
         corr_gpu(win_a, win_b)
         i_peak, j_peak = corr_gpu.get_displacement_peaks()
 
@@ -1054,12 +1042,12 @@ def test_correlation_gpu(correlate):
 @pytest.mark.integtest
 class TestCorrelationParams:
     @pytest.mark.parametrize(
-        "subpixel_method", list(gpu_process.ALLOWED_SUBPIXEL_METHODS)
+        "subpixel_method", list(process.ALLOWED_SUBPIXEL_METHODS)
     )
     def test_subpixel_method(self, subpixel_method, correlate):
         correlate(subpixel_method=subpixel_method)
 
-    @pytest.mark.parametrize("s2n_method", list(gpu_process.ALLOWED_S2N_METHODS))
+    @pytest.mark.parametrize("s2n_method", list(process.ALLOWED_S2N_METHODS))
     def test_subpixel_method(self, s2n_method, correlate):
         correlate(s2n_method=s2n_method)
 
@@ -1073,9 +1061,10 @@ class TestCorrelationParams:
 
 
 @pytest.mark.integtest
-@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
+@pytest.mark.parametrize("process_shift"
+                         "", [(512, 512)], indirect=True)
 @pytest.mark.parametrize("frame_shape", [(512, 512), (512, 1024)])
-def test_gpu_piv_fast(frame_shape, process):
+def test_gpu_piv_fast(frame_shape, process_shift):
     """Quick test of the main piv function."""
     params = {
         "mask": None,
@@ -1088,7 +1077,7 @@ def test_gpu_piv_fast(frame_shape, process):
         "validation_method": "median_velocity",
     }
 
-    process(**params)
+    process_shift(**params)
 
 
 @pytest.mark.integtest
@@ -1107,15 +1096,16 @@ def test_gpu_piv_zero():
         "validation_method": "median_velocity",
     }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    x, y, u, v, mask, s2n = process.gpu_piv(frame_a, frame_b, **args)
 
     assert np.allclose(u, 0, 1e-6)
     assert np.allclose(v, 0, 1e-6)
 
 
-@pytest.mark.parametrize("process", [(512, 512)], indirect=True)
+@pytest.mark.parametrize("process_shift"
+                         "", [(512, 512)], indirect=True)
 @pytest.mark.integtest
-def test_extended_search_area(process):
+def test_extended_search_area(process_shift):
     """"""
     params = {
         "mask": None,
@@ -1128,7 +1118,7 @@ def test_extended_search_area(process):
         "search_ratio": 2,
     }
 
-    process(**params)
+    process_shift(**params)
 
 
 @pytest.mark.integtest
@@ -1136,7 +1126,8 @@ class TestProcessParams:
     frame_shape = (1024, 1024)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
@@ -1145,36 +1136,39 @@ class TestProcessParams:
     @pytest.mark.parametrize(
         "window_size_iters, min_window_size", [((1, 2), 16), ((1, 2, 2), 8)]
     )
-    def test_window_size(self, window_size_iters, min_window_size, process):
+    def test_window_size(self, window_size_iters, min_window_size, process_shift):
         window_size_iters = list(
             _window_size_parameterization(window_size_iters, min_window_size)
         )
-        process(window_size_iters=window_size_iters)
+        process_shift(window_size_iters=window_size_iters)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("overlap_ratio", [0.3, 0.5, 0.7])
-    def test_overlap_ratio(self, overlap_ratio, process):
-        process(overlap_ratio=overlap_ratio)
+    def test_overlap_ratio(self, overlap_ratio, process_shift):
+        process_shift(overlap_ratio=overlap_ratio)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("dt", [0.99, 1])
-    def test_dt(self, dt, process):
-        process(dt=dt)
+    def test_dt(self, dt, process_shift):
+        process_shift(dt=dt)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
@@ -1186,7 +1180,8 @@ class TestProcessParams:
         process(mask=mask)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
@@ -1197,7 +1192,8 @@ class TestProcessParams:
         process(deform=deform)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
@@ -1208,37 +1204,40 @@ class TestProcessParams:
         process(smooth=smooth)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
-    def test_num_validation_iters(self, num_validation_iters, process):
-        process(num_validation_iters=num_validation_iters)
+    def test_num_validation_iters(self, num_validation_iters, process_shift):
+        process_shift(num_validation_iters=num_validation_iters)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("center_field", [True, False])
-    def test_center_field(self, center_field, process):
-        process(center_field=center_field)
+    def test_center_field(self, center_field, process_shift):
+        process_shift(center_field=center_field)
 
     @pytest.mark.parametrize(
-        "process",
+        "process_shift"
+        "",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("search_ratio", [1.5, 2, None])
-    def test_num_search_ratio(self, search_ratio, process):
-        process(window_size_iters=((16, 2), (8, 2)), search_ratio=search_ratio)
+    def test_num_search_ratio(self, search_ratio, process_shift):
+        process_shift(window_size_iters=((16, 2), (8, 2)), search_ratio=search_ratio)
 
 
 # REGRESSION TESTS
@@ -1250,11 +1249,14 @@ class TestProcessParams:
 @pytest.mark.parametrize("min_window_size", [8, 16])
 @pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
 def test_gpu_piv_py(
-    window_size_iters, min_window_size, num_validation_iters, ndarrays_regression
+    window_size_iters,
+    min_window_size,
+    num_validation_iters,
+    frames,
+    ndarrays_regression,
 ):
     """"""
-    frame_a = imread(data_dir + "test1/exp1_001_a.bmp")
-    frame_b = imread(data_dir + "test1/exp1_001_b.bmp")
+    frame_a, frame_b = frames
     if isinstance(window_size_iters, int):
         window_size_iters = (window_size_iters,)
     window_size_iters = list(
@@ -1263,7 +1265,6 @@ def test_gpu_piv_py(
     args = {
         "mask": None,
         "window_size_iters": window_size_iters,
-        # "min_window_size": min_window_size,
         "overlap_ratio": 0.5,
         "dt": 1,
         "deform": True,
@@ -1274,7 +1275,7 @@ def test_gpu_piv_py(
         "center_field": False,
     }
 
-    x, y, u, v, mask, s2n = gpu_process.gpu_piv(frame_a, frame_b, **args)
+    x, y, u, v, mask, s2n = process.gpu_piv(frame_a, frame_b, **args)
 
     ndarrays_regression.check({"u": u, "v": v})
 
@@ -1288,10 +1289,10 @@ def test_stack_iw_determinism(search_ratio, frames_gpu, ndarrays_regression):
     # Process random data
     frame_a_random = np.random.random(shape) * 65535
     frame_b_random = np.random.random(shape) * 65535
-    _ = gpu_process.gpu_piv(frame_a_random, frame_b_random, **params)
+    _ = process.gpu_piv(frame_a_random, frame_b_random, **params)
 
     # Process deterministic data
-    piv_field = gpu_process.PIVField(shape, 32, 16)
+    piv_field = process.PIVField(shape, 32, 16)
     win_a, win_b = piv_field.stack_iw(frame_a, frame_b)
     ndarrays_regression.check({"win_a": win_a.get(), "win_b": win_b.get()})
 
@@ -1319,7 +1320,7 @@ def test_gpu_piv_benchmark(benchmark, frame_shape, window_size_iters, min_window
 
     frame_a, frame_b = create_pair_shift(frame_shape, u_shift, v_shift)
 
-    benchmark(gpu_process.gpu_piv, frame_a, frame_b, **args)
+    benchmark(process.gpu_piv, frame_a, frame_b, **args)
 
 
 def test_gpu_piv_benchmark_oop(benchmark):
@@ -1339,7 +1340,7 @@ def test_gpu_piv_benchmark_oop(benchmark):
     }
     frame_a, frame_b = create_pair_shift(shape, u_shift, v_shift)
 
-    piv_gpu = gpu_process.PIV(shape, **args)
+    piv_gpu = process.PIV(shape, **args)
 
     @benchmark
     def repeat_10():

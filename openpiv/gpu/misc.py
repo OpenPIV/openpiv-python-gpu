@@ -2,13 +2,10 @@
 from math import ceil
 from abc import ABC, abstractmethod
 from numbers import Number
+
 import numpy as np
-
-import pycuda.gpuarray as gpuarray
+from pycuda import gpuarray
 from pycuda.compiler import SourceModule
-
-# noinspection PyUnresolvedReferences
-import pycuda.autoinit
 
 from openpiv.gpu import DTYPE_i, DTYPE_f
 

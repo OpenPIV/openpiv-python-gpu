@@ -13,23 +13,19 @@ from math import sqrt, ceil, log2, prod
 from numbers import Number
 import numpy as np
 
-import pycuda.gpuarray as gpuarray
-import pycuda.cumath as cumath
+from pycuda import gpuarray, cumath
 from pycuda.compiler import SourceModule
 
-# noinspection PyUnresolvedReferences
-import pycuda.autoinit
-
-# scikit-cuda gives a warning everytime it's imported.
+# scikit-cuda gives a warning every time it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
     import skcuda.fft as cufft
     from skcuda import misc as cumisc
 
 
-from openpiv.gpu.validation import Validation, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
+from openpiv.gpu import misc, DTYPE_i, DTYPE_f, DTYPE_c
 from openpiv.gpu.smoothn import gpu_smoothn
-import openpiv.gpu.misc as gpu_misc
+from openpiv.gpu.validation import Validation, S2N_TOL, MEAN_TOL, MEDIAN_TOL, RMS_TOL
 from openpiv.gpu.misc import (
     _check_arrays,
     _Validator,
@@ -39,7 +35,6 @@ from openpiv.gpu.misc import (
     _Element,
     _Array,
 )
-from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
 
 # Initialize the scikit-cuda library.
 cumisc.init()
@@ -960,8 +955,8 @@ class PIV:
         frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
         if frame_mask is not None:
-            frame_a_d = gpu_misc.gpu_mask(frame_a, frame_mask)
-            frame_b_d = gpu_misc.gpu_mask(frame_b, frame_mask)
+            frame_a_d = misc.gpu_mask(frame_a, frame_mask)
+            frame_b_d = misc.gpu_mask(frame_b, frame_mask)
 
         return frame_a_d, frame_b_d
 
@@ -1011,8 +1006,8 @@ class PIV:
 
         # Interpolate if dimensions do not agree.
         if self._piv_fields[self._k - 1].window_size != self._piv_field_k.window_size:
-            dp_u = gpu_misc.gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
-            dp_v = gpu_misc.gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
+            dp_u = misc.gpu_interpolate(x0, y0, x1, y1, u, mask=mask)
+            dp_v = misc.gpu_interpolate(x0, y0, x1, y1, v, mask=mask)
         else:
             dp_u = u
             dp_v = v
@@ -1120,8 +1115,8 @@ class PIV:
 
         if dp_u is None:
             # u, v take the shape of the peaks.
-            u = gpu_misc.gpu_mask(j_peak, mask).reshape(shape)
-            v = gpu_misc.gpu_mask(i_peak, mask).reshape(shape)
+            u = misc.gpu_mask(j_peak, mask).reshape(shape)
+            v = misc.gpu_mask(i_peak, mask).reshape(shape)
         else:
             u = _gpu_update_field(dp_u, j_peak, mask)
             v = _gpu_update_field(dp_v, i_peak, mask)
@@ -1679,13 +1674,13 @@ def _peak2energy(correlation, corr_peak):
     size = fft_wd * fft_ht
 
     # Remove negative correlation values.
-    gpu_misc.gpu_remove_negative(corr_peak)
-    gpu_misc.gpu_remove_negative(correlation)
+    misc.gpu_remove_negative(corr_peak)
+    misc.gpu_remove_negative(correlation)
 
     corr_reshape = correlation.reshape(n_windows, size)
     corr_energy = cumisc.mean(corr_reshape**2, axis=1)
     s2n_ratio = cumath.log10(corr_peak**2 / corr_energy)
-    gpu_misc.gpu_remove_nan(s2n_ratio)
+    misc.gpu_remove_nan(s2n_ratio)
 
     return s2n_ratio
 
@@ -1770,11 +1765,11 @@ def _peak2peak(corr_peak1, corr_peak2):
     )
 
     # Remove negative peaks.
-    gpu_misc.gpu_remove_negative(corr_peak1)
-    gpu_misc.gpu_remove_negative(corr_peak2)
+    misc.gpu_remove_negative(corr_peak1)
+    misc.gpu_remove_negative(corr_peak2)
 
     s2n_ratio = cumath.log10(corr_peak1 / corr_peak2)
-    gpu_misc.gpu_remove_nan(s2n_ratio)
+    misc.gpu_remove_nan(s2n_ratio)
 
     return s2n_ratio
 
@@ -1847,7 +1842,7 @@ def _update_validation_locations(val_locations, new_val_locations):
         val_locations = new_val_locations
     else:
         # val_locations = gpuarray.logical_or(val_locations, val_locations)
-        val_locations = gpu_misc.gpu_logical_or(new_val_locations, val_locations)
+        val_locations = misc.gpu_logical_or(new_val_locations, val_locations)
 
     return val_locations
 

@@ -6,29 +6,25 @@ subroutines. Function output should be compared to original MATLAB version to co
 that the smoothing performance has been preserved.
 
 """
-
 import logging
 import warnings
 from math import sqrt, log2, log10, ceil
-import numpy as np
 
+import numpy as np
 from scipy.optimize import fmin_l_bfgs_b
 from scipy.fft import dct, idct
 from scipy.ndimage import distance_transform_edt
-import pycuda.gpuarray as gpuarray
+from pycuda import gpuarray
 from pycuda.compiler import SourceModule
 
-# noinspection PyUnresolvedReferences
-import pycuda.autoinit
-
-# scikit-cuda gives a warning everytime it's imported.
+# scikit-cuda gives a warning every time it's imported.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
     import skcuda.fft as cufft
     from skcuda import misc as cumisc
 
-from openpiv.gpu.misc import _check_arrays
 from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
+from openpiv.gpu.misc import _check_arrays
 
 # Initialize the scikit-cuda library.
 cumisc.init()

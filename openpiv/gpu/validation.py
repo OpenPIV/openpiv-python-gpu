@@ -1,15 +1,11 @@
 """This module is for GPU-accelerated validation algorithms."""
-
 from math import ceil, log10
+
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 
-
-# noinspection PyUnresolvedReferences
-import pycuda.autoinit
-
-from openpiv.gpu.misc import _check_arrays, gpu_mask, _Subset, _Number
-from openpiv.gpu import DTYPE_i, DTYPE_f
+from openpiv.gpu import misc, DTYPE_i, DTYPE_f
+from openpiv.gpu.misc import _Subset, _Number, _check_arrays
 
 ALLOWED_VALIDATION_METHODS = {"s2n", "median_velocity", "mean_velocity", "rms_velocity"}
 S2N_TOL = 2
@@ -469,7 +465,7 @@ class Validation:
     def _mask_val_locations(self):
         """Removes masked locations from the validation locations."""
         if self.mask is not None and self.val_locations is not None:
-            self.val_locations = gpu_mask(self.val_locations, self.mask)
+            self.val_locations = misc.gpu_mask(self.val_locations, self.mask)
 
 
 mod_validation = SourceModule(

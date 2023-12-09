@@ -1,18 +1,16 @@
+import os
+
 import pytest
 import numpy as np
-
 from imageio.v2 import imread
 import pycuda.gpuarray as gpuarray
 
-from gpu import process as gpu_process, validation as gpu_validation
+from openpiv.gpu import process as gpu_process, validation as gpu_validation
+from openpiv.gpu import DTYPE_i, DTYPE_f
 
-
-# GLOBAL VARIABLES
-DTYPE_i = np.int32
-DTYPE_f = np.float32
-
-# dirs
-data_dir = "../data/"
+# DATA DIR
+file_dir = os.path.dirname(__file__)
+data_dir = os.path.join(file_dir, "../../data/")
 
 
 # UTILS
