@@ -32,7 +32,7 @@ The GPU functions require the Nvidia CUDA toolkit, which is available for Window
 
 Depending on your platform, the CUDA toolkit or the CUDA-related python packages (`PyCUDA, scikit-cuda`) could be
 problematic to install.
-See the procedure in the last [section](#installing-cuda-toolkit) that might help with installing CUDA.
+See the procedure in the last [section](#installing-cuda-toolkit) for hel installing CUDA and scikit-CUDA.
 
 Clone the repository from GitHub:
 
@@ -100,7 +100,8 @@ Download CUDA from Nvidia website:
 
 https://developer.nvidia.com/cuda-downloads
 
-Visual Studio C++ compiler with CLI support needs to be installed before CUDA. It can be downloaded from:
+Visual Studio C++ compiler with CLI support needs to be installed before CUDA.
+It can be downloaded from:
 
 https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
@@ -118,7 +119,8 @@ First, ensure that CUDA is compiled and on the PATH:
 
 	nvcc -V
 
-Install scikit-CUDA, which should install PyCUDA as well. If this throws errors, the CUDA toolkit was likely not
+Install scikit-CUDA, which should install PyCUDA as well.
+If this throws errors, the CUDA toolkit was likely not
 properly installed.
 
-    pip install scikit-cuda
+    pip install git+https://github.com/lebedov/scikit-cuda.git
