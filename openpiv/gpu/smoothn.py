@@ -23,7 +23,7 @@ with warnings.catch_warnings():
     import skcuda.fft as cufft
     from skcuda import misc as cumisc
 
-from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
+from openpiv.gpu import misc, DTYPE_i, DTYPE_f, DTYPE_c
 from openpiv.gpu.misc import _check_arrays
 
 # Initialize the scikit-cuda library.
@@ -373,7 +373,7 @@ def gpu_fft(y, norm="backward", full_frequency=False):
     m, n = y.shape
     assert n >= 2
     scale = norm == "forward"
-    y_fft = gpuarray.empty((m, n // 2 + 1), dtype=DTYPE_c)
+    y_fft = gpuarray.empty((m, n // 2 + 1), DTYPE_c)
 
     plan_forward = cufft.Plan((n,), DTYPE_f, DTYPE_c, batch=m)
     cufft.fft(y, y_fft, plan_forward, scale=scale)
@@ -417,9 +417,10 @@ def gpu_ifft(y, norm="backward", inverse_width=None, full_frequency=False):
         inverse_width = (n - 1) * 2
     if full_frequency:
         frequency_width = inverse_width // 2 + 1
-        y = y[:, :frequency_width].copy()
+        # y = y[:, :frequency_width].copy()
+        y = misc.gpu_copy_c(y, slice_j=(0, frequency_width, 1))
 
-    y_ifft = gpuarray.empty((m, inverse_width), dtype=DTYPE_f)
+    y_ifft = gpuarray.empty((m, inverse_width), DTYPE_f)
 
     plan_inverse = cufft.Plan((inverse_width,), DTYPE_c, DTYPE_f, batch=m)
     cufft.ifft(y, y_ifft, plan_inverse, scale=scale)
@@ -478,7 +479,7 @@ def gpu_dct(y, norm="backward"):
     dct_negative_d2 = cumisc.multiply(fft_data_real, w_imag) - cumisc.multiply(
         fft_data_imag, w_real
     )
-    y_dct = gpuarray.empty((m, n), dtype=DTYPE_f)
+    y_dct = gpuarray.empty((m, n), DTYPE_f)
     y_dct[:, :freq_width] = dct_positive
     y_dct[:, freq_width:] = _flip_frequency_real(
         dct_negative_d2, n - freq_width, offset=1 - n % 2
@@ -522,7 +523,7 @@ def gpu_idct(y, norm="backward"):
     freq_width = n // 2 + 1
     normal_factor = DTYPE_f(1) if norm == "forward" else DTYPE_f(0.5)
 
-    ifft_output = gpuarray.empty((m, n), dtype=DTYPE_f)
+    ifft_output = gpuarray.empty((m, n), DTYPE_f)
     w = gpuarray.to_gpu(
         np.exp(
             DTYPE_c(1j * np.pi) * np.arange(freq_width, dtype=DTYPE_f) / DTYPE_f(2 * n)
@@ -531,8 +532,11 @@ def gpu_idct(y, norm="backward"):
     )
 
     fft_data_flip = _flip_frequency_real(y, freq_width, left_pad=1)
+    # ifft_input = cumisc.multiply(
+    #     y[:, :freq_width].copy() - DTYPE_c(1j) * fft_data_flip, w
+    # )
     ifft_input = cumisc.multiply(
-        y[:, :freq_width].copy() - DTYPE_c(1j) * fft_data_flip, w
+        misc.gpu_copy(y, slice_j=(0, freq_width, 1)) - DTYPE_c(1j) * fft_data_flip, w
     )
 
     plan_inverse = cufft.Plan((n,), DTYPE_c, DTYPE_f, batch=m)
@@ -540,7 +544,8 @@ def gpu_idct(y, norm="backward"):
     y_idct = _dct_order(ifft_output, "backward")
 
     if norm == "ortho":
-        x_0 = y[:, 0].copy().reshape(m, 1)
+        # x_0 = y[:, 0].copy().reshape(m, 1)
+        x_0 = misc.gpu_copy(y, slice_j=(0, 1, 1))
         y_idct = cumisc.add(
             DTYPE_f(sqrt(2 / n)) * y_idct, (DTYPE_f((sqrt(2) - 1) / sqrt(2 * n))) * x_0
         )
@@ -835,7 +840,7 @@ def _dct_order(y, direction):
     m, n = y.shape
     size = y.size
 
-    y_ordered = gpuarray.empty((m, n), dtype=DTYPE_f)
+    y_ordered = gpuarray.empty((m, n), DTYPE_f)
 
     block_size = 32
     x_blocks = ceil(size / block_size)
@@ -928,7 +933,7 @@ def _reflect_frequency_comp(y, full_width):
     flip_width = full_width - n
     offset = 1 - full_width % 2
 
-    y_reflected = gpuarray.empty((m, full_width), dtype=DTYPE_c)
+    y_reflected = gpuarray.empty((m, full_width), DTYPE_c)
     y_reflected[:, :n] = y
     y_reflected[:, n:] = _flip_frequency_comp(y, flip_width, offset=offset)
 

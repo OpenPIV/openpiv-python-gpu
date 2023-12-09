@@ -1401,7 +1401,7 @@ def gpu_strain(u, v, mask=None, spacing=1):
     else:
         mask = gpuarray.zeros_like(u, dtype=DTYPE_i)
 
-    strain = gpuarray.empty((4, m, n), dtype=DTYPE_f)
+    strain = gpuarray.empty((4, m, n), DTYPE_f)
 
     block_size = _BLOCK_SIZE
     n_blocks = ceil(size * 2 / block_size)
@@ -1463,7 +1463,7 @@ def gpu_fft_shift(correlation):
     n_windows, ht, wd = correlation.shape
     window_size = ht * wd
 
-    correlation_shift = gpuarray.empty_like(correlation, dtype=DTYPE_f)
+    correlation_shift = gpuarray.empty_like(correlation, DTYPE_f)
 
     block_size = 8
     grid_size = ceil(max(ht, wd) / block_size)
@@ -1813,11 +1813,11 @@ def _field_shift(u, v):
     )
     m, n = u.shape
 
-    shift = gpuarray.empty((2, m, n), dtype=DTYPE_f)
+    shift = gpuarray.empty((2, m, n), DTYPE_f)
     shift[0, :, :] = u
     shift[1, :, :] = v
-    # shift = gpuarray.stack(u, v, axis=0)  # This should work in latest version of
-    # PyCUDA.
+    # This should work in latest version of PyCUDA.
+    # shift = gpuarray.stack(u, v, axis=0)
 
     return shift
 
@@ -2015,7 +2015,7 @@ def _gpu_window_slice(
     m, n = field_shape_
     n_windows = m * n
 
-    win = gpuarray.empty((n_windows, window_size, window_size), dtype=DTYPE_f)
+    win = gpuarray.empty((n_windows, window_size, window_size), DTYPE_f)
 
     block_size = 8
     grid_size = ceil(window_size / block_size)
@@ -2294,7 +2294,7 @@ def _gpu_window_index_f(correlation, indices):
         indices, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(n_windows,), ndim=1
     )
 
-    peak = gpuarray.empty(n_windows, dtype=DTYPE_f)
+    peak = gpuarray.empty(n_windows, DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(n_windows / block_size)
@@ -2458,8 +2458,8 @@ def _gpu_subpixel_approximation(correlation, peak_idx, method):
     n_windows, ht, wd = correlation.shape
     window_size = ht * wd
 
-    row_sp = gpuarray.empty_like(peak_idx, dtype=DTYPE_f)
-    col_sp = gpuarray.empty_like(peak_idx, dtype=DTYPE_f)
+    row_sp = gpuarray.empty_like(peak_idx, DTYPE_f)
+    col_sp = gpuarray.empty_like(peak_idx, DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(n_windows / block_size)
@@ -2710,7 +2710,7 @@ def _gpu_update_field(dp, peak, mask):
     _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, size=dp.size)
     size = dp.size
 
-    f = gpuarray.empty_like(dp, dtype=DTYPE_f)
+    f = gpuarray.empty_like(dp, DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)

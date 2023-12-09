@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from pycuda import gpuarray
 
-from openpiv.gpu import misc, process, DTYPE_i, DTYPE_f
+from openpiv.gpu import misc, process, DTYPE_i, DTYPE_f, DTYPE_c
 
 
 # UTILS
@@ -70,11 +70,38 @@ def np_arrays(*f_l):
 
 # UNIT TESTS
 @pytest.mark.parametrize("d_type", [DTYPE_i, DTYPE_f])
+def test_gpu_copy(d_type, array_pair):
+    shape = (16, 16)
+    slice_i = (4, 13, 2)
+    slice_j = (3,  15, 3)
+
+    f, f_d = array_pair(shape, d_type=d_type)
+
+    f_out = f[slice(*slice_i), slice(*slice_j)]
+    f_out_gpu = misc.gpu_copy(f_d, slice_i=slice_i, slice_j=slice_j).get()
+
+    assert np.array_equal(f_out_gpu, f_out)
+
+
+@pytest.mark.parametrize("shape", [(15, 16), (16, 15)])
+def test_gpu_copy_c(shape, array_pair):
+    slice_i = (0, 1, 2)
+    slice_j = (1, 2, 3)
+
+    f, f_d = array_pair(shape, d_type=DTYPE_c)
+
+    f_out = f[slice(*slice_i), slice(*slice_j)]
+    f_out_gpu = misc.gpu_copy_c(f_d, slice_i=slice_i, slice_j=slice_j).get()
+
+    assert np.array_equal(f_out_gpu, f_out)
+
+
+@pytest.mark.parametrize("d_type", [DTYPE_i, DTYPE_f])
 def test_gpu_logical_or(d_type, array_pair, boolean_array_pair):
     shape = (16, 16)
 
-    f1, f1_d = boolean_array_pair(shape)
-    f2, f2_d = boolean_array_pair(shape, seed=1)
+    f1, f1_d = boolean_array_pair(shape, d_type=d_type)
+    f2, f2_d = boolean_array_pair(shape, seed=1, d_type=d_type)
 
     f_out = np.logical_or(f1, f2)
     f_out_gpu = misc.gpu_logical_or(f1_d, f2_d).get()

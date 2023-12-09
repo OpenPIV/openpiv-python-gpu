@@ -7,9 +7,157 @@ import numpy as np
 from pycuda import gpuarray
 from pycuda.compiler import SourceModule
 
-from openpiv.gpu import DTYPE_i, DTYPE_f
+from openpiv.gpu import DTYPE_i, DTYPE_f, DTYPE_c
 
 _BLOCK_SIZE = 64
+
+
+mod_copy = SourceModule(
+    """
+__global__ void gpu_copy_f(
+    float *f_out,
+    float *f_src,
+    int row_start,
+    int row_step,
+    int col_start,
+    int col_step,
+    int n_src,
+    int n,
+    int size
+)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    int row = t_idx / n;
+    int col = t_idx % n;
+    
+    // row_src = row_start + row * row_step
+    // col_src = col_start + col * col_step
+    
+    // src_idx = row_src * n_src + col_src;
+
+    // f_out[t_idx] = f_src[src_idx];
+    f_out[t_idx] = f_src[
+        (row_start + row * row_step) * n_src + col_start + col * col_step
+    ];
+}
+
+
+__global__ void gpu_copy_i(
+    int *f_out,
+    int *f_src,
+    int row_start,
+    int row_step,
+    int col_start,
+    int col_step,
+    int n_src,
+    int n,
+    int size
+)
+{
+    int t_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t_idx >= size) {return;}
+
+    int row = t_idx / n;
+    int col = t_idx % n;
+    
+    // row_src = row_start + row * row_step
+    // col_src = col_start + col * col_step
+    
+    // src_idx = row_src * n_src + col_src;
+
+    // f_out[t_idx] = f_src[src_idx];
+    f_out[t_idx] = f_src[
+        (row_start + row * row_step) * n_src + col_start + col * col_step
+    ];
+}
+"""
+)
+
+
+def gpu_copy(f_src, slice_i=None, slice_j=None):
+    """Returns GPUArray with values copied from a 2D slice of another GPUArray.
+
+    Parameters
+    ----------
+    f_src : GPUArray
+        2D int or float, arrays to be operated on.
+    slice_i, slice_j : tuple, optional
+        Int, [start_idx, stop_idx, step], slice arguments in each axis.
+
+    Returns
+    -------
+    GPUArray
+        2D int or float, copied values.
+
+    """
+    _check_arrays(f_src, array_type=gpuarray.GPUArray, ndim=2)
+    d_type = f_src.dtype
+    m_src, n_src = f_src.shape
+    if slice_i is None:
+        slice_i = (0, m_src, 1)
+    if slice_j is None:
+        slice_j = (0, n_src, 1)
+    start_i, stop_i, step_i = slice_i
+    start_j, stop_j, step_j = slice_j
+    assert 0 <= start_i < stop_i <= m_src and step_i > 0, "Invalid slice along axis 0."
+    assert 0 <= start_j < stop_j <= n_src and step_j > 0, "Invalid slice along axis 1."
+
+    # Get destination shape.
+    m_out = ceil((stop_i - start_i) / step_i)
+    n_out = ceil((stop_j - start_j) / step_j)
+    size = m_out * n_out
+
+    assert 0 < m_src >= start_i + step_i * m_out, "Indices are out of bounds on axis 0."
+    assert 0 < n_src >= start_j + step_j * n_out, "Indices are out of bounds on axis 1."
+
+    f_out = gpuarray.empty((m_out, n_out), d_type)
+
+    block_size = _BLOCK_SIZE
+    grid_size = ceil(size / block_size)
+    if d_type == DTYPE_f:
+        copy_gpu = mod_copy.get_function("gpu_copy_f")
+    elif d_type == DTYPE_i:
+        copy_gpu = mod_copy.get_function("gpu_copy_i")
+    else:
+        raise ValueError("Wrong data type for f.")
+    copy_gpu(
+        f_out,
+        f_src,
+        DTYPE_i(start_i),
+        DTYPE_i(step_i),
+        DTYPE_i(start_j),
+        DTYPE_i(step_j),
+        DTYPE_i(n_src),
+        DTYPE_i(n_out),
+        DTYPE_i(size),
+        block=(block_size, 1, 1),
+        grid=(grid_size, 1),
+    )
+
+    return f_out
+
+
+def gpu_copy_c(f_src, slice_i=None, slice_j=None):
+    """Returns GPUArray with values copied from a 2D slice of another GPUArray.
+
+    Parameters
+    ----------
+    f_src : GPUArray
+        2D complex, arrays to be operated on.
+    slice_i, slice_j : tuple, optional
+        Int, [start_idx, stop_idx, step], slice arguments in each axis.
+
+    Returns
+    -------
+    GPUArray
+        2D complex, copied values.
+
+    """
+    return gpu_copy(f_src.real, slice_i, slice_j) + DTYPE_c(1j) * gpu_copy(
+        f_src.imag, slice_i, slice_j
+    )
 
 
 mod_logical_or = SourceModule(
@@ -423,7 +571,7 @@ def gpu_interpolate(x0, y0, x1, y1, f0, mask=None):
     m = y1.size
     size = m * n
 
-    f1 = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f1 = gpuarray.empty((m, n), DTYPE_f)
 
     # Calculate the relationship between the two grid coordinates.
     offset_x_f = DTYPE_f(x0[0].get())

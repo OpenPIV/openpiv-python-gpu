@@ -710,7 +710,7 @@ def _gpu_find_neighbours(shape, mask=None):
     if mask is None:
         mask = gpuarray.zeros((m, n), dtype=DTYPE_i)
         _check_arrays(mask, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=shape)
-    neighbours_present = gpuarray.empty((m, n, 8), dtype=DTYPE_i)
+    neighbours_present = gpuarray.empty((m, n, 8), DTYPE_i)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
@@ -751,7 +751,7 @@ def _gpu_get_neighbours(f, neighbours_present):
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    neighbours = gpuarray.empty((m, n, 8), dtype=DTYPE_f)
+    neighbours = gpuarray.empty((m, n, 8), DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
@@ -1097,7 +1097,7 @@ def _gpu_average_velocity(f_neighbours, neighbours_present, method):
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    f_median = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median = gpuarray.empty((m, n), DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
@@ -1145,7 +1145,7 @@ def _gpu_residual(f_median, f_neighbours, neighbours_present, method):
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    f_median_residual = gpuarray.empty((m, n), dtype=DTYPE_f)
+    f_median_residual = gpuarray.empty((m, n), DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
@@ -1206,7 +1206,7 @@ def _gpu_residual_vec2d(
         neighbours_present, array_type=gpuarray.GPUArray, dtype=DTYPE_i, shape=(m, n, 8)
     )
 
-    residual = gpuarray.empty((m, n), dtype=DTYPE_f)
+    residual = gpuarray.empty((m, n), DTYPE_f)
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
