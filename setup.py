@@ -28,7 +28,7 @@ setup(
         "tqdm",
         "importlib_resources",
         "pycuda",
-        "scikit-cuda",
+        "git+https://github.com/lebedov/scikit-cuda.git",
     ],
     extras_require={"tests": ["pytest", "pytest-benchmark", "pytest-regressions"]},
     classifiers=[
