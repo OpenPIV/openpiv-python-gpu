@@ -8,6 +8,13 @@ from openpiv.gpu import misc, DTYPE_i, DTYPE_f
 from openpiv.gpu.misc import _Subset, _Number, _check_arrays
 
 ALLOWED_VALIDATION_METHODS = {"s2n", "median_velocity", "mean_velocity", "rms_velocity"}
+ALLOWED_AVERAGING_METHODS = {"median_velocity", "mean_velocity"}
+ALLOWED_RESIDUAL_METHODS = {"median_residual", "mean_residual", "rms"}
+ALLOWED_RESIDUAL_VEC2D_METHODS = {
+    "median_residual_vec2d",
+    "mean_residual_vec2d",
+    "rms_vec2d",
+}
 S2N_TOL = 2
 MEDIAN_TOL = 2
 MEAN_TOL = 2
@@ -109,12 +116,10 @@ class Validation:
             )
         self.mask = mask
         self.validation_method = validation_method
-        self.validation_tols = {
-            "s2n": s2n_tol,
-            "median": median_tol,
-            "mean": mean_tol,
-            "rms": rms_tol,
-        }
+        self.s2n_tol = s2n_tol
+        self.median_tol = median_tol
+        self.mean_tol = mean_tol
+        self.rms_tol = rms_tol
 
         self._n_val = None
         self.val_locations = None
@@ -124,8 +129,6 @@ class Validation:
         self._mean_ = None
 
         self._check_validation_methods()
-        self._check_validation_tolerances()
-
         # Compute the median velocities to be returned.
         self._neighbours_present = _gpu_find_neighbours(self.f_shape, mask)
 
@@ -177,7 +180,7 @@ class Validation:
 
         Returns
         -------
-        GPUArray
+        tuple of GPUArray
             2D float (m, n), velocity fields with invalid vectors replaced.
 
         """
@@ -300,14 +303,6 @@ class Validation:
                 "{}".format(ALLOWED_VALIDATION_METHODS)
             )
 
-    def _check_validation_tolerances(self):
-        """Checks that input validation methods are allowed."""
-        if not all([val_tol > 0 for val_tol in self.validation_tols.values()]):
-            raise ValueError(
-                "Invalid validation tolerances(s). Validation tolerances must be "
-                "greater than 0."
-            )
-
     def _clear_validation_data(self):
         """Clears previous validation data.."""
         self.val_locations = None
@@ -318,7 +313,7 @@ class Validation:
 
     def _median_validation(self):
         """Performs median validation on each field."""
-        median_tol = self.validation_tols["median"]
+        median_tol = self.median_tol
 
         for k in range(self._num_fields):
             f_median_residual = _gpu_residual(
@@ -337,7 +332,6 @@ class Validation:
 
     def _median_validation_vec2d(self):
         """Performs median validation on each field."""
-        median_tol = self.validation_tols["median"]
         u, v = self._f
         u_neighbours, v_neighbours = self._neighbours
         u_median, v_median = self._median
@@ -357,7 +351,7 @@ class Validation:
                 u_median,
                 v_median,
                 residual,
-                median_tol,
+                self.median_tol,
                 self.val_locations,
             )
         else:
@@ -367,8 +361,6 @@ class Validation:
 
     def _mean_validation(self):
         """Performs mean validation on each field."""
-        mean_tol = self.validation_tols["mean"]
-
         for k in range(self._num_fields):
             f_mean_residual = _gpu_residual(
                 self._mean[k],
@@ -380,13 +372,12 @@ class Validation:
                 self._f[k],
                 self._mean[k],
                 f_mean_residual,
-                mean_tol,
+                self.median_tol,
                 self.val_locations,
             )
 
     def _mean_validation_vec2d(self):
         """Performs mean validation on each field."""
-        mean_tol = self.validation_tols["mean"]
         u, v = self._f
         u_mean, v_mean = self._mean
         u_neighbours, v_neighbours = self._neighbours_
@@ -401,7 +392,7 @@ class Validation:
                 "mean_residual_vec2d",
             )
             self.val_locations = _neighbour_validation_vec2d(
-                u, v, u_mean, v_mean, residual, mean_tol, self.val_locations
+                u, v, u_mean, v_mean, residual, self.mean_tol, self.val_locations
             )
         else:
             raise NotImplementedError(
@@ -412,19 +403,17 @@ class Validation:
         """Performs RMS validation on each field."""
         f_neighbours = self._neighbours
         f_mean = self._mean
-        rms_tol = self.validation_tols["rms"]
 
         for k in range(self._num_fields):
             f_rms = _gpu_residual(
                 f_mean[k], f_neighbours[k], self._neighbours_present, "rms"
             )
             self.val_locations = _neighbour_validation(
-                self._f[k], f_mean[k], f_rms, rms_tol, self.val_locations
+                self._f[k], f_mean[k], f_rms, self.rms_tol, self.val_locations
             )
 
     def _rms_validation_vec2d(self):
         """Performs RMS validation on each field."""
-        rms_tol = self.validation_tols["rms"]
         u, v = self._f
         u_mean, v_mean = self._mean
         u_neighbours, v_neighbours = self._neighbours_
@@ -439,7 +428,7 @@ class Validation:
                 "rms_vec2d",
             )
             self.val_locations = _neighbour_validation_vec2d(
-                u, v, u_mean, v_mean, rms, rms_tol, self.val_locations
+                u, v, u_mean, v_mean, rms, self.rms_tol, self.val_locations
             )
         else:
             raise NotImplementedError(
@@ -457,7 +446,7 @@ class Validation:
         """
         if s2n_ratio is None:
             return
-        s2n_tol = log10(self.validation_tols["s2n"])
+        s2n_tol = log10(self.s2n_tol)
 
         sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)
         self.val_locations = _local_validation(sig2noise_tol, 1, self.val_locations)
@@ -514,7 +503,7 @@ __global__ void neighbour_validation_vec2d(
 
     // Add a small number to prevent singularities in uniform flow.
     val_locations[t_idx] = val_locations[t_idx] || (
-        hypotf(u[t_idx] - u_mean[t_idx], v[t_idx] - v_mean[t_idx]) / (r[t_idx] + 0.11)
+        hypotf(u[t_idx] - u_mean[t_idx], v[t_idx] - v_mean[t_idx]) / (r[t_idx] + 0.1)
         > tol
     );
 }
@@ -1088,6 +1077,9 @@ def _gpu_average_velocity(f_neighbours, neighbours_present, method):
         2D float (m, n), median velocities at each point.
 
     """
+    assert method in ALLOWED_AVERAGING_METHODS, "Method must be one of: {}".format(
+        ALLOWED_AVERAGING_METHODS
+    )
     m, n, _ = f_neighbours.shape
     size = m * n
     _check_arrays(
@@ -1135,6 +1127,9 @@ def _gpu_residual(f_median, f_neighbours, neighbours_present, method):
         2D float (m, n), median of normalized residual velocities at each point.
 
     """
+    assert method in ALLOWED_RESIDUAL_METHODS, "Method must be one of: {}".format(
+        ALLOWED_RESIDUAL_METHODS
+    )
     m, n = f_median.shape
     size = f_median.size
     _check_arrays(f_median, array_type=gpuarray.GPUArray, dtype=DTYPE_f)
@@ -1186,6 +1181,9 @@ def _gpu_residual_vec2d(
         2D float (m, n), median of residual velocities at each point.
 
     """
+    assert method in ALLOWED_RESIDUAL_VEC2D_METHODS, "Method must be one of: {}".format(
+        ALLOWED_RESIDUAL_VEC2D_METHODS
+    )
     m, n = u_median.shape
     size = u_median.size
     _check_arrays(
@@ -1210,8 +1208,8 @@ def _gpu_residual_vec2d(
 
     block_size = _BLOCK_SIZE
     grid_size = ceil(size / block_size)
-    get_residual = mod_average_velocity.get_function(method)
-    get_residual(
+    get_residual_vec2d = mod_average_velocity.get_function(method)
+    get_residual_vec2d(
         residual,
         u_median,
         v_median,

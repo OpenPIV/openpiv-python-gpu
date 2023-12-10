@@ -312,26 +312,26 @@ def test_piv_field_gpu_get_search_offset(search_size, piv_field_gpu):
     assert offset_b[1] == center_offset_y + search_offset
 
 
-def test_piv_gpu_coords(piv_gpu):
+def test_piv_coords(piv_gpu):
     x, y = piv_gpu.coords
 
     assert isinstance(x, np.ndarray)
     assert isinstance(y, np.ndarray)
 
 
-def test_piv_gpu_field_mask(piv_gpu):
+def test_piv_field_mask(piv_gpu):
     mask = piv_gpu.field_mask
 
     assert isinstance(mask, np.ndarray)
 
 
-def test_piv_gpu_s2n(piv_gpu):
+def test_piv_s2n(piv_gpu):
     s2n = piv_gpu.s2n_ratio
 
     assert isinstance(s2n, gpuarray.GPUArray)
 
 
-def test_piv_gpu_free_gpu_data(piv_gpu):
+def test_piv_free_gpu_data(piv_gpu):
     piv_gpu.free_gpu_data()
 
     assert piv_gpu._piv_fields_ is None
@@ -339,13 +339,13 @@ def test_piv_gpu_free_gpu_data(piv_gpu):
     assert piv_gpu._corr_gpu is None
 
 
-def test_piv_gpu_get_piv_fields(piv_gpu):
+def test_piv_get_piv_fields(piv_gpu):
     s2n = piv_gpu._piv_fields
 
     assert isinstance(s2n, list)
 
 
-def test_piv_gpu_mask_frame(piv_gpu, frames):
+def test_piv_mask_frame(piv_gpu, frames):
     # Need to test the switch cases.
     frame_a, frame_b = frames
     frame_a_masked, frame_b_masked = piv_gpu._frames_to_gpu(frame_a, frame_b)
@@ -354,7 +354,7 @@ def test_piv_gpu_mask_frame(piv_gpu, frames):
     assert isinstance(frame_a_masked, gpuarray.GPUArray)
 
 
-def test_piv_gpu_frame_mask(piv_gpu, boolean_np_array):
+def test_piv_frame_mask(piv_gpu, boolean_np_array):
     shape = (16, 16)
 
     piv_gpu.mask = boolean_np_array(shape)
@@ -364,14 +364,14 @@ def test_piv_gpu_frame_mask(piv_gpu, boolean_np_array):
     assert isinstance(frame_mask, gpuarray.GPUArray)
 
 
-def test_piv_gpu_piv_field_k(piv_gpu):
+def test_piv_piv_field_k(piv_gpu):
     piv_gpu._k = 1
     piv_field_k = piv_gpu._piv_field_k
 
     assert piv_field_k == piv_gpu._piv_fields[1]
 
 
-def test_piv_gpu_get_new_velocity(piv_gpu, frames_gpu, peaks_reshape):
+def test_piv_get_new_velocity(piv_gpu, frames_gpu, peaks_reshape):
     dp_u, dp_v = peaks_reshape
 
     piv_gpu._k = 0
@@ -381,7 +381,7 @@ def test_piv_gpu_get_new_velocity(piv_gpu, frames_gpu, peaks_reshape):
     assert isinstance(v, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
+def test_piv_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
     # Need to test different dimensions.
     shape = (22, 30)
 
@@ -395,7 +395,7 @@ def test_piv_gpu_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
     assert isinstance(dp_v, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_displacement_peaks(piv_gpu, frames_gpu, peaks_reshape):
+def test_piv_get_displacement_peaks(piv_gpu, frames_gpu, peaks_reshape):
     dp_u, dp_v = peaks_reshape
 
     piv_gpu._k = 0
@@ -405,7 +405,7 @@ def test_piv_gpu_get_displacement_peaks(piv_gpu, frames_gpu, peaks_reshape):
     assert isinstance(j_peak, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_search_size(piv_gpu):
+def test_piv_get_search_size(piv_gpu):
     piv_gpu._k = 0
     piv_gpu._piv_field_k.window_size = 8
     piv_gpu.search_ratio = 2
@@ -414,7 +414,7 @@ def test_piv_gpu_get_search_size(piv_gpu):
     assert search_size == piv_gpu._piv_field_k.window_size * piv_gpu.search_ratio
 
 
-def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
+def test_piv_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
     shape = (16, 16)
 
     dp_u = gpu_array(shape, center=0.0, half_width=1.0)
@@ -427,7 +427,7 @@ def test_piv_gpu_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
 
 
 @pytest.mark.parametrize("dp_u", [True, False])
-def test_piv_gpu_update_velocity(
+def test_piv_update_velocity(
     dp_u, piv_gpu, peaks_reshape, gpu_array, boolean_gpu_array
 ):
     i_peak, j_peak = peaks_reshape
@@ -443,7 +443,7 @@ def test_piv_gpu_update_velocity(
 
 
 @pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
-def test_piv_gpu_validate_fields(num_validation_iters, piv_gpu, gpu_array):
+def test_piv_validate_fields(num_validation_iters, piv_gpu, gpu_array):
     shape = (16, 16)
 
     u = v = gpu_array(shape, center=0.0, half_width=1.0)
@@ -482,7 +482,7 @@ def test_smooth_fields(val_locations, piv_gpu, gpu_array, boolean_np_array):
     assert isinstance(v, gpuarray.GPUArray)
 
 
-def test_piv_gpu_get_residual(piv_gpu, array_pair):
+def test_piv_get_residual(piv_gpu, array_pair):
     shape = (16, 16)
 
     i_peak, i_peak_d = array_pair(shape, center=0.0, half_width=1.0)
@@ -1064,7 +1064,7 @@ class TestCorrelationParams:
 @pytest.mark.parametrize("process_shift"
                          "", [(512, 512)], indirect=True)
 @pytest.mark.parametrize("frame_shape", [(512, 512), (512, 1024)])
-def test_gpu_piv_fast(frame_shape, process_shift):
+def test_gpu_piv(frame_shape, process_shift):
     """Quick test of the main piv function."""
     params = {
         "mask": None,
@@ -1126,8 +1126,7 @@ class TestProcessParams:
     frame_shape = (1024, 1024)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1143,8 +1142,7 @@ class TestProcessParams:
         process_shift(window_size_iters=window_size_iters)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1155,8 +1153,7 @@ class TestProcessParams:
         process_shift(overlap_ratio=overlap_ratio)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1167,45 +1164,41 @@ class TestProcessParams:
         process_shift(dt=dt)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("mask", [frame_shape, False])
-    def mask(self, mask, process, boolean_gpu_array):
+    def mask(self, mask, process_shift, boolean_gpu_array):
         mask = boolean_gpu_array(mask) if mask else None
-        process(mask=mask)
+        process_shift(mask=mask)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("deform", [True, False])
-    def deform(self, deform, process):
-        process(deform=deform)
+    def deform(self, deform, process_shift):
+        process_shift(deform=deform)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
         indirect=True,
     )
     @pytest.mark.parametrize("smooth", [True, False])
-    def smooth(self, smooth, process):
-        process(smooth=smooth)
+    def smooth(self, smooth, process_shift):
+        process_shift(smooth=smooth)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1216,8 +1209,7 @@ class TestProcessParams:
         process_shift(num_validation_iters=num_validation_iters)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1228,8 +1220,7 @@ class TestProcessParams:
         process_shift(center_field=center_field)
 
     @pytest.mark.parametrize(
-        "process_shift"
-        "",
+        "process_shift",
         [
             frame_shape,
         ],
@@ -1248,7 +1239,7 @@ class TestProcessParams:
 )
 @pytest.mark.parametrize("min_window_size", [8, 16])
 @pytest.mark.parametrize("num_validation_iters", [0, 1, 2])
-def test_gpu_piv_py(
+def test_piv_regression(
     window_size_iters,
     min_window_size,
     num_validation_iters,
@@ -1302,7 +1293,7 @@ def test_stack_iw_determinism(search_ratio, frames_gpu, ndarrays_regression):
 @pytest.mark.parametrize(
     "window_size_iters, min_window_size", [((1, 2), 16), ((1, 2, 2), 8)]
 )
-def test_gpu_piv_benchmark(benchmark, frame_shape, window_size_iters, min_window_size):
+def test_piv_benchmark(benchmark, frame_shape, window_size_iters, min_window_size):
     """Benchmarks the PIV function."""
     u_shift = 8
     v_shift = -4
@@ -1323,7 +1314,7 @@ def test_gpu_piv_benchmark(benchmark, frame_shape, window_size_iters, min_window
     benchmark(process.gpu_piv, frame_a, frame_b, **args)
 
 
-def test_gpu_piv_benchmark_oop(benchmark):
+def test_piv_benchmark_oop(benchmark):
     """Benchmarks the PIV speed with the objected-oriented interface."""
     shape = (1024, 1024)
     u_shift = 8
@@ -1340,9 +1331,9 @@ def test_gpu_piv_benchmark_oop(benchmark):
     }
     frame_a, frame_b = create_pair_shift(shape, u_shift, v_shift)
 
-    piv_gpu = process.PIV(shape, **args)
+    piv = process.PIV(shape, **args)
 
     @benchmark
     def repeat_10():
         for i in range(10):
-            piv_gpu(frame_a, frame_b)
+            piv(frame_a, frame_b)

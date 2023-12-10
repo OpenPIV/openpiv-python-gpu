@@ -1136,7 +1136,7 @@ class PIV:
         Returns
         -------
         tuple of GPUArray
-            2D (m, n)
+            2D (m, n), [u, v, val_locations]
 
         """
         size = u.size
