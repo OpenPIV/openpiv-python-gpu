@@ -34,13 +34,17 @@ Depending on your platform, the CUDA toolkit or the CUDA-related python packages
 problematic to install.
 See the procedure in the last [section](#installing-cuda-toolkit) for hel installing CUDA.
 
-Clone the repository from GitHub:
+Install from GitHub using pip:
+
+    pip install git+https://github.com/OpenPIV/openpiv-python-gpu.git
+
+## Local installation
+
+To do a local installation, do:
 
     git clone https://github.com/OpenPIV/openpiv-python-gpu.git
 
-To perform a global installation, use:
-
-    python setup.py install
+    pip install -e path/to/openpiv-python-gpu
 
 ## Documentation
 
