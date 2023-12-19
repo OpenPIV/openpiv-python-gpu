@@ -161,18 +161,18 @@ def _window_size_parameterization(ws_iters, min_window_size):
 
 
 # UNIT TESTS
-def test_correlation_gpu_signal_to_noise(correlation_gpu, piv_field_gpu):
-    assert isinstance(correlation_gpu.s2n_ratio, gpuarray.GPUArray)
+def test_correlation_gpu_signal_to_noise(s2n_ratio):
+    assert isinstance(s2n_ratio, gpuarray.GPUArray)
 
 
-def test_correlation_gpu_init_fft_shape(correlation_gpu, piv_field_gpu):
+def test_correlation_gpu_init_fft_shape(correlation_gpu):
     fft_shape = correlation_gpu.fft_shape
 
     assert round(log2(fft_shape[0])) == log2(fft_shape[0])
     assert round(log2(fft_shape[1])) == log2(fft_shape[1])
 
 
-def test_correlation_gpu_correlate_windows(correlation_gpu, piv_field_gpu):
+def test_correlation_gpu_correlate_windows(correlation_gpu):
     shape = (32, 32)
     fft_shape = correlation_gpu.fft_shape[0]
     a = 1
@@ -249,9 +249,9 @@ def test_correlation_gpu_free_gpu_data(correlation_gpu):
 
 
 def test_piv_field_gpu_get_mask(piv_field_gpu):
-    mask = piv_field_gpu.get_gpu_mask(return_array=True)
+    mask_ = piv_field_gpu.get_gpu_mask(return_array=True)
 
-    assert isinstance(mask, gpuarray.GPUArray)
+    assert isinstance(mask_, gpuarray.GPUArray)
 
 
 @pytest.mark.parametrize("search_size", [16, 32])
@@ -320,15 +320,14 @@ def test_piv_coords(piv_gpu):
 
 
 def test_piv_field_mask(piv_gpu):
-    mask = piv_gpu.field_mask
+    mask_ = piv_gpu.field_mask
 
-    assert isinstance(mask, np.ndarray)
+    assert isinstance(mask_, np.ndarray)
 
 
-def test_piv_s2n(piv_gpu):
-    s2n = piv_gpu.s2n_ratio
+def test_piv_s2n(s2n_ratio):
 
-    assert isinstance(s2n, gpuarray.GPUArray)
+    assert isinstance(s2n_ratio, gpuarray.GPUArray)
 
 
 def test_piv_free_gpu_data(piv_gpu):
@@ -361,9 +360,9 @@ def test_piv_frame_mask(piv_gpu, boolean_np_array):
 
     piv_gpu.mask = boolean_np_array(shape)
     piv_gpu._frame_mask_ = None
-    frame_mask = piv_gpu._frame_mask
+    frame_mask_ = piv_gpu._frame_mask
 
-    assert isinstance(frame_mask, gpuarray.GPUArray)
+    assert isinstance(frame_mask_, gpuarray.GPUArray)
 
 
 def test_piv_piv_field_k(piv_gpu):
@@ -388,9 +387,9 @@ def test_piv_get_predictions(piv_gpu, gpu_array, boolean_gpu_array):
     shape = (22, 30)
 
     u = v = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = boolean_gpu_array(shape, seed=1)
+    mask_ = boolean_gpu_array(shape, seed=1)
     piv_gpu._k = 1
-    piv_gpu._piv_field_k._mask = mask
+    piv_gpu._piv_field_k._mask = mask_
     dp_u, dp_v = piv_gpu._get_predictions(u, v)
 
     assert isinstance(dp_u, gpuarray.GPUArray)
@@ -420,8 +419,8 @@ def test_piv_get_window_deformation(piv_gpu, gpu_array, boolean_gpu_array):
     shape = (16, 16)
 
     dp_u = gpu_array(shape, center=0.0, half_width=1.0)
-    mask = boolean_gpu_array(shape, seed=1)
-    piv_gpu._piv_field_k._mask_d = mask
+    mask_ = boolean_gpu_array(shape, seed=1)
+    piv_gpu._piv_field_k._mask_d = mask_
     shift_, strain = piv_gpu._get_window_deformation(dp_u, dp_u)
 
     assert isinstance(shift_, gpuarray.GPUArray)
@@ -435,9 +434,9 @@ def test_piv_update_velocity(
     i_peak, j_peak = peaks_reshape
 
     dp_u = gpu_array(i_peak.shape, center=0.0, half_width=1.0) if dp_u else None
-    mask = boolean_gpu_array(i_peak.shape, seed=2)
+    mask_ = boolean_gpu_array(i_peak.shape, seed=2)
     piv_gpu._k = 0
-    piv_gpu._piv_field_k._mask_d = mask
+    piv_gpu._piv_field_k._mask_d = mask_
     u, v = piv_gpu._update_velocity(dp_u, dp_u, i_peak, i_peak)
 
     assert isinstance(u, gpuarray.GPUArray)
@@ -577,9 +576,9 @@ def test_field_mask():
 
     x0, y0 = np.meshgrid(np.arange(ht), np.arange(wd))
     x1, y1 = np.meshgrid(np.arange(0, ht, 2), np.arange(0, wd, 2))
-    frame_mask = np.round((1 + np.cos(x0 * w) * np.cos(y0 * w)) / 2).astype(int)
+    frame_mask_ = np.round((1 + np.cos(x0 * w) * np.cos(y0 * w)) / 2).astype(int)
     field_mask0 = np.round((1 + np.cos(x1 * w) * np.cos(y1 * w)) / 2).astype(int)
-    field_mask1 = process._field_mask(x1, y1, frame_mask)
+    field_mask1 = process._field_mask(x1, y1, frame_mask_)
 
     assert np.array_equal(field_mask1, field_mask0)
 
@@ -743,9 +742,9 @@ def test_cross_correlate(shape: tuple, array_pair):
         )[m - 1 :, n - 1 :]
     correlation_np = correlation
     correlation_d = process._gpu_cross_correlate(win_a_d, win_b_d)
-    correlation_gpu = correlation_d.get()
+    correlation_gpu_ = correlation_d.get()
 
-    assert np.allclose(correlation_gpu, correlation_np, atol=1e-5)
+    assert np.allclose(correlation_gpu_, correlation_np, atol=1e-5)
 
 
 def test_gpu_window_index_f(array_pair):
@@ -972,9 +971,9 @@ def test_gpu_update_field(array_pair, boolean_array_pair):
 
     dp, dp_d = array_pair(shape, center=0.0, half_width=1.0)
     peak, peak_d = array_pair(shape, center=0.0, half_width=1.0, seed=1)
-    mask, mask_d = boolean_array_pair(shape, seed=2)
+    mask_, mask_d = boolean_array_pair(shape, seed=2)
 
-    f_np = (dp + peak) * (mask == 0)
+    f_np = (dp + peak) * (mask_ == 0)
     f_gpu = process._gpu_update_field(dp_d, peak_d, mask_d).get()
 
     assert np.array_equal(f_np, f_gpu)
