@@ -1107,8 +1107,8 @@ def _gpu_average_velocity(f_neighbours, neighbours_present, method):
 
 
 def _gpu_residual(f_median, f_neighbours, neighbours_present, method):
-    """Returns the mean/median/rms of normalized residual velocities on a 3x3 grid around
-    each point in a velocity field.
+    """Returns the mean/median/rms of normalized residual velocities on a 3x3 grid
+    around each point in a velocity field.
 
     Parameters
     ----------

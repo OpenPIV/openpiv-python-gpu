@@ -746,7 +746,7 @@ class PIV:
         min_value=0, max_value=1, min_closure=False, max_closure=False
     )
     dt = _Number()
-    mask = _Array(allow_none=True)
+    mask = _Array(d_type=DTYPE_i, allow_none=True)
     deform = _Bool()
     smooth = _Bool()
     num_validation_iters = _Integer(min_value=0)
@@ -951,14 +951,14 @@ class PIV:
         """
         frame_mask = self._frame_mask
 
-        frame_a_d = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
-        frame_b_d = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
+        frame_a = gpuarray.to_gpu(frame_a.astype(DTYPE_f))
+        frame_b = gpuarray.to_gpu(frame_b.astype(DTYPE_f))
 
         if frame_mask is not None:
-            frame_a_d = misc.gpu_mask(frame_a, frame_mask)
-            frame_b_d = misc.gpu_mask(frame_b, frame_mask)
+            frame_a = misc.gpu_mask(frame_a, frame_mask)
+            frame_b = misc.gpu_mask(frame_b, frame_mask)
 
-        return frame_a_d, frame_b_d
+        return frame_a, frame_b
 
     def _get_new_velocity(self, frames, dp_u, dp_v):
         """Returns velocity fields from prediction.

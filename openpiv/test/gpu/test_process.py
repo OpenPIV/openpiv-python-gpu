@@ -345,9 +345,11 @@ def test_piv_get_piv_fields(piv_gpu):
     assert isinstance(s2n, list)
 
 
-def test_piv_mask_frame(piv_gpu, frames):
+def test_piv_mask_frame(piv_gpu, frames, frame_mask):
     # Need to test the switch cases.
     frame_a, frame_b = frames
+
+    piv_gpu.mask = frame_mask
     frame_a_masked, frame_b_masked = piv_gpu._frames_to_gpu(frame_a, frame_b)
 
     assert isinstance(frame_a_masked, gpuarray.GPUArray)

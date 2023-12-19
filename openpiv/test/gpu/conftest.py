@@ -166,6 +166,16 @@ def frames_gpu(frames):
 
 
 @pytest.fixture
+def frame_mask(frames, boolean_np_array):
+    frame_a, _ = frames
+    shape = frame_a.shape
+
+    frame_mask = boolean_np_array(shape)
+
+    return frame_mask
+
+
+@pytest.fixture
 def correlation_gpu(piv_field_gpu, frames_gpu):
     frame_a, frame_b = frames_gpu
 
