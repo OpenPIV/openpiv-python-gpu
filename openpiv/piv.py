@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from openpiv import pyprocess, tools
-import pkg_resources as pkg
+from importlib_resources import files
 
 # import numpy as np
 
@@ -54,8 +54,11 @@ def simple_piv(im1, im2, plot=True):
         ax.quiver(x[valid], y[valid], u[valid], -v[valid], scale=70,
                   color='r', width=.005)
         plt.show()
+        
+    # conform with the windef and tools.display_vector_field
+    x,y,u,v = tools.transform_coordinates(x,y,u,v)
 
-    return x, y, u, v
+    return x, y, u, v, s2n
 
 
 def piv_example():
@@ -68,13 +71,13 @@ def piv_example():
 
     """
     # if im1 is None and im2 is None:
-    im1 = pkg.resource_filename("openpiv", "examples/test5/frame_a.tif")
-    im2 = pkg.resource_filename("openpiv", "examples/test5/frame_b.tif")
+    im1 = files('openpiv.data').joinpath('test1/exp1_001_a.bmp')
+    im2 = files('openpiv.data').joinpath('test1/exp1_001_b.bmp')    
 
     frame_a = tools.imread(im1)
     frame_b = tools.imread(im2)
 
-    frame_a[0:32, 512 - 32:] = 255
+    # frame_a[0:32, 512 - 32:] = 255
 
     images = []
     images.extend([frame_a, frame_b])

@@ -1,0 +1,57 @@
+=========================
+Installation instructions
+=========================
+
+Dependencies
+============
+
+OpenPIV would not have been possible if other great open source projects did not
+exist. We make extensive use of code and tools that other people have created, so
+you should install them before you can use OpenPIV.
+
+The main dependencies are:
+
+* `python <http://python.org/>`_
+* `scipy <http://numpy.scipy.org/>`_
+* `numpy <http://www.scipy.org/>`_
+* `scikit-image <http://scikit-image.org/>`_
+
+On all the platforms, the binary Anaconda installation is recommended. 
+Visit https://www.continuum.io/downloads
+
+
+Get OpenPIV source code!
+========================
+
+At this moment the only way to get OpenPIV's source code is using git. 
+`Git <http://en.wikipedia.org/wiki/Git_%28software%29>`_ Git is a distributed revision control system and 
+our code is hosted at `GitHub <www.github.com>`_.
+
+
+Use PyPI and pip
+================
+
+    pip install -U openpiv
+    
+
+Downloads the code from PyPI and runs the setup for you with installation and Cython (if preinstalled)
+
+Bleeding edge development version
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you are interested in the source code you are welcome to browse out git repository
+stored at https://github.com/gasagna/OpenPIV. If you want to download the source code
+on your machine, for testing, you need to set up git on your computer. Please look at 
+http://help.github.com/ which provide extensive help for how to set up git.
+
+To follow the development of OpenPIV, clone our repository with the command::
+
+    git clone http://github.com/alexlib/openpiv-python.git
+
+and update from time to  time. You can also download a tarball containing everything.
+
+Then add the path where the OpenPIV source are to the PYTHONPATH environment variable, so 
+that OpenPIV module can be imported and used in your programs. Remeber to build the extension
+with :: 
+
+    python setup.py build 

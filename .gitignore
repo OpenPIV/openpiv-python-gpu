@@ -22,4 +22,8 @@ openpiv/examples/notebooks/*.html
 openpiv/examples/notebooks/test_3d/
 Open_PIV_results_*
 openpiv/docs/.vscode/
+openpiv/docs/_build/
 openpiv/examples/.vscode/settings.json
+openpiv/docs/_build/doctrees/environment.pickle
+openpiv/docs/src/test1.vec
+openpiv/test/OpenPIV_results_16_/field_A0000.png

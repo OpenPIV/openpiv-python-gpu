@@ -1,22 +1,8 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
-# test the idea of vectorized cross correlation for
-# strided images, rectangular windows and extended search area
-# in one function
-
-
-# In[2]:
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.fft import rfft2, irfft2
-
+from scipy.ndimage import shift as shift_img
 
 # In[3]:
 
@@ -58,7 +44,7 @@ def fft_correlate_strided_images(image_a, image_b):
 
 # let's make two images of 32 x 32 pixels
 a = np.random.rand(64, 64)
-b = np.roll(a, (-3, 2))
+b = shift_img(a, (-3.5, 2.5))
 
 
 # In[6]:
