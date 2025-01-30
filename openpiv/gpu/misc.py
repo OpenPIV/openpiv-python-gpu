@@ -365,7 +365,7 @@ __global__ void replace_nan(float *f, int size)
     if (t_idx >= size) {return;}
     
     // Check for NaNs.
-    if (std::isnan(f[t_idx])) {f[t_idx] = 0.0f;}
+    if (isnan(f[t_idx])) {f[t_idx] = 0.0f;}
 }
 """
 )
