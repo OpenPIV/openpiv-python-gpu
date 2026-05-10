@@ -14,9 +14,9 @@ This is absolutely not a comprehensive guide of git development, and it is only 
 
 1) Download and install git. Instruction can be found `here <http://help.github.com/>`_.
 2) Set up a github account.
-3) Clone OpenPiv repository using::
+3) Clone OpenPiv GPU repository using::
 
-    git clone http://github.com/openpiv/openpiv-python.git
+    git clone https://github.com/OpenPIV/openpiv-python-gpu.git
     
 4) create a branch `new_feature` where you implement your new feature.
 5) Fix, change, implement, document code, ...
@@ -27,6 +27,21 @@ This is absolutely not a comprehensive guide of git development, and it is only 
 10) Send a `pull request <http://help.github.com/pull-requests/>`_.
 
 11) Create another branch for a new feature.
+
+Submitting larger GPU changes
+-----------------------------
+If your update contains several related improvements (for example Python-version migration, validation fixes, and
+performance tuning in the GPU processing module), open one pull request that clearly lists each change and what was
+validated.
+
+Before opening the PR, run at least:
+
+* GPU tutorial notebook(s) on Colab or another CUDA-enabled environment.
+* ``python -m pytest openpiv/test/gpu`` on a CUDA-enabled machine.
+* Relevant CPU regression tests, e.g. ``python -m pytest openpiv/test/test_validation.py``.
+
+API compatibility note: avoid renaming public functions or changing public arguments without a compatibility plan.
+When a rename is necessary, keep backward-compatible wrappers (or aliases) and document the transition in the PR.
 
 Which language can I use?
 -------------------------
@@ -61,5 +76,4 @@ If you need to install cv2::
 --------------------------
 
     conda install -c conda-forge opencv
-
 

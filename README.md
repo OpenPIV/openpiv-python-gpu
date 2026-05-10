@@ -22,7 +22,7 @@ paper on that topic has been published.
 
 ## Test without installation
 
-Try the GPU functionality on Google Colab: [Basic Tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb).
+Try the GPU functionality on Google Colab: [Basic Tutorial](https://colab.research.google.com/github/OpenPIV/openpiv-python-gpu/blob/master/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb).
 When viewing the file on GitHub there will be a link to view the notebook with Google Colab.
 Click the link to load the notebook into Colaboratory where you can test the GPU capabilities.
 
@@ -54,8 +54,8 @@ For documentation of the GPU-accelerated modules, see API reference or the tutor
 ## Demo notebooks 
 
 Two tutorial notebooks demonstrate the usage of the GPU-accelerated functions:
-1. [Basic tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
-2. [Advanced tutorial](https://colab.research.google.com/github/ericyang125/openpiv-python-gpu/blob/main/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
+1. [Basic tutorial](https://colab.research.google.com/github/OpenPIV/openpiv-python-gpu/blob/master/openpiv/tutorials/openpiv_python_gpu_tutorial_basic.ipynb)
+2. [Advanced tutorial](https://colab.research.google.com/github/OpenPIV/openpiv-python-gpu/blob/master/openpiv/tutorials/openpiv_python_gpu_tutorial_advanced.ipynb)
 
 Notebooks containing examples for non-GPU PIV functions are available in the base repository:
 [OpenPIV-Python-Examples](https://github.com/OpenPIV/openpiv-python-examples)
