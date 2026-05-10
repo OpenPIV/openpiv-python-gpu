@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from openpiv import pyprocess, tools
-from importlib_resources import files
+from importlib.resources import files
 
 # import numpy as np
 

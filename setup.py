@@ -17,6 +17,7 @@ setup(
     setup_requires=[
         "setuptools",
     ],
+    python_requires=">=3.11",
     install_requires=[
         "numpy",
         "imageio>=2.22.4",
@@ -25,7 +26,6 @@ setup(
         "scipy",
         "natsort",
         "tqdm",
-        "importlib_resources",
         "pycuda",
         "scikit-cuda @ git+https://github.com/lebedov/scikit-cuda.git",
     ],
@@ -37,10 +37,8 @@ setup(
         # *sigh*
         "Development Status :: 4 - Beta",
         # Sublist of all supported Python versions.
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         # Sublist of all supported platforms and environments.
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: Microsoft :: Windows",
