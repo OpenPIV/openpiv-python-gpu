@@ -15,7 +15,7 @@ from skimage.util import invert
 from scipy.interpolate import RectBivariateSpline
 import matplotlib.pyplot as plt
 
-from importlib_resources import files
+from importlib.resources import files
 from openpiv.tools import Multiprocesser, display_vector_field, transform_coordinates
 from openpiv import validation, filters, tools, scaling, preprocess
 from openpiv.pyprocess import extended_search_area_piv, get_rect_coordinates, \
