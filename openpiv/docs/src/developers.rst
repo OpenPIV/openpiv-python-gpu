@@ -14,7 +14,7 @@ This is absolutely not a comprehensive guide of git development, and it is only 
 
 1) Download and install git. Instruction can be found `here <http://help.github.com/>`_.
 2) Set up a github account.
-3) Clone this repository using::
+3) Clone the OpenPIV GPU repository using::
 
     git clone https://github.com/OpenPIV/openpiv-python-gpu.git
     
@@ -37,7 +37,7 @@ validated.
 Before opening the PR, run at least:
 
 * GPU tutorial notebook(s) on Colab or another CUDA-enabled environment.
-* ``python -m pytest openpiv/test/gpu`` from the repository root on a CUDA-enabled machine.
+* ``python -m pytest openpiv/test`` on a CUDA-enabled machine (includes the GPU tests under ``openpiv/test/gpu``).
 * Relevant CPU regression tests, e.g. ``python -m pytest openpiv/test/test_validation.py``.
 
 API compatibility note: avoid renaming public functions or changing public arguments without a compatibility plan.
