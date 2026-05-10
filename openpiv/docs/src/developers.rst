@@ -14,7 +14,7 @@ This is absolutely not a comprehensive guide of git development, and it is only 
 
 1) Download and install git. Instruction can be found `here <http://help.github.com/>`_.
 2) Set up a github account.
-3) Clone OpenPiv GPU repository using::
+3) Clone the OpenPIV GPU repository (this repository) using::
 
     git clone https://github.com/OpenPIV/openpiv-python-gpu.git
     
@@ -76,4 +76,3 @@ If you need to install cv2::
 --------------------------
 
     conda install -c conda-forge opencv
-
