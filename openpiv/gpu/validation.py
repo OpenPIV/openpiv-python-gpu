@@ -448,8 +448,10 @@ class Validation:
             return
         s2n_tol = log10(self.s2n_tol)
 
-        sig2noise_tol = s2n_ratio / DTYPE_f(s2n_tol)
-        self.val_locations = _local_validation(sig2noise_tol, 1, self.val_locations)
+        # Mark invalid where s2n_ratio < s2n_tol, i.e. (s2n_tol - s2n_ratio) > 0.
+        self.val_locations = _local_validation(
+            DTYPE_f(s2n_tol) - s2n_ratio, 0, self.val_locations
+        )
 
     def _mask_val_locations(self):
         """Removes masked locations from the validation locations."""

@@ -205,7 +205,7 @@ def test_validation_median_num_validation_locations(validation_gpu, peaks_reshap
 def test_validation_s2n_validation(validation_gpu, s2n_ratio):
     tol = log10(validation.S2N_TOL)
 
-    val_locations = validation._local_validation(s2n_ratio / tol, 1).get()
+    val_locations = validation._local_validation(DTYPE_f(tol) - s2n_ratio, 0).get()
     validation_gpu._s2n_validation(s2n_ratio)
     val_locations_gpu = validation_gpu.val_locations.get()
 
