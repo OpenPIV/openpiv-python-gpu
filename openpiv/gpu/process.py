@@ -1146,7 +1146,7 @@ class PIV:
         if self.num_validation_iters == 0:
             return u, v, val_locations
         if "s2n" in self.validation_method:
-            s2n_ratio = self._corr_gpu.s2n_ratio
+            s2n_ratio = self._corr_gpu.s2n_ratio.reshape(u.shape)
 
         # Create the validation object.
         self._validation_gpu = Validation(
