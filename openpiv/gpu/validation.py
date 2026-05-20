@@ -372,7 +372,7 @@ class Validation:
                 self._f[k],
                 self._mean[k],
                 f_mean_residual,
-                self.median_tol,
+                self.mean_tol,
                 self.val_locations,
             )
 
